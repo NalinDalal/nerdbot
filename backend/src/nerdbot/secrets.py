@@ -19,9 +19,7 @@ ENC_PREFIX = "enc:"
 CURRENT_VERSION = "1"
 PREVIOUS_VERSION = "0"
 
-SECRET_KEYS = frozenset(
-    {"api_key", "apikey", "secret", "token", "password", "authorization"}
-)
+SECRET_KEYS = frozenset({"api_key", "apikey", "secret", "token", "password", "authorization"})
 
 
 class SecretKeyMissingError(ValueError):
@@ -57,13 +55,29 @@ def is_encrypted(value: object) -> bool:
     return isinstance(value, str) and value.startswith(ENC_PREFIX)
 
 
+def verify_envelope(blob: str) -> str:
+    """Validate a ciphertext envelope without decrypting.
+
+    Returns the blob unchanged when it parses as ``enc:<version>:<token>``
+    with a known version. Raises SecretDecryptError otherwise, so callers
+    never store malformed lookalikes.
+    """
+    if not is_encrypted(blob):
+        raise SecretDecryptError("value is not encrypted ciphertext")
+    try:
+        _, version, token = blob.split(":", 2)
+    except ValueError as exc:
+        raise SecretDecryptError("malformed ciphertext envelope") from exc
+    if version not in (CURRENT_VERSION, PREVIOUS_VERSION) or not token:
+        raise SecretDecryptError(f"unknown ciphertext version {version!r}")
+    return blob
+
+
 def encrypt_secret(plaintext: str) -> str:
     """Encrypt one secret value. Raises SecretKeyMissingError without a key."""
     ring = keyring()
     if CURRENT_VERSION not in ring:
-        raise SecretKeyMissingError(
-            "provider secrets require NERDBOT_SECRET_KEY to be configured"
-        )
+        raise SecretKeyMissingError("provider secrets require NERDBOT_SECRET_KEY to be configured")
     token = Fernet(ring[CURRENT_VERSION]).encrypt(plaintext.encode("utf-8")).decode("ascii")
     return f"{ENC_PREFIX}{CURRENT_VERSION}:{token}"
 

@@ -88,6 +88,10 @@ def resolve_api_key(config: dict[str, Any]) -> str:
         return inline
     env_name = config.get("api_key_env", "")
     if isinstance(env_name, str) and env_name:
+        if env_name.startswith("NERDBOT_"):
+            raise ProviderConfigurationError(
+                "api_key_env must not reference NERDBOT_* server variables"
+            )
         return os.environ.get(env_name, "")
     return ""
 

@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .runtime import ExecutionError, check_command, frame_untrusted
+from .runtime import ExecutionError, check_command, child_env, frame_untrusted, scrub_secrets
 
 TOOL_OUTPUT_MAX_CHARS = 4000
 TOOL_FILE_MAX_BYTES = 200_000
@@ -104,12 +104,13 @@ def execute_tool(workspace: Path, name: str, arguments: dict[str, Any]) -> str:
             capture_output=True,
             text=True,
             timeout=60.0,
+            env=child_env(),
         )
         if completed.returncode != 0:
             raise ExecutionError(
-                f"exit={completed.returncode} stderr={truncate_output(completed.stderr or '')}"
+                f"exit={completed.returncode} stderr={truncate_output(scrub_secrets(completed.stderr or ''))}"
             )
-        return truncate_output(completed.stdout or "")
+        return truncate_output(scrub_secrets(completed.stdout or ""))
     if name == "read_file":
         relpath = arguments.get("path", "")
         if not isinstance(relpath, str):

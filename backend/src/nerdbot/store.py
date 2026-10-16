@@ -980,8 +980,8 @@ def purge_expired_approvals(conn: sqlite3.Connection, project_id: str) -> int:
     for row in rows:
         conn.execute("DELETE FROM approvals WHERE id = ?", (row["id"],))
     conn.commit()
-    if rows:
-        record_event(conn, project_id, "approval", rows[0]["id"], "approval.purged")
+    for row in rows:
+        record_event(conn, project_id, "approval", row["id"], "approval.purged")
     return len(rows)
 
 
@@ -1365,7 +1365,7 @@ def encrypt_provider_config(config: dict[str, Any]) -> dict[str, Any]:
     for key, value in config.items():
         if secrets_mod.is_secret_key(key) and isinstance(value, str) and value:
             if secrets_mod.is_encrypted(value):
-                stored[key] = value  # already ciphertext (e.g. replay paths)
+                stored[key] = secrets_mod.verify_envelope(value)
             else:
                 stored[key] = secrets_mod.encrypt_secret(value)
         else:

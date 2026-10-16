@@ -17,6 +17,12 @@ auth model is a single bearer token plus approval capability-tokens, so:
 
 ## Decisions
 
+Keyless mode (deliberate): the product runs without `NERDBOT_SECRET_KEY`
+for local development with non-secret providers only. Any write carrying
+a secret-shaped value is rejected without a key; any stored secret is
+unusable without its decryption key (fail-closed). There is no silent
+plaintext mode for secrets. `capabilities.py` reports this posture.
+
 1. **Keyring from env, versions "1" (current) + "0" (previous, decrypt-only).**
    Missing key at secret-write time raises (no silent plaintext);
    undecryptable stored values raise at resolve time (blocked run, never

@@ -70,6 +70,9 @@ Inspected: `providers.py` (dispatch + refusal stub), `runtime.py`
 
 - Milestone: Phase 2 milestone implemented (credential encryption at rest,
   approval token hygiene, manifest import; ADR 0006); gates green.
+- Token hygiene scope: approval tokens expire/are one-use/purged; bearer-token
+  rotation explicitly cut (capability `auth.token-rotation: deferred`).
+- Keyless mode: local-dev without a key supports non-secret configs only.
 - Commit: see `git log` (this change uncommitted at time of writing).
 - Blockers: none for this milestone. Dev-default bearer token still accepted
   (explicit follow-up, unchanged by this slice).

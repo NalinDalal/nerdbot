@@ -20,6 +20,30 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+# Environment variables that must never reach child processes or stored output.
+_NEVER_EXPORT = ("NERDBOT_SECRET_KEY", "NERDBOT_SECRET_KEY_PREVIOUS", "NERDBOT_TOKEN")
+_ENC_BLOB = re.compile(r"enc:[A-Za-z0-9]+:[A-Za-z0-9_\-=]+")
+
+
+def child_env() -> dict[str, str]:
+    """Subprocess environment: inherited except server secrets."""
+    import os as _os
+
+    return {k: v for k, v in _os.environ.items() if k not in _NEVER_EXPORT}
+
+
+def scrub_secrets(text: str) -> str:
+    """Redact server secrets and ciphertext blobs from stored output."""
+    import os as _os
+
+    scrubbed = text
+    for name in _NEVER_EXPORT:
+        value = _os.environ.get(name, "")
+        if len(value) >= 8:
+            scrubbed = scrubbed.replace(value, "[redacted]")
+    return _ENC_BLOB.sub("[redacted]", scrubbed)
+
+
 BLOCKED_PATTERNS: list[tuple[str, str]] = [
     (r"rm\s+-rf\s+/", "destructive recursive delete"),
     (r":\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;?\s*:", "fork bomb"),
@@ -80,9 +104,10 @@ class LocalRuntimeAdapter:
             capture_output=True,
             text=True,
             timeout=timeout_s,
+            env=child_env(),
         )
-        stdout = completed.stdout or ""
-        stderr = completed.stderr or ""
+        stdout = scrub_secrets(completed.stdout or "")
+        stderr = scrub_secrets(completed.stderr or "")
         output = stdout + (("\n" if stdout else "") + stderr if stderr else "")
         return RunResult(
             exit_code=completed.returncode, output=output[-8000:], stdout=stdout, stderr=stderr

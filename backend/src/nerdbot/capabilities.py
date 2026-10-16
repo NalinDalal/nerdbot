@@ -95,6 +95,21 @@ CAPABILITIES: list[dict[str, Any]] = [
         "description": "Versioned metadata export with secret redaction + validation + validated import (history never replayed, secrets never restored).",
     },
     {
+        "id": "auth.approval-tokens",
+        "status": "ready",
+        "description": "Approval capability-tokens: owner-scoped, expiring, one-use, expired purge.",
+    },
+    {
+        "id": "auth.token-rotation",
+        "status": "deferred",
+        "description": "Bearer-token rotation cut from scope; single static token only.",
+    },
+    {
+        "id": "secrets.keyless-dev",
+        "status": "ready",
+        "description": "Keyless local-dev allowed only for non-secret configs; secret writes require NERDBOT_SECRET_KEY, stored secrets fail closed without it.",
+    },
+    {
         "id": "database.postgres",
         "status": "deferred",
         "description": "SQLite plus migration path is acceptable for now.",
