@@ -90,6 +90,11 @@ CAPABILITIES: list[dict[str, Any]] = [
         "description": "Rejected: hardest channel to secure; static needs suffice.",
     },
     {
+        "id": "tools.fetch_url",
+        "status": "ready",
+        "description": "SSRF-guarded public-URL fetch for the agent loop; fetch-only, not web search.",
+    },
+    {
         "id": "backup.manifest",
         "status": "ready",
         "description": "Versioned metadata export with secret redaction + validation + validated import (history never replayed, secrets never restored).",

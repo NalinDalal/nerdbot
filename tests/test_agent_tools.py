@@ -15,9 +15,9 @@ from nerdbot.agent_tools import (
 from nerdbot.runtime import BlockedError
 
 
-def test_tool_schemas_offer_three_tools() -> None:
+def test_tool_schemas_offer_workspace_tools() -> None:
     names = [t["function"]["name"] for t in tool_schemas()]
-    assert names == ["run_command", "read_file", "write_file"]
+    assert names == ["run_command", "read_file", "write_file", "fetch_url"]
 
 
 def test_resolve_rejects_escape(tmp_path) -> None:

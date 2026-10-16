@@ -23,6 +23,7 @@ from typing import Any
 import httpx
 
 from . import agent_tools, store
+from .fetch import FetchProtocolError, FetchTimeoutError
 from .models import Provider, ProviderKind, ProviderStatus
 from .runtime import (
     BlockedError,
@@ -200,10 +201,19 @@ class OpenAICompatibleAdapter:
                         raise ProviderTimeoutError("agent loop wall-clock budget expired")
                     try:
                         result = agent_tools.execute_tool(
-                            workspace, call["name"], call["arguments"]
+                            workspace,
+                            call["name"],
+                            call["arguments"],
+                            transport=self._transport,
                         )
                         consecutive_failures = 0
-                    except (BlockedError, ExecutionError, ValueError) as exc:
+                    except (
+                        BlockedError,
+                        ExecutionError,
+                        ValueError,
+                        FetchTimeoutError,
+                        FetchProtocolError,
+                    ) as exc:
                         consecutive_failures += 1
                         result = f"tool error ({type(exc).__name__}): {exc}"
                         if consecutive_failures >= CONSECUTIVE_TOOL_FAILURE_LIMIT:

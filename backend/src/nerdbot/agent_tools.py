@@ -76,6 +76,18 @@ def tool_schemas() -> list[dict[str, Any]]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "fetch_url",
+                "description": "Fetch a public http(s) URL as text. SSRF-guarded.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"url": {"type": "string"}},
+                    "required": ["url"],
+                },
+            },
+        },
     ]
 
 
@@ -85,11 +97,17 @@ def truncate_output(text: str, limit: int = TOOL_OUTPUT_MAX_CHARS) -> str:
     return text
 
 
-def execute_tool(workspace: Path, name: str, arguments: dict[str, Any]) -> str:
+def execute_tool(
+    workspace: Path,
+    name: str,
+    arguments: dict[str, Any],
+    transport: Any | None = None,
+) -> str:
     """Execute one tool call. Returns untrusted, bounded result text.
 
     Raises BlockedError (policy), ExecutionError (command failure),
-    ToolPathEscape (workspace escape), or ValueError (bad arguments).
+    ToolPathEscape (workspace escape), Fetch* (fetch denial/failure),
+    or ValueError (bad arguments).
     """
     import subprocess
 
@@ -132,6 +150,13 @@ def execute_tool(workspace: Path, name: str, arguments: dict[str, Any]) -> str:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
         return f"wrote {len(content.encode('utf-8'))} bytes to {relpath!r}"
+    if name == "fetch_url":
+        from . import fetch as fetch_mod
+
+        url = arguments.get("url", "")
+        if not isinstance(url, str):
+            raise ValueError("fetch_url requires a url string")
+        return truncate_output(fetch_mod.fetch_url_text(url, transport=transport))
     raise ValueError(f"unknown tool: {name!r}")
 
 

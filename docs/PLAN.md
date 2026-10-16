@@ -32,13 +32,18 @@ no company hierarchy, no org management.
 ## Milestones
 
 - [x] Phase 0 — baseline checkpoint (`63ef83c`), provenance, gates green.
-- [ ] Phase 1 — real provider execution + minimal tool-call loop (PLANNING).
-- [ ] Phase 2 — personal-use security (token hygiene, credential encryption, restore validation).
-- [ ] Phase 3 — web research with SSRF hardening.
+- [x] Phase 1 — real provider execution + minimal tool-call loop (`82edd35`, ADR 0005).
+- [x] Phase 2 — personal-use security: credential encryption, approval hygiene,
+  manifest import (`cfea25d`, `9b35cd8`, ADR 0006).
+- [ ] Phase 3 — web research with SSRF hardening (IN PROGRESS).
 - [ ] Phase 4 — durable integrations (one real channel, real GitHub fetch, outbox delivery).
 - [ ] Phase 5+ — productivity integrations, knowledge, MCP/delegation, automation, usability.
 
-## Phase 1 analysis (planning, not implemented)
+## Phase 1 outcome (implemented as `82edd35`)
+
+Per-project provider row referencing a local env var or inline secret
+(encrypted at rest since Phase 2); one OpenAI-compatible chat target;
+bounded tool-call loop inside the adapter (see ADR 0005).
 
 Inspected: `providers.py` (dispatch + refusal stub), `runtime.py`
 (single-shot `start_run` protocol), `orchestrator.py` (sync schedule/retry).
@@ -68,12 +73,11 @@ Inspected: `providers.py` (dispatch + refusal stub), `runtime.py`
 
 ## Current status
 
-- Milestone: Phase 2 milestone implemented (credential encryption at rest,
-  approval token hygiene, manifest import; ADR 0006); gates green.
+- Milestone: Phase 3 implemented (hardened `fetch_url` for the agent loop,
+  ADR 0007); gates green.
 - Token hygiene scope: approval tokens expire/are one-use/purged; bearer-token
   rotation explicitly cut (capability `auth.token-rotation: deferred`).
 - Keyless mode: local-dev without a key supports non-secret configs only.
-- Commit: see `git log` (this change uncommitted at time of writing).
 - Blockers: none for this milestone. Dev-default bearer token still accepted
-  (explicit follow-up, unchanged by this slice).
-- Next action: commit Phase 2 milestone; then web-research planning.
+  (explicit follow-up, unchanged).
+- Next action: commit Phase 3; then durable-integrations planning.
