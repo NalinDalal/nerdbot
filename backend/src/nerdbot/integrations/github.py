@@ -92,6 +92,10 @@ def fetch_github_issue(
         headers["Authorization"] = f"Bearer {token}"
     url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/issues/{num}"
     fetch_mod.check_url(url, resolver=resolver)
+    if transport is None:
+        transport = fetch_mod.PinnedTransport(
+            resolver=resolver, timeout_s=TIMEOUT_S, max_bytes=MAX_BYTES
+        )
     client = httpx.Client(follow_redirects=False, timeout=TIMEOUT_S, transport=transport)
     try:
         for _ in range(fetch_mod.DEFAULT_MAX_REDIRECTS + 1):

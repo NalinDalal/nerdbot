@@ -16,8 +16,10 @@ Clean-room implementation written from the behavior contract only.
 
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import socket
+import ssl
 from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
@@ -82,13 +84,8 @@ def _is_public_ip(value: str) -> bool:
     )
 
 
-def check_url(
-    url: str,
-    policy: FetchPolicy | None = None,
-    resolver: Callable[[str], list[str]] | None = None,
-) -> str:
-    """Validate a URL against SSRF policy. Returns it unchanged or raises."""
-    _ = policy
+def check_hostname(url: str) -> str:
+    """Syntactic SSRF gate: scheme, credentials, local hostnames. No DNS."""
     if not isinstance(url, str) or not url.strip():
         raise FetchBlockedError("empty URL")
     try:
@@ -104,8 +101,20 @@ def check_url(
         raise FetchBlockedError("URL has no host")
     if host in BLOCKED_HOSTS or host.endswith(BLOCKED_SUFFIXES):
         raise FetchBlockedError(f"local host not allowed: {host!r}")
+    return url
+
+
+def check_url(
+    url: str,
+    policy: FetchPolicy | None = None,
+    resolver: Callable[[str], list[str]] | None = None,
+) -> str:
+    """Validate a URL against SSRF policy. Returns it unchanged or raises."""
+    _ = policy
+    checked = check_hostname(url)
+    host = (urlparse(checked).hostname or "").lower()
     if _is_public_ip(host):
-        return url
+        return checked
     try:
         ipaddress.ip_address(host)
     except ValueError:
@@ -120,7 +129,7 @@ def check_url(
     bad = [addr for addr in addresses if not _is_public_ip(addr)]
     if bad:
         raise FetchBlockedError(f"host resolves to non-public address: {host!r}")
-    return url
+    return checked
 
 
 def fetch_url_text(
@@ -132,6 +141,10 @@ def fetch_url_text(
     """Fetch a URL as text under policy. No auth, cookies, or credentials."""
     active = policy or FetchPolicy()
     checked = check_url(url, active, resolver)
+    if transport is None:
+        transport = PinnedTransport(
+            resolver=resolver, timeout_s=active.timeout_s, max_bytes=active.max_bytes
+        )
     client = httpx.Client(follow_redirects=False, timeout=active.timeout_s, transport=transport)
     try:
         current = checked
@@ -171,3 +184,145 @@ def fetch_url_text(
         raise FetchProtocolError(f"too many redirects (>{active.max_redirects})")
     finally:
         client.close()
+
+
+def _default_port(scheme: str, explicit: int | None) -> int:
+    if explicit is not None:
+        return explicit
+    return 443 if scheme == "https" else 80
+
+
+def _host_header(host: str, scheme: str, port: int | None) -> str:
+    if port is None or port == _default_port(scheme, None):
+        return host
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    return f"{host}:{port}"
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS connection to a pinned IP with SNI/hostname of the real host."""
+
+    def __init__(
+        self,
+        ip: str,
+        port: int,
+        sni_host: str,
+        context: ssl.SSLContext | None = None,
+        timeout: float = 15.0,
+    ) -> None:
+        super().__init__(ip, port, timeout=timeout,
+                         context=context or ssl.create_default_context())
+        self._pin_context = context or ssl.create_default_context()
+        self._sni_host = sni_host
+
+    def connect(self) -> None:
+        sock = socket.create_connection((self.host, self.port), self.timeout)
+        self.sock = self._pin_context.wrap_socket(sock, server_hostname=self._sni_host)
+
+
+def _socket_roundtrip(
+    request: httpx.Request, host: str, ip: str, timeout_s: float, max_bytes: int
+) -> httpx.Response:
+    """One HTTP exchange over TCP to a pinned IP. SNI and Host use the real host."""
+    scheme = request.url.scheme
+    port = _default_port(scheme, request.url.port)
+    raw_path = request.url.path or "/"
+    query = request.url.query
+    path = raw_path + ("?" + query.decode("ascii") if query else "")
+    headers = [
+        (k.decode("latin-1"), v.decode("latin-1"))
+        for k, v in request.headers.raw
+        if k.lower() not in (b"host", b"accept-encoding")
+    ]
+    headers.append(("Host", _host_header(host, scheme, request.url.port)))
+    headers.append(("Accept-Encoding", "identity"))
+    body = request.content
+    if scheme == "https":
+        conn: http.client.HTTPConnection = _PinnedHTTPSConnection(
+            ip, port, host, timeout=timeout_s, context=ssl.create_default_context()
+        )
+    else:
+        conn = http.client.HTTPConnection(ip, port, timeout=timeout_s)
+    try:
+        conn.putrequest(request.method, path, skip_host=True, skip_accept_encoding=True)
+        for key, value in headers:
+            conn.putheader(key, value)
+        if body:
+            conn.putheader("Content-Length", str(len(body)))
+        conn.endheaders(body if body else None)
+        response = conn.getresponse()
+        status = response.status
+
+        def _text(value: bytes | str) -> str:
+            return value.decode("latin-1") if isinstance(value, bytes) else value
+
+        raw_headers = [(_text(k), _text(v)) for k, v in response.getheaders()]
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            piece = response.read(65536)
+            if not piece:
+                break
+            total += len(piece)
+            if total > max_bytes:
+                raise FetchTooLargeError(f"response exceeds cap {max_bytes} bytes")
+            chunks.append(piece)
+    except (OSError, ssl.SSLError, http.client.HTTPException) as exc:
+        raise FetchProtocolError(f"pinned connection failed: {exc}") from exc
+    finally:
+        conn.close()
+    return httpx.Response(status, headers=raw_headers, content=b"".join(chunks),
+                          request=request)
+
+
+Connector = Callable[[httpx.Request, str, str, float, int], httpx.Response]
+
+
+class PinnedTransport(httpx.BaseTransport):
+    """httpx transport that resolves once and connects by pinned IP.
+
+    Resolution happens here, at connection time: the hostname policy plus a
+    single DNS lookup whose addresses must ALL be public, then TCP goes to
+    the first address only. SNI and the Host header carry the original
+    hostname; TLS verification uses the default context against that name.
+    Each request (including every redirect hop, which arrives as a new
+    request) is pinned independently. ``connector`` is injectable for tests.
+    """
+
+    def __init__(
+        self,
+        resolver: Callable[[str], list[str]] | None = None,
+        connector: Connector | None = None,
+        timeout_s: float = DEFAULT_TIMEOUT_S,
+        max_bytes: int = DEFAULT_MAX_BYTES,
+    ) -> None:
+        self._resolver = resolver
+        self._connector = connector
+        self._timeout_s = timeout_s
+        self._max_bytes = max_bytes
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        host = (request.url.host or "").lower()
+        check_hostname(str(request.url))
+        if _is_public_ip(host):
+            ips = [host]
+        else:
+            try:
+                ipaddress.ip_address(host)
+            except ValueError:
+                pass
+            else:
+                raise FetchBlockedError(f"non-public IP not allowed: {host!r}")
+            resolve = self._resolver or default_resolver
+            try:
+                ips = resolve(host)
+            except OSError as exc:
+                raise FetchProtocolError(f"cannot resolve {host!r}: {exc}") from exc
+            if not ips:
+                raise FetchProtocolError(f"no addresses for {host!r}")
+            bad = [addr for addr in ips if not _is_public_ip(addr)]
+            if bad:
+                raise FetchBlockedError(f"host resolves to non-public address: {host!r}")
+        connector = self._connector or _socket_roundtrip
+        return connector(request, host, ips[0], self._timeout_s, self._max_bytes)

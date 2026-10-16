@@ -91,6 +91,7 @@ def deliver_webhook(
     notification_id: str,
     transport: httpx.BaseTransport | None = None,
     sleep: Callable[[float], None] = time.sleep,
+    resolver: Callable[[str], list[str]] | None = None,
 ) -> Notification:
     """Deliver one webhook notification. Idempotent on delivered rows."""
     note = store.get_notification(conn, notification_id)
@@ -104,6 +105,10 @@ def deliver_webhook(
     body = json.dumps({"id": note.id, "kind": note.kind, "payload": note.payload})
     attempts = note.attempts
     last_error = "no attempts made"
+    if transport is None:
+        transport = fetch_mod.PinnedTransport(
+            resolver=resolver, timeout_s=REQUEST_TIMEOUT_S, max_bytes=RESPONSE_MAX_BYTES
+        )
     client = httpx.Client(
         follow_redirects=False, timeout=REQUEST_TIMEOUT_S, transport=transport
     )

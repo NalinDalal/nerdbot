@@ -23,10 +23,11 @@ network access.
    three consecutive failures end the run.
 3. **Tests use `httpx.MockTransport` + fake resolver only.** No live
    network in the suite.
-4. **Known residual risk:** pre-request DNS validation with a separate
-   connect-time resolution leaves a TOCTOU rebinding window. Accepted
-   because no secrets or credentials are ever forwarded, bounding impact
-   to plain-HTTP reads; a pinning transport is tracked follow-up work.
+4. **Residual closed:** TOCTOU rebinding window eliminated via
+   `fetch.PinnedTransport` — single connection-time resolution (all
+   addresses must pass policy), TCP to the first address only, SNI/Host
+   preserved, default TLS verification intact, every redirect hop
+   re-pinned. Shared by `fetch_url`, webhook delivery, and GitHub fetch.
 
 ## Consequences
 
