@@ -343,7 +343,7 @@ def test_capabilities_flags(app_client: TestClient) -> None:
     assert caps["provider.local"]["status"] == "ready"
     assert caps["provider.mock"]["status"] == "ready"
     assert caps["provider.openai-compatible"]["status"] == "ready"
-    for stub in ("notify.email", "github.fetch", "agents.external", "browser.automation"):
+    for stub in ("notify.email", "agents.external", "browser.automation"):
         assert caps[stub]["status"] in ("stub", "rejected", "deferred"), stub
     assert app_client.get("/capabilities").status_code == 401
 

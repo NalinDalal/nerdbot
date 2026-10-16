@@ -17,7 +17,7 @@ License posture: Octop (MIT) concepts adapted with attribution; Odysseus
 | notify.outbox | READY | Persisted redacted records, no external send |
 | notify.webhook-out | READY | Allowlisted HTTPS targets; SSRF-guarded, 3 attempts max, idempotent re-send |
 | notify.email/slack | STUB | `ChannelNotConfiguredError` |
-| github.fetch | STUB | Manual ingestion is the supported path |
+| github.fetch | READY | Read-only issue fetch from api.github.com; preview-then-ingest, env-referenced token only |
 | agents.external | STUB | Rejected until an adapter contract exists |
 | documents.calendar-email | STUB | Deferred, no demand |
 | browser.automation | STUB | Rejected, hardest to secure |

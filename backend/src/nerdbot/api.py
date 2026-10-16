@@ -20,7 +20,15 @@ from . import notify as notify_mod
 from . import orchestrator, store
 from . import workspace as workspace_mgr
 from .auth import PRINCIPAL, expected_token, principal_from_header, require_project_owner
-from .integrations.github import github_status
+from .integrations.github import (
+    GitHubAuthError,
+    GitHubConfigurationError,
+    GitHubNotFoundError,
+    GitHubProtocolError,
+    GitHubRateLimitError,
+    fetch_github_issue,
+    github_status,
+)
 from .models import (
     Decision,
     Provider,
@@ -658,6 +666,38 @@ def create_app() -> FastAPI:
     ) -> dict[str, Any]:
         _ = principal
         return github_status()
+
+    @app.post("/projects/{project_id}/github/preview")
+    def preview_github_issue(
+        project_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """Preview a GitHub issue as untrusted data. Nothing is ingested;
+        POST the returned ``suggested_ingest`` to /issues to confirm."""
+        require_project_owner(conn, project_id, principal)
+        try:
+            number = int(body.get("number", 0))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="issue number must be an integer") from exc
+        try:
+            issue = fetch_github_issue(
+                str(body.get("repository", "")),
+                number,
+                token_env=str(body.get("token_env", "")),
+            )
+        except GitHubConfigurationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except GitHubNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except GitHubAuthError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        except GitHubRateLimitError as exc:
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        except (GitHubProtocolError, ValueError) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return issue
 
     @app.post("/memory")
     def write_memory(

@@ -71,8 +71,8 @@ CAPABILITIES: list[dict[str, Any]] = [
     },
     {
         "id": "github.fetch",
-        "status": "stub",
-        "description": "Deferred: manual issue ingestion is the supported path.",
+        "status": "ready",
+        "description": "Read-only issue fetch from api.github.com; preview-then-ingest, env-referenced token only.",
     },
     {
         "id": "agents.external",

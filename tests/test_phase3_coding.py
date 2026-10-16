@@ -12,11 +12,7 @@ from fastapi.testclient import TestClient
 from nerdbot import orchestrator, store
 from nerdbot.api import create_app
 from nerdbot.cli.main import cli
-from nerdbot.integrations.github import (
-    AdapterNotConfiguredError,
-    StubGitHubIssueFetcher,
-    github_status,
-)
+from nerdbot.integrations.github import GITHUB_API_HOST, github_status
 from nerdbot.models import ReviewVerdict
 
 TOKEN = "phase3-token"
@@ -88,13 +84,12 @@ def test_issue_intake_and_link(app_client: TestClient) -> None:
     assert r.status_code == 400
 
 
-def test_github_adapter_explicitly_deferred(app_client: TestClient) -> None:
+def test_github_adapter_reports_ready(app_client: TestClient) -> None:
     r = app_client.get("/integrations/github/status", headers=AUTH)
     assert r.status_code == 200
     assert r.json() == github_status()
-    assert github_status()["configured"] is False
-    with pytest.raises(AdapterNotConfiguredError):
-        StubGitHubIssueFetcher().fetch_issue("org/repo", 1)
+    assert github_status()["configured"] is True
+    assert github_status()["host"] == GITHUB_API_HOST
 
 
 def test_cli_ingest_issue(tmp_path, monkeypatch) -> None:
