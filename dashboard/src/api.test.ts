@@ -264,4 +264,64 @@ describe("views", () => {
     await api.deleteWorkspace("tsk_1");
     expect(seen[1].method).toBe("DELETE");
   });
+
+  it("chat threads + messages", async () => {
+    ok({ id: "thr_1" });
+    await api.createThread("prj_1", { title: "hi" });
+    expect(seen[0]).toMatchObject({ url: "http://api:8088/projects/prj_1/threads", method: "POST" });
+    ok({ threads: [{ id: "thr_1" }] });
+    await api.listThreads("prj_1");
+    expect(seen[1].url).toBe("http://api:8088/projects/prj_1/threads");
+    ok({ id: "thr_1" });
+    await api.updateThread("thr_1", { provider_id: "prv_1" });
+    expect(seen[2].body).toMatchObject({ provider_id: "prv_1" });
+    ok({ thread: { id: "thr_1" }, messages: [] });
+    await api.threadView("thr_1", 10, "msg_9");
+    expect(seen[3].url).toBe("http://api:8088/threads/thr_1?limit=10&before=msg_9");
+    ok({ id: "msg_1" });
+    await api.appendMessage("thr_1", "user", "hello");
+    expect(seen[4].body).toMatchObject({ role: "user", content: "hello" });
+  });
+
+  it("chat send returns message + provenance", async () => {
+    ok({ message: { id: "msg_2", content: "hi" }, provider_id: "prv_1", memory_used: [] });
+    const result = await api.sendChat("thr_1", "hello");
+    expect(seen[0].url).toBe("http://api:8088/threads/thr_1/chat");
+    expect(result.message.content).toBe("hi");
+  });
+
+  it("chat stream reassembles chunks", async () => {
+    const payload =
+      'data: {"text": "Hel"}\n\n' + 'data: {"text": "lo"}\n\n' + "data: [DONE]\n\n";
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(payload));
+        controller.close();
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, status: 200, body: stream }) as Response),
+    );
+    const chunks: string[] = [];
+    const full = await api.sendChatStream("thr_1", "hi", (text) => chunks.push(text));
+    expect(full).toBe("Hello");
+    expect(chunks).toEqual(["Hel", "lo"]);
+  });
+
+  it("chat stream surfaces server errors", async () => {
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {"error": "boom"}\n\ndata: [DONE]\n\n'));
+        controller.close();
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, status: 200, body: stream }) as Response),
+    );
+    await expect(api.sendChatStream("thr_1", "hi", () => {})).rejects.toMatchObject({
+      detail: "boom",
+    });
+  });
 });

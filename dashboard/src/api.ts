@@ -2,11 +2,14 @@ import type {
   Approval,
   Artifact,
   Capability,
+  ChatMessage,
+  ChatThread,
   Event,
   Health,
   Issue,
   KnowledgeSource,
   MemoryEntry,
+  MemoryProvenance,
   Notification,
   PRPackage,
   Project,
@@ -16,6 +19,7 @@ import type {
   Schedule,
   TaskView,
   Teammate,
+  ThreadView,
 } from "./types";
 
 export interface Session {
@@ -214,4 +218,95 @@ export const api = {
     }),
   projectMetrics: (projectId: string) =>
     req<Record<string, unknown>>(`/projects/${projectId}/metrics`),
+
+  listThreads: (projectId: string) =>
+    req<{ threads: ChatThread[] }>(`/projects/${projectId}/threads`),
+  createThread: (projectId: string, body: Record<string, unknown>) =>
+    post<ChatThread>(`/projects/${projectId}/threads`, body),
+  updateThread: (threadId: string, body: Record<string, unknown>) =>
+    patch<ChatThread>(`/threads/${threadId}`, body),
+  threadView: (threadId: string, limit = 50, before?: string) =>
+    req<ThreadView>(
+      `/threads/${threadId}?limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ""}`,
+    ),
+  appendMessage: (threadId: string, role: string, content: string) =>
+    post<ChatMessage>(`/threads/${threadId}/messages`, { role, content }),
+  sendChat: (threadId: string, content: string) =>
+    post<{ message: ChatMessage; provider_id: string | null; memory_used: MemoryProvenance[] }>(
+      `/threads/${threadId}/chat`,
+      { content },
+    ),
+  sendChatStream: (
+    threadId: string,
+    content: string,
+    onChunk: (text: string) => void,
+  ): Promise<string> => streamChat(threadId, content, onChunk),
 };
+
+async function streamChat(
+  threadId: string,
+  content: string,
+  onChunk: (text: string) => void,
+): Promise<string> {
+  const current = getSession();
+  if (!current) throw new ApiError(0, "Not connected. Enter your API token first.");
+  let res: Response;
+  try {
+    res = await fetch(joinUrl(current.baseUrl, `/threads/${threadId}/chat/stream`), {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${current.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ content }),
+    });
+  } catch (err) {
+    throw new ApiError(
+      0,
+      err instanceof Error ? `Network error: ${err.message}` : "Network error",
+    );
+  }
+  if (!res.ok || !res.body) {
+    let detail = `Request failed (${res.status})`;
+    try {
+      const data = (await res.json()) as { detail?: unknown };
+      if (typeof data.detail === "string") detail = data.detail;
+    } catch {
+      /* keep default */
+    }
+    throw new ApiError(res.status, detail);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let full = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+    for (const part of parts) {
+      for (const line of part.split("\n")) {
+        const text = line.trim();
+        if (!text.startsWith("data:")) continue;
+        const payload = text.slice(5).trim();
+        if (payload === "[DONE]") continue;
+        let data: { text?: unknown; error?: unknown };
+        try {
+          data = JSON.parse(payload) as { text?: unknown; error?: unknown };
+        } catch {
+          throw new ApiError(502, "Unreadable stream payload");
+        }
+        if (typeof data.error === "string" && data.error) {
+          throw new ApiError(res.status, data.error);
+        }
+        if (typeof data.text === "string" && data.text) {
+          full += data.text;
+          onChunk(data.text);
+        }
+      }
+    }
+  }
+  return full;
+}

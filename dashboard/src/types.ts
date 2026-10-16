@@ -205,6 +205,33 @@ export interface TaskView {
   pr_packages: PRPackage[];
 }
 
+export interface ChatThread {
+  id: string;
+  project_id: string;
+  title: string;
+  provider_id: string | null;
+  created_at: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  thread_id: string;
+  role: string;
+  content: string;
+  created_at: string;
+}
+
+export interface ThreadView {
+  thread: ChatThread;
+  messages: ChatMessage[];
+}
+
+export interface MemoryProvenance {
+  id: string;
+  source: string;
+  confidence: number;
+}
+
 /** Config keys whose values must never be rendered. Server redacts these,
  *  but the UI masks them too so a backend regression cannot leak secrets. */
 export const SECRET_KEYS = new Set([

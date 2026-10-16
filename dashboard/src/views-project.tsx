@@ -5,9 +5,11 @@ import type { Approval, Provider } from "./types";
 import { maskSecrets } from "./types";
 import { EmptyState, ErrorState, LoadingState, Modal, ShortId, StatusBadge, useAsync } from "./components";
 import { EntityForm } from "./forms";
+import { ChatView } from "./views-chat";
 
 const TABS = [
   "Tasks",
+  "Chat",
   "Teammates",
   "Providers",
   "Issues",
@@ -45,6 +47,7 @@ export function ProjectDetailView({
         ))}
       </div>
       {tab === "Tasks" && <TasksTab projectId={projectId} onOpenTask={onOpenTask} />}
+      {tab === "Chat" && <ChatView projectId={projectId} />}
       {tab === "Teammates" && <TeammatesTab projectId={projectId} />}
       {tab === "Providers" && <ProvidersTab projectId={projectId} />}
       {tab === "Issues" && <IssuesTab projectId={projectId} />}

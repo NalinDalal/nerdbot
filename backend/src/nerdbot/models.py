@@ -139,6 +139,25 @@ class Approval(BaseModel):
     digest: str | None = None
 
 
+class ChatThread(BaseModel):
+    id: str
+    project_id: str
+    title: str = ""
+    provider_id: str | None = None
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+class ChatMessage(BaseModel):
+    id: str
+    thread_id: str
+    role: str = "user"
+    content: str = ""
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+CHAT_ROLES = frozenset({"user", "assistant", "tool", "system"})
+
+
 class Event(BaseModel):
     id: str
     project_id: str

@@ -14,8 +14,11 @@ from pathlib import Path
 from typing import Any
 
 from .models import (
+    CHAT_ROLES,
     Approval,
     Artifact,
+    ChatMessage,
+    ChatThread,
     Decision,
     Event,
     Issue,
@@ -145,6 +148,16 @@ CREATE TABLE IF NOT EXISTS webhook_targets (
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS chat_threads (
+  id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+  title TEXT NOT NULL DEFAULT '', provider_id TEXT, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES chat_threads(id),
+  role TEXT NOT NULL DEFAULT 'user', content TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages(thread_id);
 """
 
 
@@ -1920,3 +1933,134 @@ def meta_incr(conn: sqlite3.Connection, key: str) -> int:
     )
     conn.commit()
     return value
+
+
+# -- Chat threads and messages --------------------------------------------------
+
+
+HISTORY_PAGE_MAX = 100
+
+
+def _thread_from_row(row: sqlite3.Row) -> ChatThread:
+    return ChatThread(
+        id=row["id"],
+        project_id=row["project_id"],
+        title=row["title"] or "",
+        provider_id=row["provider_id"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def _message_from_row(row: sqlite3.Row) -> ChatMessage:
+    return ChatMessage(
+        id=row["id"],
+        thread_id=row["thread_id"],
+        role=row["role"] or "user",
+        content=row["content"] or "",
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def create_thread(
+    conn: sqlite3.Connection, project_id: str, title: str = "",
+    provider_id: str | None = None,
+) -> ChatThread:
+    if get_project(conn, project_id) is None:
+        raise KeyError(f"unknown project {project_id}")
+    if provider_id is not None:
+        provider = get_provider(conn, provider_id)
+        if provider is None or provider.project_id != project_id:
+            raise ValueError("provider must belong to the same project")
+    thread = ChatThread(id=new_id("thr"), project_id=project_id, title=title,
+                        provider_id=provider_id)
+    conn.execute(
+        "INSERT INTO chat_threads (id, project_id, title, provider_id, created_at)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (thread.id, thread.project_id, thread.title, thread.provider_id,
+         thread.created_at.isoformat()),
+    )
+    conn.commit()
+    record_event(conn, project_id, "thread", thread.id, "thread.created")
+    return thread
+
+
+def get_thread(conn: sqlite3.Connection, thread_id: str) -> ChatThread | None:
+    row = conn.execute("SELECT * FROM chat_threads WHERE id = ?", (thread_id,)).fetchone()
+    if row is None:
+        return None
+    return _thread_from_row(row)
+
+
+def list_threads(conn: sqlite3.Connection, project_id: str) -> list[ChatThread]:
+    rows = conn.execute(
+        "SELECT * FROM chat_threads WHERE project_id = ? ORDER BY rowid", (project_id,)
+    ).fetchall()
+    return [_thread_from_row(r) for r in rows]
+
+
+def set_thread_provider(
+    conn: sqlite3.Connection, thread_id: str, provider_id: str | None
+) -> ChatThread:
+    thread = get_thread(conn, thread_id)
+    if thread is None:
+        raise KeyError(f"unknown thread {thread_id}")
+    if provider_id is not None:
+        provider = get_provider(conn, provider_id)
+        if provider is None or provider.project_id != thread.project_id:
+            raise ValueError("provider must belong to the same project")
+        if provider.status != ProviderStatus.ACTIVE:
+            raise ValueError(f"provider {provider_id} is not active")
+    conn.execute("UPDATE chat_threads SET provider_id = ? WHERE id = ?",
+                 (provider_id, thread_id))
+    conn.commit()
+    thread.provider_id = provider_id
+    record_event(conn, thread.project_id, "thread", thread_id, "thread.provider_switched")
+    return thread
+
+
+def append_message(conn: sqlite3.Connection, thread_id: str, role: str, content: str) -> ChatMessage:
+    thread = get_thread(conn, thread_id)
+    if thread is None:
+        raise KeyError(f"unknown thread {thread_id}")
+    if role not in CHAT_ROLES:
+        raise ValueError(f"invalid role {role!r}")
+    if not content.strip():
+        raise ValueError("message content is required")
+    message = ChatMessage(id=new_id("msg"), thread_id=thread_id, role=role, content=content)
+    conn.execute(
+        "INSERT INTO chat_messages (id, thread_id, role, content, created_at)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (message.id, message.thread_id, message.role, message.content,
+         message.created_at.isoformat()),
+    )
+    conn.commit()
+    return message
+
+
+def list_messages(
+    conn: sqlite3.Connection, thread_id: str, limit: int = 50, before_id: str | None = None
+) -> list[ChatMessage]:
+    """Newest-page-first? No — oldest-first window: returns up to ``limit``
+    messages ending before ``before_id`` (or the latest), capped at 100."""
+    if get_thread(conn, thread_id) is None:
+        raise KeyError(f"unknown thread {thread_id}")
+    capped = max(1, min(limit, HISTORY_PAGE_MAX))
+    if before_id is not None:
+        anchor = conn.execute("SELECT rowid FROM chat_messages WHERE id = ?",
+                              (before_id,)).fetchone()
+        if anchor is None:
+            raise KeyError(f"unknown message {before_id}")
+        rows = conn.execute(
+            "SELECT * FROM chat_messages WHERE thread_id = ? AND rowid < ?"
+            " ORDER BY rowid DESC LIMIT ?",
+            (thread_id, anchor["rowid"], capped),
+        ).fetchall()
+        rows = list(reversed(rows))
+    else:
+        rows = conn.execute(
+            "SELECT * FROM chat_messages WHERE thread_id = ?"
+            " ORDER BY rowid DESC LIMIT ?",
+            (thread_id, capped),
+        ).fetchall()
+        rows = list(reversed(rows))
+    return [_message_from_row(r) for r in rows]

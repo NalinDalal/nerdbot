@@ -10,11 +10,12 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from . import backup as backup_mod
 from . import capabilities as capabilities_mod
+from . import chat as chat_mod
 from . import knowledge as knowledge_mod
 from . import metrics as metrics_mod
 from . import notify as notify_mod
@@ -37,6 +38,11 @@ from .models import (
     ProviderStatus,
     ReviewVerdict,
     TeammateStatus,
+)
+from .providers import (
+    ProviderAuthenticationError,
+    ProviderConfigurationError,
+    ProviderRateLimitError,
 )
 
 
@@ -1258,6 +1264,188 @@ def create_app() -> FastAPI:
     ) -> dict[str, Any]:
         _ = principal
         return {"capabilities": capabilities_mod.CAPABILITIES}
+
+    # -- Chat threads ----------------------------------------------------------
+
+    def _chat_thread_project(conn: sqlite3.Connection, thread_id: str) -> str:
+        thread = store.get_thread(conn, thread_id)
+        if thread is None:
+            raise HTTPException(status_code=404, detail="thread not found")
+        return thread.project_id
+
+    @app.post("/projects/{project_id}/threads")
+    def create_thread(
+        project_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        try:
+            thread = store.create_thread(
+                conn, project_id, title=str(body.get("title", "")),
+                provider_id=body.get("provider_id"),
+            )
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return thread.model_dump(mode="json")
+
+    @app.get("/projects/{project_id}/threads")
+    def list_threads(
+        project_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        threads = [t.model_dump(mode="json") for t in store.list_threads(conn, project_id)]
+        return {"threads": threads}
+
+    @app.patch("/threads/{thread_id}")
+    def update_thread(
+        thread_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, _chat_thread_project(conn, thread_id), principal)
+        thread = store.get_thread(conn, thread_id)
+        if thread is None:  # pragma: no cover - raced deletion
+            raise HTTPException(status_code=404, detail="thread not found")
+        if "provider_id" in body:
+            try:
+                thread = store.set_thread_provider(conn, thread_id, body.get("provider_id"))
+            except (KeyError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if "title" in body:
+            conn.execute("UPDATE chat_threads SET title = ? WHERE id = ?",
+                         (str(body.get("title", "")), thread_id))
+            conn.commit()
+            refreshed = store.get_thread(conn, thread_id)
+            if refreshed is not None:
+                thread = refreshed
+        return thread.model_dump(mode="json")
+
+    @app.get("/threads/{thread_id}")
+    def get_thread_view(
+        thread_id: str,
+        limit: int = 50,
+        before: str | None = None,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, _chat_thread_project(conn, thread_id), principal)
+        thread = store.get_thread(conn, thread_id)
+        if thread is None:  # pragma: no cover - raced deletion
+            raise HTTPException(status_code=404, detail="thread not found")
+        try:
+            messages = store.list_messages(conn, thread_id, limit=limit, before_id=before)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {
+            "thread": thread.model_dump(mode="json"),
+            "messages": [m.model_dump(mode="json") for m in messages],
+        }
+
+    @app.post("/threads/{thread_id}/messages")
+    def append_thread_message(
+        thread_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, _chat_thread_project(conn, thread_id), principal)
+        try:
+            message = store.append_message(conn, thread_id, str(body.get("role", "user")),
+                                           str(body.get("content", "")))
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return message.model_dump(mode="json")
+
+    def _prepare_chat(
+        conn: sqlite3.Connection, thread_id: str
+    ) -> tuple[Any, Any, list[dict[str, Any]], list[dict[str, Any]]]:
+        thread = store.get_thread(conn, thread_id)
+        if thread is None:
+            raise HTTPException(status_code=404, detail="thread not found")
+        try:
+            provider = chat_mod.resolve_chat_provider(conn, thread.project_id, thread)
+            messages, provenance = chat_mod.build_messages(conn, thread.project_id, thread)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except store.MemoryReadError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return thread, provider, messages, provenance
+
+    def _chat_error_to_http(exc: Exception) -> HTTPException:
+        if isinstance(exc, ProviderConfigurationError):
+            return HTTPException(status_code=400, detail=str(exc))
+        if isinstance(exc, ProviderAuthenticationError):
+            return HTTPException(status_code=401, detail=str(exc))
+        if isinstance(exc, ProviderRateLimitError):
+            return HTTPException(status_code=429, detail=str(exc))
+        return HTTPException(status_code=502, detail=str(exc))
+
+    @app.post("/threads/{thread_id}/chat")
+    def chat_complete_endpoint(
+        thread_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, _chat_thread_project(conn, thread_id), principal)
+        content = str(body.get("content", ""))
+        if not content.strip():
+            raise HTTPException(status_code=400, detail="content is required")
+        store.append_message(conn, thread_id, "user", content)
+        thread, provider, messages, provenance = _prepare_chat(conn, thread_id)
+        _ = thread
+        try:
+            text = chat_mod.chat_complete(provider, messages)
+        except Exception as exc:
+            raise _chat_error_to_http(exc) from exc
+        message = store.append_message(conn, thread_id, "assistant", text)
+        provider_id = provider.id if provider else None
+        return {
+            "message": message.model_dump(mode="json"),
+            "provider_id": provider_id,
+            "memory_used": provenance,
+        }
+
+    @app.post("/threads/{thread_id}/chat/stream")
+    def chat_stream_endpoint(
+        thread_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> StreamingResponse:
+        require_project_owner(conn, _chat_thread_project(conn, thread_id), principal)
+        content = str(body.get("content", ""))
+        if not content.strip():
+            raise HTTPException(status_code=400, detail="content is required")
+        store.append_message(conn, thread_id, "user", content)
+        thread, provider, messages, provenance = _prepare_chat(conn, thread_id)
+        _ = (thread, provenance)
+
+        def generate() -> Any:
+            import json as _json
+
+            chunks: list[str] = []
+            try:
+                for chunk in chat_mod.chat_stream(provider, messages):
+                    chunks.append(chunk)
+                    yield f"data: {_json.dumps({'text': chunk})}\n\n"
+            except Exception as exc:
+                http_exc = _chat_error_to_http(exc)
+                yield f"data: {_json.dumps({'error': http_exc.detail})}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+            full = "".join(chunks)
+            store.append_message(conn, thread_id, "assistant", full or "(empty reply)")
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(generate(), media_type="text/event-stream")
 
     return app
 
