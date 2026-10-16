@@ -66,7 +66,22 @@ def test_all_resolved_ips_must_pass() -> None:
     assert calls == []
 
 
-def test_redirect_hops_repin_independently(tmp_path) -> None:
+def test_pinned_timeout_is_transient(monkeypatch) -> None:
+    def slow(host: str) -> list[str]:
+        return ["93.184.216.34"]
+
+    def never_connect(address: object, timeout: object = None) -> object:
+        raise TimeoutError("timed out")
+
+    transport = fetch_mod.PinnedTransport(resolver=slow)
+    request = httpx.Request("GET", "https://slow.example/")
+
+    monkeypatch.setattr(socket, "create_connection", never_connect)
+    with pytest.raises(fetch_mod.FetchTimeoutError):
+        transport.handle_request(request)
+
+
+def test_redirect_hops_repin_independently() -> None:
     mapping = {"hop1.example": [PUBLIC_IP], "hop2.example": [PUBLIC_IP_2]}
     resolved: list[str] = []
 

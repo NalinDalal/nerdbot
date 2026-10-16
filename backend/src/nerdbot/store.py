@@ -135,6 +135,7 @@ CREATE TABLE IF NOT EXISTS notifications (
   channel TEXT NOT NULL DEFAULT 'outbox', kind TEXT NOT NULL DEFAULT '',
   payload TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'queued',
   target_url TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TEXT, locked INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS webhook_targets (
@@ -249,10 +250,23 @@ _PHASE5_COLUMNS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
+_PHASE6_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "notifications": [
+        ("next_attempt_at", "TEXT"),
+        ("locked", "INTEGER NOT NULL DEFAULT 0"),
+    ],
+}
+
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Idempotent migrations for databases created by older schemas."""
-    phases = {**_PHASE2_COLUMNS, **_PHASE3_COLUMNS, **_PHASE4_COLUMNS, **_PHASE5_COLUMNS}
+    phases = {
+        **_PHASE2_COLUMNS,
+        **_PHASE3_COLUMNS,
+        **_PHASE4_COLUMNS,
+        **_PHASE5_COLUMNS,
+        **_PHASE6_COLUMNS,
+    }
     for table, columns in phases.items():
         existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
         for name, ddl in columns:
@@ -1776,6 +1790,10 @@ def _notification_from_row(r: sqlite3.Row) -> Notification:
         status=r["status"] or "queued",
         target_url=r["target_url"] if "target_url" in keys and r["target_url"] else "",
         attempts=r["attempts"] if "attempts" in keys and r["attempts"] else 0,
+        next_attempt_at=datetime.fromisoformat(r["next_attempt_at"])
+        if "next_attempt_at" in keys and r["next_attempt_at"]
+        else None,
+        locked=bool(r["locked"]) if "locked" in keys and r["locked"] else False,
         created_at=datetime.fromisoformat(r["created_at"]),
     )
 
@@ -1795,6 +1813,40 @@ def set_notification_delivery(
         (status, attempts, notification_id),
     )
     conn.commit()
+
+
+def set_notification_next_attempt(
+    conn: sqlite3.Connection, notification_id: str, next_at: datetime
+) -> None:
+    conn.execute(
+        "UPDATE notifications SET next_attempt_at = ? WHERE id = ?",
+        (next_at.isoformat(), notification_id),
+    )
+    conn.commit()
+
+
+def claim_delivery_lock(conn: sqlite3.Connection, notification_id: str) -> bool:
+    """Atomic overlap guard. False when already locked."""
+    cursor = conn.execute(
+        "UPDATE notifications SET locked = 1 WHERE id = ? AND locked = 0", (notification_id,)
+    )
+    conn.commit()
+    return cursor.rowcount == 1
+
+
+def release_delivery_lock(conn: sqlite3.Connection, notification_id: str) -> None:
+    conn.execute("UPDATE notifications SET locked = 0 WHERE id = ?", (notification_id,))
+    conn.commit()
+
+
+def due_deliveries(conn: sqlite3.Connection, now: datetime) -> list[Notification]:
+    rows = conn.execute(
+        "SELECT * FROM notifications WHERE channel = 'webhook-out' AND status = 'queued'"
+        " AND locked = 0 AND next_attempt_at IS NOT NULL AND next_attempt_at <= ?"
+        " ORDER BY next_attempt_at, rowid",
+        (now.isoformat(),),
+    ).fetchall()
+    return [_notification_from_row(r) for r in rows]
 
 
 def list_notifications(conn: sqlite3.Connection, project_id: str) -> list[Notification]:

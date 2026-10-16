@@ -268,6 +268,8 @@ def _socket_roundtrip(
             if total > max_bytes:
                 raise FetchTooLargeError(f"response exceeds cap {max_bytes} bytes")
             chunks.append(piece)
+    except TimeoutError as exc:
+        raise FetchTimeoutError(f"pinned connection timed out: {exc}") from exc
     except (OSError, ssl.SSLError, http.client.HTTPException) as exc:
         raise FetchProtocolError(f"pinned connection failed: {exc}") from exc
     finally:

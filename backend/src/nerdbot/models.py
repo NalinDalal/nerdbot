@@ -215,6 +215,8 @@ class Notification(BaseModel):
     status: str = "queued"
     target_url: str = ""
     attempts: int = 0
+    next_attempt_at: datetime | None = None
+    locked: bool = False
     created_at: datetime = Field(default_factory=_utcnow)
 
 

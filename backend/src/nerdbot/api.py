@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from . import backup as backup_mod
@@ -1080,7 +1081,7 @@ def create_app() -> FastAPI:
         body: dict[str, Any],
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
-    ) -> dict[str, Any]:
+    ) -> Any:
         require_project_owner(conn, project_id, principal)
         channel = str(body.get("channel", "outbox"))
         if channel == notify_mod.WEBHOOK_CHANNEL:
@@ -1096,8 +1097,12 @@ def create_app() -> FastAPI:
             except (ValueError, notify_mod.WebhookNotConfiguredError,
                     notify_mod.WebhookBlockedError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except notify_mod.WebhookLockedError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
             except notify_mod.WebhookDeliveryError as exc:
                 raise HTTPException(status_code=502, detail=str(exc)) from exc
+            if note.status == "queued":
+                return JSONResponse(status_code=202, content=note.model_dump(mode="json"))
             delivered: dict[str, Any] = note.model_dump(mode="json")
             return delivered
         try:
@@ -1128,7 +1133,7 @@ def create_app() -> FastAPI:
         notification_id: str,
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
-    ) -> dict[str, Any]:
+    ) -> Any:
         note = store.get_notification(conn, notification_id)
         if note is None:
             raise HTTPException(status_code=404, detail="notification not found")
@@ -1140,10 +1145,35 @@ def create_app() -> FastAPI:
         except (ValueError, notify_mod.WebhookNotConfiguredError,
                 notify_mod.WebhookBlockedError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except notify_mod.WebhookLockedError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except notify_mod.WebhookDeliveryError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+        if delivered.status == "queued":
+            return JSONResponse(status_code=202, content=delivered.model_dump(mode="json"))
         retried: dict[str, Any] = delivered.model_dump(mode="json")
         return retried
+
+    @app.post("/notifications/{notification_id}/unlock")
+    def unlock_notification(
+        notification_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        note = store.get_notification(conn, notification_id)
+        if note is None:
+            raise HTTPException(status_code=404, detail="notification not found")
+        require_project_owner(conn, note.project_id, principal)
+        store.release_delivery_lock(conn, notification_id)
+        return {"id": notification_id, "locked": False}
+
+    @app.post("/webhooks/sweep")
+    def sweep_webhooks(
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        _ = principal
+        return {"fired": notify_mod.sweep_due_deliveries(conn)}
 
     @app.post("/projects/{project_id}/webhook-targets")
     def add_webhook_target(

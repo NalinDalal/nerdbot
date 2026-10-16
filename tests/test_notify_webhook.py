@@ -105,32 +105,114 @@ def test_redirect_to_private_blocked(app_client: TestClient) -> None:
 
 
 def test_retry_then_success_and_exhaustion(app_client: TestClient) -> None:
+    from datetime import UTC, datetime, timedelta
+
     pid = _project(app_client)
     app_client.post(f"/projects/{pid}/webhook-targets", json={"url": TARGET}, headers=AUTH)
     conn = store.connect(os.environ["NERDBOT_DB"])
-    sleeps: list[float] = []
     calls = {"n": 0}
 
     def flaky(request: httpx.Request) -> httpx.Response:
         calls["n"] += 1
         return httpx.Response(500 if calls["n"] < 3 else 200, text="x")
 
+    transport = _transport(flaky)
     note = store.create_notification(conn, pid, "webhook-out", "x")
-    done = notify_mod.deliver_webhook(conn, note.id, transport=_transport(flaky),
-                                      sleep=sleeps.append)
-    assert done.status == "delivered" and done.attempts == 3
-    assert sleeps == [1.0, 2.0]
+    # First inline attempt fails transiently: queued with a future retry time.
+    first = notify_mod.deliver_webhook(conn, note.id, transport=transport)
+    assert first.status == "queued" and first.attempts == 1
+    assert first.next_attempt_at is not None
+    assert first.next_attempt_at > datetime.now(UTC) - timedelta(seconds=1)
+    # Sweep before due: nothing fires, no new HTTP hit.
+    assert notify_mod.sweep_due_deliveries(conn, transport=transport) == []
+    assert calls["n"] == 1
+    # Sweep after due: second attempt fails, re-queued with a later time.
+    second = notify_mod.sweep_due_deliveries(
+        conn, now=first.next_attempt_at + timedelta(seconds=1), transport=transport)
+    assert len(second) == 1 and second[0]["status"] == "queued"
+    assert calls["n"] == 2
+    # Third attempt succeeds; total HTTP hits == attempts.
+    third = notify_mod.sweep_due_deliveries(
+        conn, now=datetime.now(UTC) + timedelta(hours=1), transport=transport)
+    assert third[0]["status"] == "delivered" and third[0]["attempts"] == 3
+    assert calls["n"] == 3
 
     def down(request: httpx.Request) -> httpx.Response:
         return httpx.Response(503, text="x")
 
     note2 = store.create_notification(conn, pid, "webhook-out", "y")
+    far = datetime.now(UTC)
+    for _ in range(2):
+        result = notify_mod.deliver_webhook(conn, note2.id, transport=_transport(down), now=far)
+        assert result.status == "queued"
+        far = result.next_attempt_at + timedelta(seconds=1)  # type: ignore[operator]
     with pytest.raises(notify_mod.WebhookDeliveryError):
-        notify_mod.deliver_webhook(conn, note2.id, transport=_transport(down),
-                                   sleep=lambda s: None)
+        notify_mod.deliver_webhook(conn, note2.id, transport=_transport(down), now=far)
     stored = store.get_notification(conn, note2.id)
     assert stored is not None and stored.status == "failed" and stored.attempts == 3
     conn.close()
+
+
+def test_sweep_skips_locked_future_and_terminal(app_client: TestClient) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    pid = _project(app_client)
+    app_client.post(f"/projects/{pid}/webhook-targets", json={"url": TARGET}, headers=AUTH)
+    conn = store.connect(os.environ["NERDBOT_DB"])
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(200, text="ok")
+
+    transport = _transport(handler)
+    due = store.create_notification(conn, pid, "webhook-out", "due")
+    store.set_notification_next_attempt(conn, due.id, datetime.now(UTC) - timedelta(seconds=1))
+    future = store.create_notification(conn, pid, "webhook-out", "future")
+    store.set_notification_next_attempt(conn, future.id, datetime.now(UTC) + timedelta(days=1))
+    locked = store.create_notification(conn, pid, "webhook-out", "locked")
+    assert store.claim_delivery_lock(conn, locked.id) is True
+    done = store.create_notification(conn, pid, "webhook-out", "done")
+    notify_mod.deliver_webhook(conn, done.id, transport=transport)
+    failed = store.create_notification(conn, pid, "webhook-out", "gone")
+    store.set_notification_delivery(conn, failed.id, "failed", 3)
+
+    results = notify_mod.sweep_due_deliveries(conn, transport=transport)
+    assert [r["id"] for r in results] == [due.id]
+    assert calls["n"] == 2  # one for done's inline delivery, one for due's sweep
+    # Locked row untouched; explicit unlock then fires via retry endpoint path.
+    assert store.get_notification(conn, locked.id).status == "queued"  # type: ignore[union-attr]
+    store.set_notification_next_attempt(conn, locked.id, datetime.now(UTC) - timedelta(seconds=1))
+    store.release_delivery_lock(conn, locked.id)
+    results = notify_mod.sweep_due_deliveries(conn, transport=transport)
+    assert [r["id"] for r in results] == [locked.id]
+    conn.close()
+
+
+def test_locked_deliver_conflicts_and_unlock(app_client: TestClient) -> None:
+    pid = _project(app_client)
+    app_client.post(f"/projects/{pid}/webhook-targets", json={"url": TARGET}, headers=AUTH)
+    conn = store.connect(os.environ["NERDBOT_DB"])
+    note = store.create_notification(conn, pid, "webhook-out", "x")
+    conn.close()
+    # Simulate a crashed worker holding the lock (direct row update).
+    conn2 = store.connect(os.environ["NERDBOT_DB"])
+    assert store.claim_delivery_lock(conn2, note.id) is True
+    conn2.close()
+    r = app_client.post(f"/notifications/{note.id}/deliver", headers=AUTH)
+    assert r.status_code == 409
+    r = app_client.post(f"/notifications/{note.id}/unlock", headers=AUTH)
+    assert r.status_code == 200 and r.json() == {"id": note.id, "locked": False}
+    bad = {"Authorization": "Bearer wrong"}
+    assert app_client.post(f"/notifications/{note.id}/unlock", headers=bad).status_code == 403
+
+
+def test_sweep_endpoint_empty(app_client: TestClient) -> None:
+    _project(app_client)  # no due rows anywhere: sweep performs no HTTP
+    r = app_client.post("/webhooks/sweep", headers=AUTH)
+    assert r.status_code == 200 and r.json() == {"fired": []}
+    bad = {"Authorization": "Bearer wrong"}
+    assert app_client.post("/webhooks/sweep", headers=bad).status_code == 403
 
 
 def test_idempotent_resend(app_client: TestClient) -> None:

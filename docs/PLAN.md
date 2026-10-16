@@ -73,11 +73,11 @@ Inspected: `providers.py` (dispatch + refusal stub), `runtime.py`
 
 ## Current status
 
-- Milestone: Phase 4 slice 2 implemented (read-only GitHub issue fetch,
-  preview-then-ingest); gates green.
+- Milestone: scheduler-driven webhook backoff implemented (single inline
+  attempt, due-sweep retries, overlap locks); gates green.
 - Token hygiene scope: approval tokens expire/are one-use/purged; bearer-token
   rotation explicitly cut (capability `auth.token-rotation: deferred`).
 - Keyless mode: local-dev without a key supports non-secret configs only.
 - Blockers: none for this milestone. Dev-default bearer token still accepted
   (explicit follow-up, unchanged).
-- Next action: commit slice 2; next slice per owner selection.
+- Next action: commit; next slice per owner selection.

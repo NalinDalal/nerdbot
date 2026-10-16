@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import time
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urljoin
 
@@ -86,14 +86,35 @@ def resolve_target(conn: sqlite3.Connection, project_id: str, target_url: str = 
     return targets[0]["url"]
 
 
+class WebhookLockedError(RuntimeError):
+    """A delivery attempt is already in progress for this notification."""
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+def _backoff_delay(attempts: int) -> float:
+    """Delay after a failed attempt (1-based count). Capped schedule."""
+    return BACKOFF_SECONDS[min(max(attempts - 1, 0), len(BACKOFF_SECONDS) - 1)]
+
+
 def deliver_webhook(
     conn: sqlite3.Connection,
     notification_id: str,
     transport: httpx.BaseTransport | None = None,
-    sleep: Callable[[float], None] = time.sleep,
     resolver: Callable[[str], list[str]] | None = None,
+    now: datetime | None = None,
 ) -> Notification:
-    """Deliver one webhook notification. Idempotent on delivered rows."""
+    """Perform one delivery attempt. Idempotent on delivered rows.
+
+    Success → ``delivered``. Transient failure → ``queued`` with
+    ``next_attempt_at`` set (a later sweep retries). Terminal failure
+    (blocked/upstream rejection) → ``failed``. Exhausting the final
+    attempt raises ``WebhookDeliveryError`` after persisting ``failed``.
+    Never sleeps: delayed retries belong to the sweep path.
+    """
+    moment = now or _utcnow()
     note = store.get_notification(conn, notification_id)
     if note is None:
         raise KeyError(f"unknown notification {notification_id}")
@@ -102,38 +123,81 @@ def deliver_webhook(
     if note.status == "delivered":
         return note
     target = resolve_target(conn, note.project_id, note.target_url)
-    body = json.dumps({"id": note.id, "kind": note.kind, "payload": note.payload})
-    attempts = note.attempts
-    last_error = "no attempts made"
-    if transport is None:
-        transport = fetch_mod.PinnedTransport(
-            resolver=resolver, timeout_s=REQUEST_TIMEOUT_S, max_bytes=RESPONSE_MAX_BYTES
-        )
-    client = httpx.Client(
-        follow_redirects=False, timeout=REQUEST_TIMEOUT_S, transport=transport
-    )
+    if not store.claim_delivery_lock(conn, notification_id):
+        raise WebhookLockedError(f"delivery already in progress for {notification_id}")
     try:
-        while attempts < MAX_DELIVERY_ATTEMPTS:
-            attempts += 1
-            store.set_notification_delivery(conn, note.id, "sending", attempts)
-            try:
-                _post_once(client, target, body, note.id)
-            except (fetch_mod.FetchBlockedError, fetch_mod.FetchProtocolError) as exc:
-                last_error = f"blocked: {exc}"
-                break
-            except (fetch_mod.FetchTimeoutError, WebhookDeliveryError) as exc:
-                last_error = str(exc)
-                if attempts < MAX_DELIVERY_ATTEMPTS:
-                    sleep(BACKOFF_SECONDS[min(attempts - 1, len(BACKOFF_SECONDS) - 1)])
-                continue
-            store.set_notification_delivery(conn, note.id, "delivered", attempts)
-            refreshed = store.get_notification(conn, note.id)
-            assert refreshed is not None
-            return refreshed
+        body = json.dumps({"id": note.id, "kind": note.kind, "payload": note.payload})
+        attempts = note.attempts + 1
+        store.set_notification_delivery(conn, note.id, "sending", attempts)
+        if transport is None:
+            transport = fetch_mod.PinnedTransport(
+                resolver=resolver, timeout_s=REQUEST_TIMEOUT_S, max_bytes=RESPONSE_MAX_BYTES
+            )
+        client = httpx.Client(
+            follow_redirects=False, timeout=REQUEST_TIMEOUT_S, transport=transport
+        )
+        try:
+            _post_once(client, target, body, note.id)
+        finally:
+            client.close()
+    except (WebhookNotConfiguredError, WebhookBlockedError, ValueError,
+            fetch_mod.FetchBlockedError, fetch_mod.FetchProtocolError) as exc:
+        current = store.get_notification(conn, notification_id)
+        made = current.attempts if current else note.attempts
+        store.set_notification_delivery(conn, notification_id, "failed", made)
+        store.record_event(conn, note.project_id, "notification", notification_id,
+                           "notification.failed")
+        raise WebhookDeliveryError(f"delivery refused: {exc}") from exc
+    except (fetch_mod.FetchTimeoutError, WebhookDeliveryError) as exc:
+        if attempts >= MAX_DELIVERY_ATTEMPTS:
+            store.set_notification_delivery(conn, notification_id, "failed", attempts)
+            store.record_event(conn, note.project_id, "notification", notification_id,
+                               "notification.failed")
+            raise WebhookDeliveryError(
+                f"delivery failed after {attempts} attempts: {exc}"
+            ) from exc
+        next_at = moment + timedelta(seconds=_backoff_delay(attempts))
+        store.set_notification_delivery(conn, notification_id, "queued", attempts)
+        store.set_notification_next_attempt(conn, notification_id, next_at)
+        refreshed = store.get_notification(conn, notification_id)
+        assert refreshed is not None
+        return refreshed
     finally:
-        client.close()
-    store.set_notification_delivery(conn, note.id, "failed", attempts)
-    raise WebhookDeliveryError(f"delivery failed after {attempts} attempts: {last_error}")
+        store.release_delivery_lock(conn, notification_id)
+    store.set_notification_delivery(conn, notification_id, "delivered", attempts)
+    store.record_event(conn, note.project_id, "notification", notification_id,
+                       "notification.delivered")
+    refreshed = store.get_notification(conn, notification_id)
+    assert refreshed is not None
+    return refreshed
+
+
+def sweep_due_deliveries(
+    conn: sqlite3.Connection,
+    now: datetime | None = None,
+    transport: httpx.BaseTransport | None = None,
+    resolver: Callable[[str], list[str]] | None = None,
+) -> list[dict[str, Any]]:
+    """Fire one attempt for each due, unlocked, queued webhook delivery.
+
+    Never raises on row errors: each outcome (delivered/queued/failed) is
+    recorded with its attempts count. Deterministic order by next_attempt_at.
+    """
+    moment = now or _utcnow()
+    results: list[dict[str, Any]] = []
+    for note in store.due_deliveries(conn, moment):
+        try:
+            outcome = deliver_webhook(conn, note.id, transport=transport, resolver=resolver,
+                                      now=moment)
+            results.append({"id": note.id, "status": outcome.status,
+                            "attempts": outcome.attempts})
+        except (WebhookDeliveryError, WebhookLockedError) as exc:
+            current = store.get_notification(conn, note.id)
+            results.append({"id": note.id,
+                            "status": current.status if current else "unknown",
+                            "attempts": current.attempts if current else 0,
+                            "error": str(exc)})
+    return results
 
 
 def _post_once(client: httpx.Client, target: str, body: str, idempotency_key: str) -> None:
