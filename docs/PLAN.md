@@ -73,11 +73,11 @@ Inspected: `providers.py` (dispatch + refusal stub), `runtime.py`
 
 ## Current status
 
-- Milestone: Phase 3 implemented (hardened `fetch_url` for the agent loop,
-  ADR 0007); gates green.
+- Milestone: Phase 4 slice 1 implemented (real webhook-out delivery behind
+  the outbox); gates green.
 - Token hygiene scope: approval tokens expire/are one-use/purged; bearer-token
   rotation explicitly cut (capability `auth.token-rotation: deferred`).
 - Keyless mode: local-dev without a key supports non-secret configs only.
 - Blockers: none for this milestone. Dev-default bearer token still accepted
   (explicit follow-up, unchanged).
-- Next action: commit Phase 3; then durable-integrations planning.
+- Next action: commit slice 1; next slice per owner selection.

@@ -15,7 +15,8 @@ License posture: Octop (MIT) concepts adapted with attribution; Odysseus
 | scheduler.nl-to-cron | REJECTED | Unneeded |
 | ingress.webhook | READY | Authenticated issue+task creation |
 | notify.outbox | READY | Persisted redacted records, no external send |
-| notify.email/slack/webhook-out | STUB | `ChannelNotConfiguredError` |
+| notify.webhook-out | READY | Allowlisted HTTPS targets; SSRF-guarded, 3 attempts max, idempotent re-send |
+| notify.email/slack | STUB | `ChannelNotConfiguredError` |
 | github.fetch | STUB | Manual ingestion is the supported path |
 | agents.external | STUB | Rejected until an adapter contract exists |
 | documents.calendar-email | STUB | Deferred, no demand |

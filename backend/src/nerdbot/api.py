@@ -1042,11 +1042,29 @@ def create_app() -> FastAPI:
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
         require_project_owner(conn, project_id, principal)
+        channel = str(body.get("channel", "outbox"))
+        if channel == notify_mod.WEBHOOK_CHANNEL:
+            try:
+                note = store.create_notification(
+                    conn, project_id, channel, str(body.get("kind", "")),
+                    dict(body.get("payload", {})),
+                    target_url=str(body.get("target_url", "")),
+                )
+                note = notify_mod.deliver_webhook(conn, note.id)
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except (ValueError, notify_mod.WebhookNotConfiguredError,
+                    notify_mod.WebhookBlockedError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except notify_mod.WebhookDeliveryError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            delivered: dict[str, Any] = note.model_dump(mode="json")
+            return delivered
         try:
             note = notify_mod.send_notification(
                 conn,
                 project_id,
-                str(body.get("channel", "outbox")),
+                channel,
                 str(body.get("kind", "")),
                 dict(body.get("payload", {})),
             )
@@ -1064,6 +1082,66 @@ def create_app() -> FastAPI:
         require_project_owner(conn, project_id, principal)
         notes = [n.model_dump(mode="json") for n in store.list_notifications(conn, project_id)]
         return {"notifications": notes}
+
+    @app.post("/notifications/{notification_id}/deliver")
+    def deliver_notification(
+        notification_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        note = store.get_notification(conn, notification_id)
+        if note is None:
+            raise HTTPException(status_code=404, detail="notification not found")
+        require_project_owner(conn, note.project_id, principal)
+        try:
+            delivered = notify_mod.deliver_webhook(conn, notification_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (ValueError, notify_mod.WebhookNotConfiguredError,
+                notify_mod.WebhookBlockedError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except notify_mod.WebhookDeliveryError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        retried: dict[str, Any] = delivered.model_dump(mode="json")
+        return retried
+
+    @app.post("/projects/{project_id}/webhook-targets")
+    def add_webhook_target(
+        project_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        try:
+            target = notify_mod.add_webhook_target(conn, project_id, str(body.get("url", "")))
+        except (KeyError, ValueError, notify_mod.WebhookBlockedError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return target
+
+    @app.get("/projects/{project_id}/webhook-targets")
+    def list_webhook_targets(
+        project_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        return {"targets": store.list_webhook_targets(conn, project_id)}
+
+    @app.delete("/webhook-targets/{target_id}")
+    def delete_webhook_target(
+        target_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        target = store.get_webhook_target(conn, target_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="webhook target not found")
+        require_project_owner(conn, target["project_id"], principal)
+        try:
+            return store.delete_webhook_target(conn, target_id)
+        except KeyError as exc:  # pragma: no cover - raced deletion
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     # -- Phase 4: backup and observability -------------------------------------
 

@@ -213,6 +213,8 @@ class Notification(BaseModel):
     kind: str = ""
     payload: dict[str, Any] = Field(default_factory=dict)
     status: str = "queued"
+    target_url: str = ""
+    attempts: int = 0
     created_at: datetime = Field(default_factory=_utcnow)
 
 

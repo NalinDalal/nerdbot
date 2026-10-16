@@ -66,8 +66,8 @@ CAPABILITIES: list[dict[str, Any]] = [
     },
     {
         "id": "notify.webhook-out",
-        "status": "stub",
-        "description": "Deferred: no outbound target configured.",
+        "status": "ready",
+        "description": "Allowlisted HTTPS targets; SSRF-guarded, bounded retries, idempotent re-send.",
     },
     {
         "id": "github.fetch",

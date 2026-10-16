@@ -134,7 +134,12 @@ CREATE TABLE IF NOT EXISTS notifications (
   id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
   channel TEXT NOT NULL DEFAULT 'outbox', kind TEXT NOT NULL DEFAULT '',
   payload TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'queued',
+  target_url TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS webhook_targets (
+  id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+  url TEXT NOT NULL, created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT ''
@@ -237,10 +242,18 @@ _PHASE4_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "runs": [("provider_id", "TEXT")],
 }
 
+_PHASE5_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "notifications": [
+        ("target_url", "TEXT NOT NULL DEFAULT ''"),
+        ("attempts", "INTEGER NOT NULL DEFAULT 0"),
+    ],
+}
+
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Idempotent migrations for databases created by older schemas."""
-    for table, columns in {**_PHASE2_COLUMNS, **_PHASE3_COLUMNS, **_PHASE4_COLUMNS}.items():
+    phases = {**_PHASE2_COLUMNS, **_PHASE3_COLUMNS, **_PHASE4_COLUMNS, **_PHASE5_COLUMNS}
+    for table, columns in phases.items():
         existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
         for name, ddl in columns:
             if name not in existing:
@@ -1719,6 +1732,7 @@ def create_notification(
     kind: str,
     payload: dict[str, Any] | None = None,
     status: str = "queued",
+    target_url: str = "",
 ) -> Notification:
     if get_project(conn, project_id) is None:
         raise KeyError(f"unknown project {project_id}")
@@ -1729,10 +1743,11 @@ def create_notification(
         kind=kind,
         payload=redact_payload(payload or {}),
         status=status,
+        target_url=target_url,
     )
     conn.execute(
-        "INSERT INTO notifications (id, project_id, channel, kind, payload, status, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO notifications (id, project_id, channel, kind, payload, status,"
+        " target_url, attempts, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             note.id,
             note.project_id,
@@ -1740,6 +1755,8 @@ def create_notification(
             note.kind,
             json.dumps(note.payload),
             note.status,
+            note.target_url,
+            0,
             note.created_at.isoformat(),
         ),
     )
@@ -1748,22 +1765,87 @@ def create_notification(
     return note
 
 
+def _notification_from_row(r: sqlite3.Row) -> Notification:
+    keys = r.keys()
+    return Notification(
+        id=r["id"],
+        project_id=r["project_id"],
+        channel=r["channel"] or "outbox",
+        kind=r["kind"] or "",
+        payload=json.loads(r["payload"]),
+        status=r["status"] or "queued",
+        target_url=r["target_url"] if "target_url" in keys and r["target_url"] else "",
+        attempts=r["attempts"] if "attempts" in keys and r["attempts"] else 0,
+        created_at=datetime.fromisoformat(r["created_at"]),
+    )
+
+
+def get_notification(conn: sqlite3.Connection, notification_id: str) -> Notification | None:
+    row = conn.execute("SELECT * FROM notifications WHERE id = ?", (notification_id,)).fetchone()
+    if row is None:
+        return None
+    return _notification_from_row(row)
+
+
+def set_notification_delivery(
+    conn: sqlite3.Connection, notification_id: str, status: str, attempts: int
+) -> None:
+    conn.execute(
+        "UPDATE notifications SET status = ?, attempts = ? WHERE id = ?",
+        (status, attempts, notification_id),
+    )
+    conn.commit()
+
+
 def list_notifications(conn: sqlite3.Connection, project_id: str) -> list[Notification]:
     rows = conn.execute(
         "SELECT * FROM notifications WHERE project_id = ? ORDER BY rowid", (project_id,)
     ).fetchall()
+    return [_notification_from_row(r) for r in rows]
+
+
+def create_webhook_target(conn: sqlite3.Connection, project_id: str, url: str) -> dict[str, str]:
+    if get_project(conn, project_id) is None:
+        raise KeyError(f"unknown project {project_id}")
+    target_id = new_id("wht")
+    created_at = datetime.now(UTC).isoformat()
+    conn.execute(
+        "INSERT INTO webhook_targets (id, project_id, url, created_at) VALUES (?, ?, ?, ?)",
+        (target_id, project_id, url, created_at),
+    )
+    conn.commit()
+    record_event(conn, project_id, "webhook_target", target_id, "webhook_target.added")
+    return {"id": target_id, "project_id": project_id, "url": url, "created_at": created_at}
+
+
+def list_webhook_targets(conn: sqlite3.Connection, project_id: str) -> list[dict[str, str]]:
+    rows = conn.execute(
+        "SELECT * FROM webhook_targets WHERE project_id = ? ORDER BY rowid", (project_id,)
+    ).fetchall()
     return [
-        Notification(
-            id=r["id"],
-            project_id=r["project_id"],
-            channel=r["channel"] or "outbox",
-            kind=r["kind"] or "",
-            payload=json.loads(r["payload"]),
-            status=r["status"] or "queued",
-            created_at=datetime.fromisoformat(r["created_at"]),
-        )
+        {"id": r["id"], "project_id": r["project_id"], "url": r["url"],
+         "created_at": r["created_at"]}
         for r in rows
     ]
+
+
+def get_webhook_target(conn: sqlite3.Connection, target_id: str) -> dict[str, str] | None:
+    row = conn.execute("SELECT * FROM webhook_targets WHERE id = ?", (target_id,)).fetchone()
+    if row is None:
+        return None
+    return {"id": row["id"], "project_id": row["project_id"], "url": row["url"],
+            "created_at": row["created_at"]}
+
+
+def delete_webhook_target(conn: sqlite3.Connection, target_id: str) -> dict[str, str]:
+    target = get_webhook_target(conn, target_id)
+    if target is None:
+        raise KeyError(f"unknown webhook target {target_id}")
+    conn.execute("DELETE FROM webhook_targets WHERE id = ?", (target_id,))
+    conn.commit()
+    record_event(conn, target["project_id"], "webhook_target", target_id,
+                 "webhook_target.removed")
+    return {"id": target_id, "project_id": target["project_id"]}
 
 
 # -- Meta ---------------------------------------------------------------------
