@@ -68,8 +68,9 @@ Inspected: `providers.py` (dispatch + refusal stub), `runtime.py`
 
 ## Current status
 
-- Milestone: Phase 0 done; Phase 1 planning.
-- Commit: `63ef83c` (47 files). Working tree clean at time of writing.
-- Blockers: needs owner decision on first real provider target + API key
-  custody (env-only vs OS keychain) before Phase 1 implementation.
-- Next action: write ADR 0005, then implement the Phase 1 vertical slice.
+- Milestone: Phase 1 implemented (`OpenAICompatibleAdapter` + `agent_tools`,
+  ADR 0005); gates green.
+- Commit: `63ef83c` + plan `5f08242` (this change uncommitted at time of writing).
+- Blockers: none for Phase 1; Phase 2 needs owner decision on token hygiene
+  scope and credential-encryption approach.
+- Next action: commit Phase 1 milestone; then begin Phase 2.

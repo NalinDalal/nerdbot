@@ -10,7 +10,6 @@ from fastapi.testclient import TestClient
 from nerdbot import knowledge as knowledge_mod
 from nerdbot import orchestrator, store
 from nerdbot.api import create_app
-from nerdbot.models import ProviderKind
 
 TOKEN = "phase4-token"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
@@ -98,11 +97,11 @@ def test_mock_provider_run_is_deterministic_and_audited(app_client: TestClient) 
     assert "would execute: do thing" in second["run"]["output_excerpt"]
 
 
-def test_stub_and_disabled_providers_block(app_client: TestClient) -> None:
+def test_unconfigured_and_disabled_providers_block(app_client: TestClient) -> None:
     pid = _project(app_client)
     oai = app_client.post(
         f"/projects/{pid}/providers",
-        json={"kind": "openai-compatible", "config": {"base_url": "x", "api_key": "y"}},
+        json={"kind": "openai-compatible", "config": {}},
         headers=AUTH,
     ).json()["id"]
     mate = _teammate(app_client, pid)
@@ -114,6 +113,7 @@ def test_stub_and_disabled_providers_block(app_client: TestClient) -> None:
     ).json()["id"]
     body = app_client.post(f"/tasks/{tid}/runs", headers=AUTH).json()
     assert body["run"]["status"] == "blocked"
+    assert "not configured" in (body["run"]["output_excerpt"] or "")
 
     mock = app_client.post(
         f"/projects/{pid}/providers", json={"kind": "mock"}, headers=AUTH
@@ -334,13 +334,8 @@ def test_capabilities_flags(app_client: TestClient) -> None:
     }
     assert caps["provider.local"]["status"] == "ready"
     assert caps["provider.mock"]["status"] == "ready"
-    for stub in (
-        "provider.openai-compatible",
-        "notify.email",
-        "github.fetch",
-        "agents.external",
-        "browser.automation",
-    ):
+    assert caps["provider.openai-compatible"]["status"] == "ready"
+    for stub in ("notify.email", "github.fetch", "agents.external", "browser.automation"):
         assert caps[stub]["status"] in ("stub", "rejected", "deferred"), stub
     assert app_client.get("/capabilities").status_code == 401
 

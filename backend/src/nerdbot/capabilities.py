@@ -21,8 +21,8 @@ CAPABILITIES: list[dict[str, Any]] = [
     },
     {
         "id": "provider.openai-compatible",
-        "status": "stub",
-        "description": "Deferred: refuses without credentials; execution not implemented.",
+        "status": "ready",
+        "description": "Bounded agent loop over OpenAI-style /chat/completions; needs base_url plus api_key or api_key_env.",
     },
     {
         "id": "knowledge.overlap",

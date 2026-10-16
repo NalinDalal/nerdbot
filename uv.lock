@@ -457,6 +457,7 @@ source = { editable = "." }
 dependencies = [
     { name = "click" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "pydantic" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -483,6 +484,7 @@ dev = [
 requires-dist = [
     { name = "click", specifier = ">=8.1" },
     { name = "fastapi", specifier = ">=0.110" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "pydantic", specifier = ">=2.6,<2.14" },

@@ -189,7 +189,40 @@ def schedule_run(
         duration_s=duration_s,
         passed=ok,
     )
+    transcript = getattr(active, "last_transcript", None)
+    turns = getattr(active, "last_turns", 0)
+    if transcript:
+        _record_transcript(conn, task_id, run, data_dir, transcript, turns)
     return run, result, artifact_id
+
+
+def _record_transcript(
+    conn: sqlite3.Connection,
+    task_id: str,
+    run: Run,
+    data_dir: str,
+    transcript: list[dict[str, Any]],
+    turns: int,
+) -> str:
+    """Persist the agent turn transcript as its own artifact (no secrets: the
+    transcript never contains credentials)."""
+    import json as _json
+
+    location = artifacts_dir(data_dir) / f"transcript-{run.id}.json"
+    location.write_text(
+        _json.dumps({"run_id": run.id, "turns": turns, "transcript": transcript}, indent=2),
+        encoding="utf-8",
+    )
+    artifact = store.create_artifact(
+        conn,
+        task_id,
+        run.id,
+        "transcript",
+        str(location),
+        VerificationStatus.UNVERIFIED,
+        summary=f"turns={turns}",
+    )
+    return artifact.id
 
 
 def _record_test_log(
