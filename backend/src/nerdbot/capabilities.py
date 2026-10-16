@@ -92,7 +92,7 @@ CAPABILITIES: list[dict[str, Any]] = [
     {
         "id": "backup.manifest",
         "status": "ready",
-        "description": "Versioned metadata export with secret redaction + validation.",
+        "description": "Versioned metadata export with secret redaction + validation + validated import (history never replayed, secrets never restored).",
     },
     {
         "id": "database.postgres",

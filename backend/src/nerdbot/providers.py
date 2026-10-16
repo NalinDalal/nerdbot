@@ -66,11 +66,25 @@ class ProviderToolError(RuntimeError):
 def resolve_api_key(config: dict[str, Any]) -> str:
     """Resolve the credential without persisting it anywhere.
 
-    Inline ``api_key`` wins; otherwise ``api_key_env`` names a process
-    environment variable. Empty string when unconfigured.
+    Inline ``api_key`` wins (decrypting ``enc:`` ciphertext fail-closed);
+    otherwise ``api_key_env`` names a process environment variable.
+    Empty string when unconfigured. Raises ProviderConfigurationError when
+    a stored secret cannot be decrypted or is unexpectedly plaintext while
+    a runtime key exists.
     """
+    from . import secrets as secrets_mod
+
     inline = config.get("api_key", "")
     if isinstance(inline, str) and inline:
+        if secrets_mod.is_encrypted(inline):
+            try:
+                return secrets_mod.decrypt_secret(inline)
+            except secrets_mod.SecretDecryptError as exc:
+                raise ProviderConfigurationError(f"stored credential undecryptable: {exc}") from exc
+        if secrets_mod.keyring():
+            raise ProviderConfigurationError(
+                "stored credential is not encrypted; refusing to use it"
+            )
         return inline
     env_name = config.get("api_key_env", "")
     if isinstance(env_name, str) and env_name:

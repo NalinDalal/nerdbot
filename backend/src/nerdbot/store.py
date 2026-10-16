@@ -246,6 +246,43 @@ def _migrate(conn: sqlite3.Connection) -> None:
             if name not in existing:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
     conn.commit()
+    _encrypt_legacy_provider_secrets(conn)
+
+
+def _encrypt_legacy_provider_secrets(conn: sqlite3.Connection) -> None:
+    """One-way upgrade: encrypt plaintext provider secrets in place.
+
+    Only runs when a runtime key is configured; otherwise legacy rows are
+    left untouched (resolution refuses them fail-closed while a key exists).
+    """
+    from . import secrets as secrets_mod
+
+    if not secrets_mod.keyring():
+        return
+    rows = conn.execute("SELECT id, config FROM providers").fetchall()
+    for row in rows:
+        try:
+            config = json.loads(row["config"] or "{}")
+        except ValueError:
+            continue
+        if not isinstance(config, dict):
+            continue
+        needs = {
+            k: v
+            for k, v in config.items()
+            if secrets_mod.is_secret_key(k)
+            and isinstance(v, str)
+            and v
+            and not secrets_mod.is_encrypted(v)
+        }
+        if not needs:
+            continue
+        for key, value in needs.items():
+            config[key] = secrets_mod.encrypt_secret(value)
+        conn.execute(
+            "UPDATE providers SET config = ? WHERE id = ?", (json.dumps(config), row["id"])
+        )
+    conn.commit()
 
 
 def record_event(
@@ -918,6 +955,36 @@ def _approval_project(conn: sqlite3.Connection, run_id: str) -> str | None:
     return row["project_id"] if row else None
 
 
+def approval_project(conn: sqlite3.Connection, approval_id: str) -> str | None:
+    """Resolve the owning project of an approval (exactly one, via its run)."""
+    approval = get_approval(conn, approval_id)
+    if approval is None:
+        return None
+    return _approval_project(conn, approval.run_id)
+
+
+def purge_expired_approvals(conn: sqlite3.Connection, project_id: str) -> int:
+    """Delete expired, still-undecided approvals for one project.
+
+    Decided approvals are never removed. Returns the purged count.
+    """
+    now = datetime.now(UTC).isoformat()
+    rows = conn.execute(
+        "SELECT approvals.id FROM approvals JOIN runs ON approvals.run_id = runs.id"
+        " JOIN tasks ON runs.task_id = tasks.id"
+        " WHERE tasks.project_id = ? AND approvals.decision = 'pending'"
+        " AND approvals.consumed_at IS NULL"
+        " AND approvals.expires_at IS NOT NULL AND approvals.expires_at <= ?",
+        (project_id, now),
+    ).fetchall()
+    for row in rows:
+        conn.execute("DELETE FROM approvals WHERE id = ?", (row["id"],))
+    conn.commit()
+    if rows:
+        record_event(conn, project_id, "approval", rows[0]["id"], "approval.purged")
+    return len(rows)
+
+
 DEFAULT_APPROVAL_TTL_S = 600.0
 
 
@@ -1289,6 +1356,23 @@ def list_pr_packages_for_task(conn: sqlite3.Connection, task_id: str) -> list[PR
 # -- Providers ---------------------------------------------------------------
 
 
+def encrypt_provider_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Encrypt secret-shaped config values. Raises SecretKeyMissingError when
+    secrets are present but no runtime key is configured."""
+    from . import secrets as secrets_mod
+
+    stored: dict[str, Any] = {}
+    for key, value in config.items():
+        if secrets_mod.is_secret_key(key) and isinstance(value, str) and value:
+            if secrets_mod.is_encrypted(value):
+                stored[key] = value  # already ciphertext (e.g. replay paths)
+            else:
+                stored[key] = secrets_mod.encrypt_secret(value)
+        else:
+            stored[key] = value
+    return stored
+
+
 def _provider_from_row(row: sqlite3.Row) -> Provider:
     return Provider(
         id=row["id"],
@@ -1312,12 +1396,13 @@ def create_provider(
 ) -> Provider:
     if get_project(conn, project_id) is None:
         raise KeyError(f"unknown project {project_id}")
+    stored_config = encrypt_provider_config(config or {})
     provider = Provider(
         id=new_id("prv"),
         project_id=project_id,
         kind=kind,
         name=name or kind.value,
-        config=config or {},
+        config=stored_config,
         capabilities=capabilities or [],
     )
     conn.execute(

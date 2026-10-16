@@ -68,9 +68,9 @@ Inspected: `providers.py` (dispatch + refusal stub), `runtime.py`
 
 ## Current status
 
-- Milestone: Phase 1 implemented (`OpenAICompatibleAdapter` + `agent_tools`,
-  ADR 0005); gates green.
-- Commit: `63ef83c` + plan `5f08242` (this change uncommitted at time of writing).
-- Blockers: none for Phase 1; Phase 2 needs owner decision on token hygiene
-  scope and credential-encryption approach.
-- Next action: commit Phase 1 milestone; then begin Phase 2.
+- Milestone: Phase 2 milestone implemented (credential encryption at rest,
+  approval token hygiene, manifest import; ADR 0006); gates green.
+- Commit: see `git log` (this change uncommitted at time of writing).
+- Blockers: none for this milestone. Dev-default bearer token still accepted
+  (explicit follow-up, unchanged by this slice).
+- Next action: commit Phase 2 milestone; then web-research planning.

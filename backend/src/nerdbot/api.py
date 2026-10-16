@@ -716,7 +716,13 @@ def create_app() -> FastAPI:
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
-        _ = principal
+        run = store.get_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        task = store.get_task(conn, run.task_id)
+        if task is None:  # pragma: no cover - orphaned run
+            raise HTTPException(status_code=404, detail="task not found")
+        require_project_owner(conn, task.project_id, principal)
         try:
             approval = store.request_approval(
                 conn,
@@ -752,11 +758,14 @@ def create_app() -> FastAPI:
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
-        _ = principal
         try:
             decision = Decision(str(body.get("decision", "pending")))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="invalid decision") from exc
+        project_id = store.approval_project(conn, approval_id)
+        if project_id is None:
+            raise HTTPException(status_code=404, detail="approval not found")
+        require_project_owner(conn, project_id, principal)
         try:
             approval = store.decide_approval(conn, approval_id, decision)
         except KeyError as exc:
@@ -766,6 +775,35 @@ def create_app() -> FastAPI:
         except store.ApprovalExpiredError as exc:
             raise HTTPException(status_code=410, detail=str(exc)) from exc
         return approval.model_dump(mode="json")
+
+    @app.post("/projects/{project_id}/approvals/purge")
+    def purge_approvals(
+        project_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        purged = store.purge_expired_approvals(conn, project_id)
+        return {"purged": purged}
+
+    @app.post("/projects/{project_id}/backup/import")
+    def import_backup(
+        project_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        manifest = body.get("manifest")
+        if not isinstance(manifest, dict):
+            raise HTTPException(status_code=400, detail="manifest must be an object")
+        try:
+            result = backup_mod.import_manifest(
+                conn, project_id, manifest, dry_run=bool(body.get("dry_run", False))
+            )
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return result
 
     @app.get("/projects/{project_id}/events")
     def list_events(

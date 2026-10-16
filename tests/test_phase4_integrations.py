@@ -42,7 +42,14 @@ def _teammate(client: TestClient, pid: str, persona: str = "dev") -> str:
 # -- Providers -----------------------------------------------------------------
 
 
-def test_provider_lifecycle_and_redaction(app_client: TestClient) -> None:
+def _secret_key(monkeypatch) -> None:
+    from cryptography.fernet import Fernet
+
+    monkeypatch.setenv("NERDBOT_SECRET_KEY", Fernet.generate_key().decode("ascii"))
+
+
+def test_provider_lifecycle_and_redaction(app_client: TestClient, monkeypatch) -> None:
+    _secret_key(monkeypatch)
     pid = _project(app_client)
     r = app_client.post(
         f"/projects/{pid}/providers",
@@ -290,7 +297,8 @@ def test_notify_outbox_and_stubs(app_client: TestClient) -> None:
 # -- Backup / metrics / capabilities -----------------------------------------------
 
 
-def test_backup_redaction_and_validation(app_client: TestClient) -> None:
+def test_backup_redaction_and_validation(app_client: TestClient, monkeypatch) -> None:
+    _secret_key(monkeypatch)
     pid = _project(app_client)
     app_client.post(
         f"/projects/{pid}/providers",

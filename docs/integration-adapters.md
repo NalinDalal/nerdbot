@@ -20,7 +20,7 @@ License posture: Octop (MIT) concepts adapted with attribution; Odysseus
 | agents.external | STUB | Rejected until an adapter contract exists |
 | documents.calendar-email | STUB | Deferred, no demand |
 | browser.automation | STUB | Rejected, hardest to secure |
-| backup.manifest | READY | V1 manifest + validation, secrets redacted |
+| backup.manifest | READY | V1 export + validation + validated import (history never replayed, secrets never restored) |
 | database.postgres | DEFERRED | SQLite + migration path acceptable |
 
 Stub contract: calling a stub returns an explicit not-configured error
