@@ -11,3 +11,4 @@ build/
 *.db-shm
 *.db-wal
 
+.nerdbot-data/
