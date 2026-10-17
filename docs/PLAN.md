@@ -121,6 +121,63 @@ is a standing limitation, not an accident. A NerdBot-internal scheduler
 tick is deliberately NOT built (fleet-style automation excluded for now;
 propose separately per the product-direction rules).
 
+## Phase 5(b) — GitHub-to-run E2E (2026-10-17)
+
+Owner-selected smallest vertical: validate the product's CENTRAL workflow
+across the real system instead of adding an isolated feature.
+
+Acceptance criteria and actual results (all from
+`tests/test_e2e_github_to_run.py`; no live network — GitHub fetch uses an
+injected `httpx.MockTransport` + fake resolver, provider chat uses an
+injected `MockTransport`, mirroring the existing test seams):
+
+1. Chain works: preview (reduced to fetch against api.github.com with the
+   pinned-transport path) → `suggested_ingest` → `POST /projects/{id}/issues`
+   → `POST /projects/{id}/tasks` with `issue_id` → run through the real
+   OpenAI-compatible tool loop (scripted mock upstream) → run + task +
+   `test-log` + `transcript` artifacts persisted with files on disk.
+   ✅ `test_github_issue_to_agent_run_success`.
+2. Inspectable state: `GET /tasks/{id}` returns task/runs/artifacts/issue
+   with consistent linkage (issue `external_id == owner/repo#7`, one
+   succeeded run, untrusted-framed output excerpt, artifact locations
+   exist on disk). Dashboard already renders exactly this shape
+   (`dashboard/src/views-task.tsx`, contract-tested in `api.test.ts` —
+   no dashboard change needed for this slice). ✅
+3. Rejected repository access (404 Not Found, 401 Bad credentials) leaves
+   NOTHING ingested: empty issues list, zero tasks. ✅
+4. Provider failure (upstream HTTP 500 → `ProviderProtocolError`): run
+   failed + task failed + inspectable excerpt; retry adds exactly ONE new
+   run on the same task and succeeds. ✅
+5. Interrupted execution (crash after the persisted queued→running
+   transition): app-lifespan `recover_incomplete_runs` moves the run to
+   `stopped` with a `[recovered: …]` note and returns the task to
+   `pending`; explicit reschedule then succeeds with exactly one new run
+   — never duplicated work. ✅
+6. Gates: pytest 174 passed (170 + 4 new), ruff clean, mypy strict (24
+   files) clean, dashboard vitest 29 passed, `tsc --noEmit` clean. ✅
+
+Boundary held: no new orchestration abstractions, no API/model changes —
+this slice exercised existing endpoints and state machines end to end.
+
+Real-GitHub smoke check (manual, one-off, NOT a suite gate):
+
+    uv run python - <<'PY'
+    from nerdbot.integrations.github import fetch_github_issue
+    print(fetch_github_issue("owner/repo", 1))  # adapt owner/repo/number
+    PY
+
+Unauthenticated access is rate-limited by GitHub (60 req/h); to authenticate,
+export a repo-scoped token and pass ``token_env="GH_TOKEN"``:
+
+    GH_TOKEN=$GITHUB_PAT uv run python - <<'PY'
+    from nerdbot.integrations.github import fetch_github_issue
+    print(fetch_github_issue("owner/repo", 1, token_env="GH_TOKEN"))
+    PY
+
+Expected: printed dict with `suggested_ingest.external_id == "owner/repo#1"`.
+If the fetch raises `GitHubProtocolError`, the real HTML/JSON shape drifted
+and the parser assumptions need re-verification offline first.
+
 ## Milestones (updated)
 
 - [x] Phase 0 — baseline checkpoint (`63ef83c`), provenance, gates green.
@@ -130,9 +187,15 @@ propose separately per the product-direction rules).
 - [x] Phase 3 — web research with SSRF hardening (fetch + transport pinning +
   wall-clock budgets; credential-free DuckDuckGo Lite search via `search.py`;
   post-review fixes applied — see ADR 0007 item 7; DNS-time residual documented).
-- [ ] Phase 4 — durable integrations: GitHub fetch + outbox delivery + webhook-out
+- [x] Phase 4 — durable integrations: GitHub fetch + outbox delivery + webhook-out
   channel (all three implemented, tested, reviewed; see the four-state table
   below for what is operationally enabled vs manual).
+- [x] Phase 5(b) — GitHub ingest → task → run end-to-end validation: full central
+  workflow chained across API → execution → persistence → inspectable state
+  (`tests/test_e2e_github_to_run.py`, 4 scenarios: success, invalid repository
+  access, provider failure, interrupted-execution recovery). All external
+  network mocked; the real-GitHub smoke check remains a documented manual step
+  (below), not a suite gate.
 - [ ] Phase 5+ — productivity integrations, knowledge, MCP/delegation, automation, usability.
 
 ## Phase 1 outcome (implemented as `82edd35`)
@@ -176,6 +239,8 @@ Inspected: `providers.py` (dispatch + refusal stub), `runtime.py`
 - Keyless mode: local-dev without a key supports non-secret configs only.
 - Blockers: none. Dev-default bearer token still accepted (explicit follow-up,
   unchanged). Delivery recovery is trigger-only (see operational state above).
-- Next action: owner selects the next Phase 5 vertical; fleet-of-bots design
-  (isolation, delegation, memory, scheduling acceptance criteria) is a separate
-  proposal, not this roadmap.
+- Next action: Phase 5(b) shipped and documented (above). Owner selects the
+  next vertical (candidates: delivery-event surfacing on the dashboard;
+  in-process lifespan recovery semantics hardening if wanted); fleet-of-bots
+  design (isolation, delegation, memory, scheduling acceptance criteria) is
+  a separate proposal, not this roadmap.
