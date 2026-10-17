@@ -423,5 +423,97 @@ def test_locked_at_migration_on_old_table(tmp_path) -> None:
         relocked = store.get_notification(conn, "ntf_1")
         assert relocked is not None
         assert relocked.locked is True and relocked.locked_at == crashed_at
+        # Phase 5(c): the last_error column exists on migrated old tables too.
+        assert relocked.last_error == ""
+    finally:
+        conn.close()
+
+
+def test_transient_failure_keeps_reason_then_success_clears_it(app_client) -> None:
+    pid = _project(app_client)
+    app_client.post(f"/projects/{pid}/webhook-targets", json={"url": TARGET}, headers=AUTH)
+    conn = store.connect(os.environ["NERDBOT_DB"])
+    try:
+        note = store.create_notification(conn, pid, "webhook-out", "x")
+        responses = iter([httpx.Response(503, text="busy"), httpx.Response(200, text="ok")])
+
+        def flaky(request: httpx.Request) -> httpx.Response:
+            return next(responses)
+
+        after_fail = notify_mod.deliver_webhook(conn, note.id, transport=_transport(flaky))
+        assert after_fail.status == "queued" and after_fail.attempts == 1
+        assert "503" in after_fail.last_error or "busy" in after_fail.last_error
+        assert after_fail.next_attempt_at is not None  # waits for the sweep
+
+        after_ok = notify_mod.deliver_webhook(
+            conn, note.id, transport=_transport(lambda r: httpx.Response(200, text="ok"))
+        )
+        assert after_ok.status == "delivered"
+        assert after_ok.last_error == ""  # success clears the diagnostic trail
+    finally:
+        conn.close()
+
+
+def test_terminal_refusal_records_reason(app_client) -> None:
+    pid = _project(app_client)
+    app_client.post(f"/projects/{pid}/webhook-targets", json={"url": TARGET}, headers=AUTH)
+    conn = store.connect(os.environ["NERDBOT_DB"])
+    try:
+        note = store.create_notification(conn, pid, "webhook-out", "x")
+
+        def redirect_private(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(302, headers={"location": "http://169.254.169.254/"})
+
+        with pytest.raises(notify_mod.WebhookDeliveryError):
+            notify_mod.deliver_webhook(conn, note.id, transport=_transport(redirect_private))
+        failed = store.get_notification(conn, note.id)
+        assert failed is not None and failed.status == "failed"
+        # The blocked reason names the actual refusal and the refused host:
+        # that context is what makes a failed delivery diagnosable.
+        assert failed.last_error and "blocked" in failed.last_error.lower()
+        assert "169.254" in failed.last_error  # the redirect destination is shown
+        assert len(failed.last_error) <= 500  # bounded, never megabytes of noise
+    finally:
+        conn.close()
+
+
+def test_reclaim_records_reclaim_reason(app_client) -> None:
+    pid = _project(app_client)
+    app_client.post(f"/projects/{pid}/webhook-targets", json={"url": TARGET}, headers=AUTH)
+    conn = store.connect(os.environ["NERDBOT_DB"])
+    try:
+        note = store.create_notification(conn, pid, "webhook-out", "x")
+        stale = datetime.now(UTC) - timedelta(seconds=notify_mod.LOCK_LEASE_S * 4)
+        assert store.claim_delivery_lock(conn, note.id, now=stale) is True
+        conn.execute("UPDATE notifications SET status = 'sending' WHERE id = ?", (note.id,))
+        conn.commit()
+        conn.execute("UPDATE notifications SET locked_at = ? WHERE id = ?",
+                     (stale.isoformat(), note.id))
+        conn.commit()
+
+        outcomes = notify_mod.reclaim_abandoned_deliveries(conn)
+        assert len(outcomes) == 1 and outcomes[0]["reclaimed"] is True
+        reclaimed = store.get_notification(conn, note.id)
+        assert reclaimed is not None
+        assert reclaimed.status in ("queued", "failed")
+        assert reclaimed.locked is False  # lease released
+        assert "lease expired" in reclaimed.last_error
+
+        # Terminal branch: exhausted attempts fail with a reclaim reason too.
+        conn.execute("UPDATE notifications SET attempts = ? WHERE id = ?",
+                     (notify_mod.MAX_DELIVERY_ATTEMPTS, note.id))
+        conn.commit()
+        stale2 = datetime.now(UTC) - timedelta(seconds=notify_mod.LOCK_LEASE_S * 4)
+        assert store.claim_delivery_lock(conn, note.id, now=stale2) is True
+        conn.execute("UPDATE notifications SET status = 'sending' WHERE id = ?", (note.id,))
+        conn.commit()
+        conn.execute("UPDATE notifications SET locked_at = ? WHERE id = ?",
+                     (stale2.isoformat(), note.id))
+        conn.commit()
+        outcomes = notify_mod.reclaim_abandoned_deliveries(conn)
+        assert outcomes[0]["status"] == "failed"
+        terminal = store.get_notification(conn, note.id)
+        assert terminal is not None and terminal.status == "failed"
+        assert "terminal" in terminal.last_error
     finally:
         conn.close()

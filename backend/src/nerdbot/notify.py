@@ -100,6 +100,17 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+_MAX_ERROR_TEXT = 500
+
+
+def _err_text(exc: BaseException) -> str:
+    """Bounded diagnostic text for the notifications row; secrets never
+    enter delivery error paths, but the bound keeps corrupted upstreams
+    from parking megabytes of post-mortem in SQLite."""
+    text = f"{type(exc).__name__}: {exc}".strip()
+    return text[:_MAX_ERROR_TEXT]
+
+
 def _backoff_delay(attempts: int) -> float:
     """Delay after a failed attempt (1-based count). Capped schedule."""
     return BACKOFF_SECONDS[min(max(attempts - 1, 0), len(BACKOFF_SECONDS) - 1)]
@@ -150,18 +161,23 @@ def deliver_webhook(
             fetch_mod.FetchBlockedError, fetch_mod.FetchProtocolError) as exc:
         current = store.get_notification(conn, notification_id)
         made = current.attempts if current else note.attempts
-        store.set_notification_delivery(conn, notification_id, "failed", made)
+        reason = _err_text(exc)
+        store.set_notification_delivery(conn, notification_id, "failed", made, reason)
         store.record_event(conn, note.project_id, "notification", notification_id,
                            "notification.failed")
-        raise WebhookDeliveryError(f"delivery refused: {exc}") from exc
+        raise WebhookDeliveryError(f"delivery refused: {reason}") from exc
     except (fetch_mod.FetchTimeoutError, WebhookDeliveryError) as exc:
         if attempts >= MAX_DELIVERY_ATTEMPTS:
-            store.set_notification_delivery(conn, notification_id, "failed", attempts)
+            store.set_notification_delivery(conn, notification_id, "failed", attempts,
+                                            _err_text(exc))
             store.record_event(conn, note.project_id, "notification", notification_id,
                                "notification.failed")
             raise WebhookDeliveryError(
                 f"delivery failed after {attempts} attempts: {exc}"
             ) from exc
+        # Transient: keep the reason visible while the row waits for a sweep.
+        store.set_notification_delivery(conn, notification_id, "queued", attempts,
+                                        _err_text(exc))
         next_at = moment + timedelta(seconds=_backoff_delay(attempts))
         store.set_notification_delivery(conn, notification_id, "queued", attempts)
         store.set_notification_next_attempt(conn, notification_id, next_at)
@@ -172,7 +188,7 @@ def deliver_webhook(
         # Lease CAS: only clear the lock we ourselves claimed (moment is
         # the stamp deliver_webhook passed to claim_delivery_lock).
         store.release_delivery_lock(conn, notification_id, locked_at=moment)
-    store.set_notification_delivery(conn, notification_id, "delivered", attempts)
+    store.set_notification_delivery(conn, notification_id, "delivered", attempts, "")
     store.record_event(conn, note.project_id, "notification", notification_id,
                        "notification.delivered")
     refreshed = store.get_notification(conn, notification_id)
@@ -200,13 +216,17 @@ def reclaim_abandoned_deliveries(
     for note in store.stale_locked_deliveries(conn, cutoff):
         store.release_delivery_lock(conn, note.id)  # also clears the lease stamp
         if note.attempts >= MAX_DELIVERY_ATTEMPTS:
-            store.set_notification_delivery(conn, note.id, "failed", note.attempts)
+            reason = f"lease expired: reclaimed after {note.attempts} attempts (terminal)"
+            store.set_notification_delivery(conn, note.id, "failed", note.attempts, reason)
             store.record_event(conn, note.project_id, "notification", note.id,
                                "notification.failed")
             results.append({"id": note.id, "status": "failed",
                             "attempts": note.attempts, "reclaimed": True})
             continue
-        store.set_notification_delivery(conn, note.id, "queued", note.attempts)
+        store.set_notification_delivery(
+            conn, note.id, "queued", note.attempts,
+            "lease expired: crashed attempt reclaimed, requeued",
+        )
         store.set_notification_next_attempt(
             conn, note.id, moment + timedelta(seconds=_backoff_delay(note.attempts))
         )

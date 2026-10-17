@@ -183,6 +183,15 @@ def test_github_issue_to_agent_run_success(app_env) -> None:
     assert "work complete" in transcript_text
     assert "evidence" in transcript_text  # tool-loop round trip captured
 
+    # N2 regression: untrusted markup survives verbatim as inert string data.
+    marker = "<script>alert(1)</script>"
+    assert marker in view["issue"]["body"]  # never stripped or mangled by ingest
+    raw = client.get(f"/tasks/{task_id}", headers=AUTH)
+    assert raw.headers["content-type"].startswith("application/json")
+    assert marker in raw.text  # serialized as JSON content, not served as markup
+    # The dashboard has no innerHTML sinks (grep-guarded decision), so React's
+    # text rendering is the only path: inert by construction.
+
 
 def test_invalid_repository_access_leaves_nothing_ingested(app_env, monkeypatch) -> None:
     """A rejected GitHub fetch must not create a partial local state."""

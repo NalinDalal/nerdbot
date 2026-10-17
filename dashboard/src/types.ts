@@ -163,6 +163,7 @@ export interface Notification {
   next_attempt_at: string | null;
   locked: boolean;
   locked_at: string | null;
+  last_error: string;
   created_at: string;
 }
 

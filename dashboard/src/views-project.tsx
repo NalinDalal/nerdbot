@@ -693,6 +693,10 @@ function NotificationsTab({ projectId }: { projectId: string }) {
         <button onClick={() => act(() => api.sweepWebhooks())}>Sweep due webhooks</button>
         <button onClick={list.reload}>Refresh</button>
       </div>
+      <p className="muted" style={{ fontSize: 12, marginTop: 0, marginBottom: 12 }}>
+        Deliveries run only when swept here or by OS cron (nerdbot deliveries-sweep).
+        There is no background delivery recovery in NerdBot.
+      </p>
       {showSend ? (
         <Modal title="Send notification" onClose={() => setShowSend(false)}>
           <EntityForm
@@ -763,6 +767,8 @@ function NotificationsTab({ projectId }: { projectId: string }) {
               <th>Kind</th>
               <th>Status</th>
               <th>Attempts</th>
+              <th>Next attempt</th>
+              <th>Last error</th>
               <th></th>
             </tr>
           </thead>
@@ -775,9 +781,20 @@ function NotificationsTab({ projectId }: { projectId: string }) {
                 <td className="muted">{note.channel}</td>
                 <td>{note.kind}</td>
                 <td>
-                  <StatusBadge status={note.status} />
+                  <div className="row" style={{ gap: 6 }}>
+                    <StatusBadge status={note.status} />
+                    {note.locked ? <span className="badge">locked</span> : null}
+                  </div>
                 </td>
                 <td className="mono">{note.attempts}</td>
+                <td className="mono muted">{note.next_attempt_at ?? ""}</td>
+                <td
+                  className="mono muted"
+                  style={{ maxWidth: 320, overflowWrap: "anywhere" }}
+                  title={note.last_error || undefined}
+                >
+                  {note.last_error}
+                </td>
                 <td>
                   <div className="row">
                     <button onClick={() => act(() => api.deliverNotification(note.id))}>Deliver</button>
@@ -957,6 +974,7 @@ function EventsTab({ projectId }: { projectId: string }) {
           <option value="run">run</option>
           <option value="approval">approval</option>
           <option value="teammate">teammate</option>
+          <option value="notification">notification</option>
         </select>
         <button onClick={events.reload}>Refresh</button>
       </div>

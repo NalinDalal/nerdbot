@@ -139,6 +139,7 @@ CREATE TABLE IF NOT EXISTS notifications (
   payload TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'queued',
   target_url TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0,
   next_attempt_at TEXT, locked INTEGER NOT NULL DEFAULT 0, locked_at TEXT,
+  last_error TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS webhook_targets (
@@ -279,6 +280,10 @@ _PHASE8_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "notifications": [("locked_at", "TEXT")],
 }
 
+_PHASE9_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "notifications": [("last_error", "TEXT NOT NULL DEFAULT ''")],
+}
+
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Idempotent migrations for databases created by older schemas."""
@@ -286,7 +291,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # REPLACE an earlier phase's columns for the same table).
     phases: dict[str, list[tuple[str, str]]] = {}
     for phase in (_PHASE2_COLUMNS, _PHASE3_COLUMNS, _PHASE4_COLUMNS, _PHASE5_COLUMNS,
-                  _PHASE6_COLUMNS, _PHASE7_COLUMNS, _PHASE8_COLUMNS):
+                  _PHASE6_COLUMNS, _PHASE7_COLUMNS, _PHASE8_COLUMNS, _PHASE9_COLUMNS):
         for table, columns in phase.items():
             phases.setdefault(table, []).extend(columns)
     for table, columns in phases.items():
@@ -1819,6 +1824,7 @@ def _notification_from_row(r: sqlite3.Row) -> Notification:
         locked_at=datetime.fromisoformat(r["locked_at"])
         if "locked_at" in keys and r["locked_at"]
         else None,
+        last_error=r["last_error"] if "last_error" in keys and r["last_error"] else "",
         created_at=datetime.fromisoformat(r["created_at"]),
     )
 
@@ -1831,11 +1837,23 @@ def get_notification(conn: sqlite3.Connection, notification_id: str) -> Notifica
 
 
 def set_notification_delivery(
-    conn: sqlite3.Connection, notification_id: str, status: str, attempts: int
+    conn: sqlite3.Connection,
+    notification_id: str,
+    status: str,
+    attempts: int,
+    last_error: str | None = None,
 ) -> None:
+    """Update delivery state. ``last_error``:
+
+    - ``None`` — leave the stored error untouched;
+    - ``""`` — clear it (delivered successfully);
+    - text — record/replace the failure reason for diagnostics.
+    """
     conn.execute(
-        "UPDATE notifications SET status = ?, attempts = ? WHERE id = ?",
-        (status, attempts, notification_id),
+        "UPDATE notifications SET status = :status, attempts = :attempts,"
+        " last_error = CASE WHEN :err IS NULL THEN last_error ELSE :err END"
+        " WHERE id = :id",
+        {"status": status, "attempts": attempts, "err": last_error, "id": notification_id},
     )
     conn.commit()
 

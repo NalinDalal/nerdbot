@@ -188,6 +188,43 @@ Expected: printed dict with `suggested_ingest.external_id == "owner/repo#1"`.
 If the fetch raises `GitHubProtocolError`, the real HTML/JSON shape drifted
 and the parser assumptions need re-verification offline first.
 
+## Phase 5(c) — dashboard delivery-event surfacing (2026-10-17)
+
+Smallest vertical as selected: make failed/lease-reclaimed deliveries
+diagnosable from the ops dashboard, WITHOUT changing delivery semantics —
+the sweep remains manual-trigger-only (this tab, `POST /webhooks/sweep`,
+or the `nerdbot deliveries-sweep` CLI). No background recovery exists;
+the dashboard now says so explicitly instead of implying it.
+
+What landed:
+
+1. `notifications.last_error` column (schema + `_PHASE9` migration following
+   the `_PHASE8` per-table pattern; old-table migration test extended to
+   cover the new column). Diagnostic policy: terminal/transient failures
+   store a bounded (≤500 chars) typed reason ("FetchTimeoutError: …",
+   host refusals included — the owner-local URL context is the diagnostic);
+   success clears it; lease reclaims store why the row was requeued or
+   terminally failed. No secrets exist on these paths.
+2. API: no new endpoints — `GET /projects/{id}/notifications` and the sweep
+   response already carry the fields; the model row gained `last_error`.
+3. Dashboard:
+   - Notifications tab: Next attempt + Last error columns, `locked` chip,
+     `sending` badge already colorized, and the manual-trigger-only reminder
+     under the sweep button.
+   - Events tab: `notification` filter — `notification.delivered`,
+     `notification.failed`, `notification.reclaimed` are now browsable.
+4. Tests: backend transition + failure-detail tests (transient keeps reason
+   and clears on success; terminal refusal records the typed reason with
+   the refused host; reclaim records both branches) and dashboard contract
+   tests (failure rows pass through; sweep `fired` rows with `reclaimed`;
+   events filtered by `entity=notification`).
+5. N2 tamper-marker regression: the `<script>` marker from the fetched issue
+   is asserted to survive verbatim as inert JSON text data in the E2E success
+   chain (API serves `application/json`; the dashboard has zero innerHTML
+   sinks — repo-wide grep — so React text rendering is the only consumer).
+6. Gates: pytest 177 passed, ruff clean, mypy strict clean, dashboard vitest
+   32 passed, `tsc --noEmit` clean, eslint clean.
+
 ## Milestones (updated)
 
 - [x] Phase 0 — baseline checkpoint (`63ef83c`), provenance, gates green.
@@ -208,6 +245,10 @@ and the parser assumptions need re-verification offline first.
   access, provider failure, interrupted-execution recovery). All external
   network mocked; the real-GitHub smoke check remains a documented manual step
   (below), not a suite gate.
+- [x] Phase 5(c) — dashboard delivery-event surfacing: `last_error` diagnostics,
+  `locked` chip, next-attempt and events filtering (`notifications` entity in
+  the events feed); manual-trigger-only sweep semantics stated explicitly in
+  the UI, never implied as background recovery (see the Phase 5(c) section).
 - [ ] Phase 5+ — productivity integrations, knowledge, MCP/delegation, automation, usability.
 
 ## Phase 1 outcome (implemented as `82edd35`)
@@ -251,8 +292,8 @@ Inspected: `providers.py` (dispatch + refusal stub), `runtime.py`
 - Keyless mode: local-dev without a key supports non-secret configs only.
 - Blockers: none. Dev-default bearer token still accepted (explicit follow-up,
   unchanged). Delivery recovery is trigger-only (see operational state above).
-- Next action: Phase 5(b) shipped and documented (above). Owner selects the
-  next vertical (candidates: delivery-event surfacing on the dashboard;
-  in-process lifespan recovery semantics hardening if wanted); fleet-of-bots
-  design (isolation, delegation, memory, scheduling acceptance criteria) is
-  a separate proposal, not this roadmap.
+- Next action: Phase 5(b)/5(c) shipped and documented. The live-GitHub smoke
+  check (procedure in the 5(b) section) remains outstanding — run it with the
+  documented procedure before relying on real fetch. Owner selects the next
+  vertical; fleet-of-bots design (isolation, delegation, memory, scheduling
+  acceptance criteria) is a separate proposal, not this roadmap.
