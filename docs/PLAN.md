@@ -98,6 +98,11 @@ absent.
   one in-flight send per notification row (lock testified by a test);
   failure path still records `notification.failed` with attempt count.
   STATUS: SHIPPED — see the milestone list and `docs/phase4-architecture.md`.
+  Follow-up review fixes landed (lease sized from the full attempt bound,
+  compare-and-set release, both stuck-window classes closed); documented
+  residual: recovery triggers only when the sweep runs
+  (`POST /webhooks/sweep`) — wire a scheduler trigger if unattended
+  recovery is wanted.
 
 ## Milestones (updated)
 
