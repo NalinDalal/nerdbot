@@ -5,7 +5,11 @@ from __future__ import annotations
 import os
 
 import click
+import httpx
 import uvicorn
+
+# Test seam: sweep HTTP behavior is injected here (no live network in tests).
+_test_transport: httpx.BaseTransport | None = None
 
 
 @click.group()
@@ -22,6 +26,49 @@ def run(host: str, port: int) -> None:
     data = os.environ.get("NERDBOT_DATA", ".nerdbot-data")
     click.echo(f"nerdbot: db={db} data={data} host={host} port={port}")
     uvicorn.run("nerdbot.api:app", host=host, port=port)
+
+
+@cli.command("deliveries-sweep")
+@click.option("--quiet", is_flag=True, help="Print one summary line only.")
+def deliveries_sweep(quiet: bool) -> None:
+    """Run one outbox delivery sweep (lease reclaims + due webhook sends).
+
+    Intended to be wired to an OS cron/timer: NerdBot itself never loops.
+    Exit code 0 when no delivery ended failed, 1 otherwise. The same
+    work is available over HTTP via POST /webhooks/sweep.
+    """
+    from nerdbot import notify as notify_mod
+    from nerdbot import store
+
+    db = os.environ.get("NERDBOT_DB", "nerdbot.db")
+    try:
+        conn = store.connect(db)
+    except OSError as exc:
+        raise click.ClickException(f"cannot open database {db!r}: {exc}") from exc
+    try:
+        results = notify_mod.sweep_due_deliveries(conn, transport=_test_transport)
+    except click.ClickException:
+        raise
+    except Exception as exc:  # unexpected top-level failure: surface it
+        raise click.ClickException(f"sweep failed: {exc}") from exc
+    finally:
+        conn.close()
+    failures = 0
+    for row in results:
+        suffix = ""
+        if row.get("error"):
+            suffix = f" error={row['error']}"
+        if row.get("reclaimed"):
+            suffix += " reclaimed"
+        if row["status"] == "failed":
+            failures += 1
+        if not quiet:
+            click.echo(
+                f"{row['id']} status={row['status']} attempts={row['attempts']}{suffix}"
+            )
+    click.echo(f"sweep: {len(results)} deliveries, {failures} failed")
+    if failures:
+        raise click.exceptions.Exit(1)
 
 
 @cli.command("ingest-issue")

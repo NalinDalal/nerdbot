@@ -99,10 +99,27 @@ absent.
   failure path still records `notification.failed` with attempt count.
   STATUS: SHIPPED — see the milestone list and `docs/phase4-architecture.md`.
   Follow-up review fixes landed (lease sized from the full attempt bound,
-  compare-and-set release, both stuck-window classes closed); documented
-  residual: recovery triggers only when the sweep runs
-  (`POST /webhooks/sweep`) — wire a scheduler trigger if unattended
-  recovery is wanted.
+  compare-and-set release, both stuck-window classes closed).
+- [x] Operation enablement sweep trigger — `nerdbot deliveries-sweep` CLI
+  (this slice): one shell invocation runs lease reclaims + due webhook
+  sends via `notify.sweep_due_deliveries`; per-delivery outcome printed;
+  exit 0 iff nothing ended failed, exit 1 otherwise. Designed for an OS
+  cron/timer. NerdBot itself still contains no scheduler loop.
+
+## Phase 4 operational state (verified 2026-10-17, do not overstate)
+
+IMPLEMENTED + TESTED + REVIEWED + OPERATIONAL: GitHub issue fetch
+(preview → ingest), webhook-out delivery end-to-end when targets are
+allowlisted, dashboard notifications tab (deliver/unlock/sweep actions).
+
+MANUAL TRIGGER ONLY — there is NO automatic background recovery: both
+delivery sweeps and cron schedule firings run only when invoked
+(`POST /webhooks/sweep`, `POST /schedules/{id}/fire`, dashboard buttons,
+or the new `nerdbot deliveries-sweep` / existing CLI). Lease recovery and
+schedule firing therefore require an operator or an OS-level timer; this
+is a standing limitation, not an accident. A NerdBot-internal scheduler
+tick is deliberately NOT built (fleet-style automation excluded for now;
+propose separately per the product-direction rules).
 
 ## Milestones (updated)
 
@@ -113,10 +130,9 @@ absent.
 - [x] Phase 3 — web research with SSRF hardening (fetch + transport pinning +
   wall-clock budgets; credential-free DuckDuckGo Lite search via `search.py`;
   post-review fixes applied — see ADR 0007 item 7; DNS-time residual documented).
-- [ ] Phase 4 — durable integrations (GitHub fetch, outbox delivery, webhook-out
-  channel all implemented; lease-reclaim residual closed; reviewed by OpenCode
-  for Phase 3, Phase 4 state documented).
-- [ ] Phase 5+ — productivity integrations, knowledge, MCP/delegation, automation, usability.
+- [ ] Phase 4 — durable integrations: GitHub fetch + outbox delivery + webhook-out
+  channel (all three implemented, tested, reviewed; see the four-state table
+  below for what is operationally enabled vs manual).
 - [ ] Phase 5+ — productivity integrations, knowledge, MCP/delegation, automation, usability.
 
 ## Phase 1 outcome (implemented as `82edd35`)
@@ -153,11 +169,13 @@ Inspected: `providers.py` (dispatch + refusal stub), `runtime.py`
 
 ## Current status
 
-- Milestone: scheduler-driven webhook backoff implemented (single inline
-  attempt, due-sweep retries, overlap locks); gates green.
+- Milestone: Phase 4 durable integrations shipped and reviewed; ops CLI
+  (`nerdbot deliveries-sweep`) closes the manual-trigger gap for the outbox.
 - Token hygiene scope: approval tokens expire/are one-use/purged; bearer-token
   rotation explicitly cut (capability `auth.token-rotation: deferred`).
 - Keyless mode: local-dev without a key supports non-secret configs only.
-- Blockers: none for this milestone. Dev-default bearer token still accepted
-  (explicit follow-up, unchanged).
-- Next action: commit; next slice per owner selection.
+- Blockers: none. Dev-default bearer token still accepted (explicit follow-up,
+  unchanged). Delivery recovery is trigger-only (see operational state above).
+- Next action: owner selects the next Phase 5 vertical; fleet-of-bots design
+  (isolation, delegation, memory, scheduling acceptance criteria) is a separate
+  proposal, not this roadmap.
