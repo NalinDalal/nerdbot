@@ -137,11 +137,17 @@ def create_app() -> FastAPI:
             restarts = 0
         finally:
             conn.close()
+        # A malformed NERDBOT_SECRET_KEY makes keyring() raise; /health must
+        # never 500 over it — "absent" is truthful for write purposes.
+        try:
+            secret_key_state = "configured" if secrets_mod.keyring() else "absent"
+        except Exception:
+            secret_key_state = "absent"
         return {
             "status": "ok",
             "version": "0.1.0",
             "db": "ok" if db_ok else "error",
-            "secret_key": "configured" if secrets_mod.keyring() else "absent",
+            "secret_key": secret_key_state,
             "restarts": restarts,
         }
 
@@ -225,6 +231,8 @@ def create_app() -> FastAPI:
                 permissions=body.get("permissions"),
                 tool_policy=body.get("tool_policy"),
                 provider_id=body.get("provider_id"),
+                # provider_id: null is an explicit DETACH (absent = no change)
+                clear_provider=("provider_id" in body and body["provider_id"] is None),
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -895,10 +903,15 @@ def create_app() -> FastAPI:
         for key, value in provider.config.items():
             if (
                 secrets_mod.is_secret_key(key)
-                and isinstance(value, str)
-                and value.strip()
+                and value is not None
+                and value != ""
             ):
-                masked[key] = secrets_mod.mask_stored(value)
+                # Legacy rows may hold non-string secrets under secret-shaped
+                # keys (pre-guard data): never echo them raw.
+                if not isinstance(value, str):
+                    masked[key] = "[redacted]"
+                else:
+                    masked[key] = secrets_mod.mask_stored(value)
             else:
                 masked[key] = value
         dumped["config"] = masked
@@ -1021,8 +1034,8 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except providers_impl.ProviderNetworkError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
-        except Exception as exc:  # pragma: no cover - defensive for secret errors
-            raise HTTPException(status_code=502, detail=f"model catalog failed: {exc}") from exc
+        # anything else is a real bug: let it 500 instead of disguising itself
+        # as an upstream provider failure
         return {"models": models}
 
     # -- Phase 4: knowledge ----------------------------------------------------

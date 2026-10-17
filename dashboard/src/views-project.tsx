@@ -274,9 +274,10 @@ function BotCard({
                     {mate.provider_id === p.id ? " (current)" : null}
                   </span>
                   <button
-                    disabled={mate.provider_id === p.id}
                     onClick={() =>
                       void act(() => api.patchTeammate(mate.id, {
+                        // current connection → explicit detach (null);
+                        // another connection → attach it
                         provider_id: mate.provider_id === p.id ? null : p.id,
                       }))
                     }

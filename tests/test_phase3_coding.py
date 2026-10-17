@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,10 @@ from nerdbot.api import create_app
 from nerdbot.cli.main import cli
 from nerdbot.integrations.github import GITHUB_API_HOST, github_status
 from nerdbot.models import ReviewVerdict
+
+# commands run in real subprocesses: use THIS interpreter so the suite is
+# reproducible on machines without a `python` shim on PATH
+PY = sys.executable
 
 TOKEN = "phase3-token"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
@@ -221,7 +226,7 @@ def test_full_coding_workflow_end_to_end(app_client: TestClient) -> None:
             "description": "fix add()",
             "owner_teammate_id": dev,
             "issue_id": issue_id,
-            "command": "python -m pytest -q calc_suite.py",
+            "command": f"{PY} -m pytest -q calc_suite.py",
         },
         headers=AUTH,
     )
@@ -239,13 +244,13 @@ def test_full_coding_workflow_end_to_end(app_client: TestClient) -> None:
 
     # fix + green run via retry (new run, terminal run untouched)
     fix = (
-        "python -c \"import pathlib; p = pathlib.Path('calc.py'); "
+        f"{PY} -c \"import pathlib; p = pathlib.Path('calc.py'); "
         "p.write_text(p.read_text().replace('return a - b', 'return a + b'))\""
     )
     app_client.patch(f"/tasks/{tid}", json={"command": fix}, headers=AUTH)
     app_client.post(f"/tasks/{tid}/retry", headers=AUTH)
     app_client.patch(
-        f"/tasks/{tid}", json={"command": "python -m pytest -q calc_suite.py"}, headers=AUTH
+        f"/tasks/{tid}", json={"command": f"{PY} -m pytest -q calc_suite.py"}, headers=AUTH
     )
     green = app_client.post(f"/tasks/{tid}/retry", headers=AUTH).json()
     green_run = green["run"]["id"]
@@ -332,7 +337,7 @@ def test_restart_preserves_coding_state(tmp_path, monkeypatch) -> None:
             "description": "t",
             "owner_teammate_id": dev,
             "issue_id": issue_id,
-            "command": "python -m pytest -q calc_suite.py",
+            "command": f"{PY} -m pytest -q calc_suite.py",
         },
         headers=AUTH,
     ).json()["id"]

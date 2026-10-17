@@ -1,6 +1,7 @@
 """S2 scheduler autonomy: `nerdbot fire-due` CLI fires scheduled tasks
 cron-heartbeats outside the server process (schedule-firing is no longer
-trigger-only). Mock-only suite. Error rows surface with exit code 1."""
+trigger-only). No live network in this suite (the local adapter shells out
+to real commands). Error rows surface with exit code 1."""
 
 from __future__ import annotations
 

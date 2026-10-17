@@ -246,3 +246,123 @@ def test_secret_mask_helpers() -> None:
     assert secrets_mod.mask("short") == "****"
     assert secrets_mod.mask("") == "[unset]"
     assert secrets_mod.mask_stored("sk-plain-value9999") == "****9999"
+
+
+# -- review fixes (ses_eb6109c32ffeoaS3Lh6dijBuaB blockers) --------------------
+
+
+def test_non_string_secret_refused_not_stored_in_the_clear(
+    tmp_path, monkeypatch, secret_key_env
+) -> None:
+    """Reviewer blocker 1: secret-shaped keys with non-string values bypassed
+    both encryption and masking. Now refused at write (400), and legacy rows
+    with such values are masked, never echoed raw."""
+    client = _client(tmp_path, monkeypatch)
+    pid = _project(client)
+    r = client.post(
+        f"/projects/{pid}/providers",
+        json={
+            "kind": "openai-compatible",
+            "config": {
+                "base_url": "https://x/v1",
+                "api_key": {"note": "sk-real-key-inside"},
+            },
+        },
+    )
+    assert r.status_code == 400, r.text
+    assert "must be a string" in r.json()["detail"]
+
+    r2 = client.post(
+        f"/projects/{pid}/providers",
+        json={
+            "kind": "openai-compatible",
+            "config": {"base_url": "https://x/v1", "token": 12345},
+        },
+    )
+    assert r2.status_code == 400, r2.text
+
+    # legacy row with a non-string secret: GET masks it, raw value never served
+    conn = sqlite3.connect(str(tmp_path / "byok.db"))
+    conn.execute(
+        "INSERT INTO providers (id, project_id, kind, name, config, capabilities, status, created_at)"
+        " VALUES (?, ?, 'openai-compatible', '', '{\"api_key_env\": \"K\", \"secret\": {\"leaky\": 1}}',"
+        " '[]', 'active', '2026-01-01T00:00:00+00:00')",
+        ("prv_legacy", pid),
+    )
+    conn.commit()
+    conn.close()
+    got = client.get("/providers/prv_legacy")
+    assert got.status_code == 200, got.text
+    cfg = got.json()["config"]
+    assert cfg["secret"] == "[redacted]"
+    assert "leaky" not in got.text
+
+
+def test_patch_round_tripping_fingerprint_refused(
+    tmp_path, monkeypatch, secret_key_env
+) -> None:
+    """Reviewer blocker 2: a GET→PATCH round trip used to silently encrypt the
+    fingerprint '****1234' as if it were a real key. Now 400, actionable."""
+    client = _client(tmp_path, monkeypatch)
+    pid = _project(client)
+    made = client.post(
+        f"/projects/{pid}/providers",
+        json={
+            "kind": "openai-compatible",
+            "config": {"base_url": "https://x/v1", "api_key": "gsk_realrealreal1111"},
+        },
+    ).json()
+    assert made["config"]["api_key"] == "****1111"
+    r = client.patch(f"/providers/{made['id']}", json={"config": {"api_key": "****1111"}})
+    assert r.status_code == 400, r.text
+    assert "looks like a redaction/fingerprint" in r.json()["detail"]
+    # sentinel-style redaction strings equally refused
+    r2 = client.patch(f"/providers/{made['id']}", json={"config": {"api_key": "[redacted]"}})
+    assert r2.status_code == 400, r2.text
+
+
+def test_patch_teammate_provider_id_null_detaches(
+    tmp_path, monkeypatch, secret_key_env
+) -> None:
+    """Reviewer blocker 3: PATCH provider_id: null used to be a no-op (absent
+    and null were indistinguishable server-side). Now null truly detaches."""
+    client = _client(tmp_path, monkeypatch)
+    pid = _project(client)
+    prov = client.post(
+        f"/projects/{pid}/providers",
+        json={
+            "kind": "openai-compatible",
+            "name": "groq",
+            "config": {"base_url": "https://api.groq.com/openai/v1", "api_key": "gsk_probe____________"},
+        },
+    ).json()
+    mate = client.post(f"/projects/{pid}/teammates", json={"persona": "ceo"}).json()
+    att = client.patch(f"/teammates/{mate['id']}", json={"provider_id": prov["id"]})
+    assert att.status_code == 200, att.text
+    mate = att.json()
+    assert mate["provider_id"] == prov["id"]
+
+    # absent field = no change
+    same = client.patch(f"/teammates/{mate['id']}", json={"persona": "ceo2"})
+    assert same.json()["provider_id"] == prov["id"]
+    # explicit null = detach
+    det = client.patch(f"/teammates/{mate['id']}", json={"provider_id": None})
+    assert det.status_code == 200, det.text
+    assert det.json()["provider_id"] is None
+
+
+def test_base_url_must_be_http_s(tmp_path, monkeypatch, secret_key_env) -> None:
+    """Review followup 4 (cheap part): the model catalog refuses non-http(s)
+    base_urls instead of handing the bearer key to whatever scheme."""
+    client = _client(tmp_path, monkeypatch)
+    pid = _project(client)
+    made = client.post(
+        f"/projects/{pid}/providers",
+        json={
+            "kind": "openai-compatible",
+            "config": {"base_url": "file:///etc", "api_key": "gsk_probe____________"},
+        },
+    ).json()
+    r = client.get(f"/providers/{made['id']}/models")
+    assert r.status_code == 400, r.text
+    assert "http(s) URL" in r.json()["detail"]

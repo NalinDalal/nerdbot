@@ -10,6 +10,7 @@ candidate PR packages, and task roll-ups.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import sqlite3
@@ -693,13 +694,16 @@ def fire_due_schedules(
         except Exception as exc:
             conn.execute("UPDATE schedules SET locked = 0 WHERE id = ?", (schedule.id,))
             conn.commit()
-            notify_mod.send_notification(
-                conn,
-                schedule.project_id,
-                "outbox",
-                "schedule.error",
-                {"schedule_id": schedule.id, "error": f"{type(exc).__name__}: {exc}"},
-            )
+            with contextlib.suppress(Exception):
+                # the error notification must never abort firing the
+                # remaining due schedules in this heartbeat
+                notify_mod.send_notification(
+                    conn,
+                    schedule.project_id,
+                    "outbox",
+                    "schedule.error",
+                    {"schedule_id": schedule.id, "error": f"{type(exc).__name__}: {exc}"},
+                )
             fired.append(
                 {
                     "schedule_id": schedule.id,

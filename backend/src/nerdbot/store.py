@@ -469,7 +469,10 @@ def update_teammate(
     permissions: list[str] | None = None,
     tool_policy: dict[str, Any] | None = None,
     provider_id: str | None = None,
+    clear_provider: bool = False,
 ) -> Teammate:
+    """``clear_provider=True`` explicitly detaches the model (PATCH with
+    ``provider_id: null``); a param of None alone means "no change"."""
     mate = get_teammate(conn, teammate_id)
     if mate is None:
         raise KeyError(f"unknown teammate {teammate_id}")
@@ -485,7 +488,9 @@ def update_teammate(
         mate.permissions = permissions
     if tool_policy is not None:
         mate.tool_policy = tool_policy
-    if provider_id is not None:
+    if clear_provider:
+        mate.provider_id = None
+    elif provider_id is not None:
         provider = get_provider(conn, provider_id)
         if provider is None or provider.project_id != mate.project_id:
             raise ValueError("provider must belong to the same project")
@@ -1412,12 +1417,27 @@ def list_pr_packages_for_task(conn: sqlite3.Connection, task_id: str) -> list[PR
 
 def encrypt_provider_config(config: dict[str, Any]) -> dict[str, Any]:
     """Encrypt secret-shaped config values. Raises SecretKeyMissingError when
-    secrets are present but no runtime key is configured."""
+    secrets are present but no runtime key is configured. Secret-shaped keys
+    holding non-string values are refused (never stored in the clear), as are
+    values that look like mask sentinels (a client round-tripping a
+    fingerprint instead of a real key)."""
     from . import secrets as secrets_mod
 
     stored: dict[str, Any] = {}
     for key, value in config.items():
-        if secrets_mod.is_secret_key(key) and isinstance(value, str) and value:
+        if secrets_mod.is_secret_key(key) and value is not None:
+            if not isinstance(value, str):
+                raise ValueError(
+                    f"secret config key {key!r} must be a string"
+                    f" (got {type(value).__name__}); refusing to store it in the clear"
+                )
+            if not value:
+                continue  # empty means "not set"
+            if value.startswith("****") or (value.startswith("[") and value.endswith("]")):
+                raise ValueError(
+                    f"config {key!r} looks like a redaction/fingerprint, not a key:"
+                    " send the full new key or omit the field to keep the current one"
+                )
             if secrets_mod.is_encrypted(value):
                 stored[key] = secrets_mod.verify_envelope(value)
             else:
@@ -1493,11 +1513,14 @@ def update_provider(
     config: dict[str, Any] | None = None,
     status: ProviderStatus | None = None,
 ) -> Provider:
-    """Partial provider update (BYOK slice S1). ``config`` REPLACES only the
-    secret-bearing keys it carries onto the stored config, then re-encrypts
-    the whole thing via ``encrypt_provider_config``: plaintext secret values
-    fail closed without a runtime key, ciphertext envelopes are verified,
-    plain keys (base_url, model, api_key_env) pass through untouched."""
+    """Partial provider update (BYOK slice S1). ``config`` merges onto the
+    stored config, then the merged dict passes through
+    ``encrypt_provider_config``: plaintext secret values are failed closed
+    without a runtime key (mask-looking values and non-string secrets are
+    refused outright), ciphertext envelopes are verified, plain keys
+    (base_url, model, api_key_env) pass through untouched. Already-encrypted
+    envelopes are VERIFIED but not re-encrypted under the current key; key-version
+    rotation is handled at decrypt time via NERDBOT_SECRET_KEY_PREVIOUS."""
     current = get_provider(conn, provider_id)
     if current is None:
         raise KeyError(f"unknown provider {provider_id}")

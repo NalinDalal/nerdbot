@@ -143,3 +143,31 @@ Remaining S1 work this slice = dashboard UX (settings view, bot/model UI, preset
 - S2 done = a scheduled task fires autonomously overnight with zero user action.
 - S3 done = "@bot2 take over" handoff survives $depth-cap and logs a decision.
 - S5 done = a full mission from chat → run → artifact → notification without leaving chat.
+
+## Review followups (2026-10-17, from the S1/S2 adversarial review)
+
+Blocking findings all fixed and tested (`secrets non-string refusal`,
+fingerprint round-trip 400, teammate detach sentinel + UI button).
+Accepted/deferred items, recorded to stay honest:
+
+- [planned] `SECRET_KEYS` is a fixed allowlist (`api_key`, `token`,…).
+  Consider substring matching (`key|token|secret|password`) so names like
+  `client_secret` can't smuggle plaintext at rest. Low risk single-owner.
+- [accepted] Model-catalog proxy + chat adapter call owner-chosen
+  `base_url` (SSRF parity with the pre-existing chat path). Catalog now
+  enforces http(s); a startup-configurable allowlist stays a deferred
+  option. Single-owner architecture makes this tolerable.
+- [accepted] `smooth mask()` reveals the last 4 characters of a key —
+  deliberate tradeoff within "never a full key in responses"; documented
+  because 4 chars × known prefixes narrows entropy slightly.
+- [planned] fire-due: a success followed by a notify failure is counted
+  as an errored firing → next heartbeat may fire a duplicate task.
+  Make delivery dedup idempotent before it can matter (single cron runs
+  every 5 min; the lock already prevents overlapping firings).
+- [known] `/health` is unauthenticated by design (pre-existing) and now
+  discloses secret-key posture (configured|absent) plus restart count —
+  acceptable loopback-only posture; revisit if the server ever binds
+  beyond 127.0.0.1.
+- [known] `store.update_provider` merges read-then-write without a
+  transaction guard; single owner makes lost-update rare. Fix cheaply if
+  multi-writer surfaces ever arrive.

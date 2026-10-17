@@ -19,6 +19,7 @@ import sqlite3
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -359,6 +360,9 @@ def list_upstream_models(
     base_url = provider.config.get("base_url", "")
     if not isinstance(base_url, str) or not base_url.strip():
         raise ProviderConfigurationError("provider has no base_url to list models from")
+    parsed = urlparse(base_url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ProviderConfigurationError("provider base_url must be an http(s) URL")
     api_key = resolve_api_key(provider.config)
     if not api_key:
         raise ProviderConfigurationError("provider has no usable api key; save one in Settings")
@@ -366,7 +370,7 @@ def list_upstream_models(
     try:
         with httpx.Client(timeout=15.0, transport=transport) as client:
             resp = client.get(url, headers={"Authorization": f"Bearer {api_key}"})
-    except httpx.TransportError as exc:
+    except httpx.HTTPError as exc:
         raise ProviderNetworkError(f"model catalog unreachable: {exc}") from exc
     if resp.status_code != 200:
         raise ProviderNetworkError(
