@@ -29,6 +29,10 @@ MAX_DELIVERY_ATTEMPTS = 3
 BACKOFF_SECONDS = (1.0, 2.0)
 RESPONSE_MAX_BYTES = 262_144
 REQUEST_TIMEOUT_S = 15.0
+# A held lock leaks only if the process dies mid-send (the ``finally``
+# release covers every in-process path). The lease must comfortably exceed
+# one pinned-exchange timeout (REQUEST_TIMEOUT_S) plus scheduler slack.
+LOCK_LEASE_S = 60.0
 
 
 class ChannelNotConfiguredError(RuntimeError):
@@ -123,7 +127,7 @@ def deliver_webhook(
     if note.status == "delivered":
         return note
     target = resolve_target(conn, note.project_id, note.target_url)
-    if not store.claim_delivery_lock(conn, notification_id):
+    if not store.claim_delivery_lock(conn, notification_id, now=moment):
         raise WebhookLockedError(f"delivery already in progress for {notification_id}")
     try:
         body = json.dumps({"id": note.id, "kind": note.kind, "payload": note.payload})
@@ -172,6 +176,43 @@ def deliver_webhook(
     return refreshed
 
 
+def reclaim_abandoned_deliveries(
+    conn: sqlite3.Connection,
+    now: datetime | None = None,
+    lease_s: float = LOCK_LEASE_S,
+) -> list[dict[str, Any]]:
+    """Recover webhook rows whose delivery lock outlived its lease.
+
+    A row left ``locked=1``/``sending`` means a process died mid-attempt
+    (the attempt count was already incremented, so it is not incremented
+    again). Reclaims are bounded by the same retry budget: re-queue with
+    backoff, or terminal ``failed`` once attempts are exhausted. Every
+    reclaim records an audit event — a redelivered webhook is
+    at-least-once, dedupable by its ``X-Idempotency-Key``/payload id.
+    """
+    moment = now or _utcnow()
+    cutoff = moment - timedelta(seconds=lease_s)
+    results: list[dict[str, Any]] = []
+    for note in store.stale_locked_deliveries(conn, cutoff):
+        store.release_delivery_lock(conn, note.id)  # also clears the lease stamp
+        if note.attempts >= MAX_DELIVERY_ATTEMPTS:
+            store.set_notification_delivery(conn, note.id, "failed", note.attempts)
+            store.record_event(conn, note.project_id, "notification", note.id,
+                               "notification.failed")
+            results.append({"id": note.id, "status": "failed",
+                            "attempts": note.attempts, "reclaimed": True})
+            continue
+        store.set_notification_delivery(conn, note.id, "queued", note.attempts)
+        store.set_notification_next_attempt(
+            conn, note.id, moment + timedelta(seconds=_backoff_delay(note.attempts))
+        )
+        store.record_event(conn, note.project_id, "notification", note.id,
+                           "notification.reclaimed")
+        results.append({"id": note.id, "status": "queued",
+                        "attempts": note.attempts, "reclaimed": True})
+    return results
+
+
 def sweep_due_deliveries(
     conn: sqlite3.Connection,
     now: datetime | None = None,
@@ -180,11 +221,13 @@ def sweep_due_deliveries(
 ) -> list[dict[str, Any]]:
     """Fire one attempt for each due, unlocked, queued webhook delivery.
 
-    Never raises on row errors: each outcome (delivered/queued/failed) is
-    recorded with its attempts count. Deterministic order by next_attempt_at.
+    Abandoned (lease-expired) locks are reclaimed first, so a crashed
+    delivery is retried without any manual unlock. Never raises on row
+    errors: each outcome (delivered/queued/failed/reclaimed) is recorded
+    with its attempts count. Deterministic order by next_attempt_at.
     """
     moment = now or _utcnow()
-    results: list[dict[str, Any]] = []
+    results: list[dict[str, Any]] = list(reclaim_abandoned_deliveries(conn, moment))
     for note in store.due_deliveries(conn, moment):
         try:
             outcome = deliver_webhook(conn, note.id, transport=transport, resolver=resolver,

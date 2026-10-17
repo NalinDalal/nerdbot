@@ -58,8 +58,8 @@ superseded by the record below and the git log.
   delivery hardening (retry/backoff limits visibility, idempotent delivery
   keys, failure surfaces) is tracked as follow-up in
   `docs/phase4-architecture.md` review notes when the search slice closes.
-- Next action: OpenCode reviews the Phase 3 diff (fetch + search +
-  transport hardening) before any Phase 4 continuation.
+- Next action: Phase 4 slices A/B/C verified implemented and the lease
+  residual closed; per-phase review before any Phase 5 selection.
 
 ## Phase 4 plan (written 2026-10-17; implementation gated on Phase 3 review)
 
@@ -73,17 +73,22 @@ absent.
   caps, redirects re-validated on-host. Slice owner verifies test coverage
   (`tests/test_github_fetch.py`) once more during this review; no new
   build unless a gap is found.
-- B. **Durable outbox — DONE, one residual to verify/harden.** Delivery
+- B. **Durable outbox — DONE, lease residual closed.** Delivery
   states + locked claims (`b14d748`), backoff via `next_attempt_at`,
   `MAX_DELIVERY_ATTEMPTS` terminal failure, due sweep (`65bf04a`),
   failure events. In-process paths release the lock in a `finally`
   (notify.py `deliver_webhook`) and owner can `POST /notifications/{id}/unlock`.
-  Verified residual: **crash mid-send** leaves `locked=1`/`sending` with no
-  restart sweep or lease expiry — stuck until manual unlock. Slice B':
-  add a lease-expiry rule (e.g. `locked=1` AND `status='sending'` AND
-  `next_attempt_at`/lock age past a threshold → sweep reclaims or fails
-  it, with an audit event) plus tests proving an abandoned lock is
-  recovered without double-delivery while a live send is flagged.
+  Crash-mid-send residual is now fixed: locks are lease-stamped
+  (`locked_at`, idempotent `_PHASE8` migration) and the sweep reclaims
+  lease-expiredsending rows — requeue with backoff or terminal fail at
+  the bounded attempts, each with an audit event. Delivery semantics
+  remain at-least-once, dedupable by the receiver via
+  `X-Idempotency-Key`/payload id. Tests prove: fresh leases untouched,
+  abandoned locks reclaimed + redelivered exactly once per attempt,
+  exhausted attempts terminate without another send, and old schemas
+  migrate. This also surfaced and fixed a latent `_migrate` bug where a
+  later phase's per-table column list REPLACED earlier phases' columns
+  (legacy databases could miss `next_attempt_at`/`locked`).
 - C. **One real outbound channel — DONE (webhook-out).** Allowlisted
   HTTPS targets, SSRF-guarded via the same pinned transport, idempotent
   re-send payloads (receiver dedupes on notification id). No email/Slack
@@ -92,6 +97,7 @@ absent.
   retried or terminated per policy after restart or lease expiry; at most
   one in-flight send per notification row (lock testified by a test);
   failure path still records `notification.failed` with attempt count.
+  STATUS: SHIPPED — see the milestone list and `docs/phase4-architecture.md`.
 
 ## Milestones (updated)
 
@@ -102,7 +108,10 @@ absent.
 - [x] Phase 3 — web research with SSRF hardening (fetch + transport pinning +
   wall-clock budgets; credential-free DuckDuckGo Lite search via `search.py`;
   post-review fixes applied — see ADR 0007 item 7; DNS-time residual documented).
-- [ ] Phase 4 — durable integrations (one real channel, real GitHub fetch, outbox delivery).
+- [ ] Phase 4 — durable integrations (GitHub fetch, outbox delivery, webhook-out
+  channel all implemented; lease-reclaim residual closed; reviewed by OpenCode
+  for Phase 3, Phase 4 state documented).
+- [ ] Phase 5+ — productivity integrations, knowledge, MCP/delegation, automation, usability.
 - [ ] Phase 5+ — productivity integrations, knowledge, MCP/delegation, automation, usability.
 
 ## Phase 1 outcome (implemented as `82edd35`)

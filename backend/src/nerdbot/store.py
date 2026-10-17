@@ -138,7 +138,7 @@ CREATE TABLE IF NOT EXISTS notifications (
   channel TEXT NOT NULL DEFAULT 'outbox', kind TEXT NOT NULL DEFAULT '',
   payload TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'queued',
   target_url TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0,
-  next_attempt_at TEXT, locked INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TEXT, locked INTEGER NOT NULL DEFAULT 0, locked_at TEXT,
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS webhook_targets (
@@ -275,17 +275,20 @@ _PHASE7_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "chat_threads": [("summary", "TEXT NOT NULL DEFAULT ''")],
 }
 
+_PHASE8_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "notifications": [("locked_at", "TEXT")],
+}
+
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Idempotent migrations for databases created by older schemas."""
-    phases = {
-        **_PHASE2_COLUMNS,
-        **_PHASE3_COLUMNS,
-        **_PHASE4_COLUMNS,
-        **_PHASE5_COLUMNS,
-        **_PHASE6_COLUMNS,
-        **_PHASE7_COLUMNS,
-    }
+    # Per-table concat (a plain ** merge would let a later phase's list
+    # REPLACE an earlier phase's columns for the same table).
+    phases: dict[str, list[tuple[str, str]]] = {}
+    for phase in (_PHASE2_COLUMNS, _PHASE3_COLUMNS, _PHASE4_COLUMNS, _PHASE5_COLUMNS,
+                  _PHASE6_COLUMNS, _PHASE7_COLUMNS, _PHASE8_COLUMNS):
+        for table, columns in phase.items():
+            phases.setdefault(table, []).extend(columns)
     for table, columns in phases.items():
         existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
         for name, ddl in columns:
@@ -1813,6 +1816,9 @@ def _notification_from_row(r: sqlite3.Row) -> Notification:
         if "next_attempt_at" in keys and r["next_attempt_at"]
         else None,
         locked=bool(r["locked"]) if "locked" in keys and r["locked"] else False,
+        locked_at=datetime.fromisoformat(r["locked_at"])
+        if "locked_at" in keys and r["locked_at"]
+        else None,
         created_at=datetime.fromisoformat(r["created_at"]),
     )
 
@@ -1844,18 +1850,46 @@ def set_notification_next_attempt(
     conn.commit()
 
 
-def claim_delivery_lock(conn: sqlite3.Connection, notification_id: str) -> bool:
-    """Atomic overlap guard. False when already locked."""
+def claim_delivery_lock(
+    conn: sqlite3.Connection, notification_id: str, now: datetime | None = None
+) -> bool:
+    """Atomic overlap guard. False when already locked.
+
+    Stamps ``locked_at`` (lease start) so a crashed worker's lock can
+    later be reclaimed by lease expiry instead of sticking forever.
+    """
+    moment = (now or datetime.now(UTC)).isoformat()
     cursor = conn.execute(
-        "UPDATE notifications SET locked = 1 WHERE id = ? AND locked = 0", (notification_id,)
+        "UPDATE notifications SET locked = 1, locked_at = ? WHERE id = ? AND locked = 0",
+        (moment, notification_id),
     )
     conn.commit()
     return cursor.rowcount == 1
 
 
 def release_delivery_lock(conn: sqlite3.Connection, notification_id: str) -> None:
-    conn.execute("UPDATE notifications SET locked = 0 WHERE id = ?", (notification_id,))
+    conn.execute(
+        "UPDATE notifications SET locked = 0, locked_at = NULL WHERE id = ?",
+        (notification_id,),
+    )
     conn.commit()
+
+
+def stale_locked_deliveries(
+    conn: sqlite3.Connection, cutoff: datetime
+) -> list[Notification]:
+    """Locked ``sending`` webhook rows whose lease started before cutoff.
+
+    These are abandoned claims: the claiming process died mid-send and its
+    ``finally`` release never ran.
+    """
+    rows = conn.execute(
+        "SELECT * FROM notifications WHERE channel = 'webhook-out' AND locked = 1"
+        " AND status = 'sending' AND locked_at IS NOT NULL AND locked_at <= ?"
+        " ORDER BY locked_at, rowid",
+        (cutoff.isoformat(),),
+    ).fetchall()
+    return [_notification_from_row(r) for r in rows]
 
 
 def due_deliveries(conn: sqlite3.Connection, now: datetime) -> list[Notification]:

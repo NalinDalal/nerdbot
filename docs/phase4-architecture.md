@@ -41,6 +41,15 @@ else is a capability flag (see `docs/integration-adapters.md`).
   `ingress.received` event.
 - `outbox` channel persists redacted notification rows. `email`, `slack`,
   `webhook-out` raise `ChannelNotConfiguredError` (400 with stub message).
+- `webhook-out` delivery claims a lease-stamped lock (`locked_at`); a
+  lock that outlives `LOCK_LEASE_S` (60s, well beyond one pinned-exchange
+  timeout) is reclaimed by the due sweep: re-queue with backoff, or
+  terminal `failed` once `MAX_DELIVERY_ATTEMPTS` is exhausted. Every
+  reclaim records `notification.reclaimed` (or `notification.failed`).
+  Semantics are at-least-once: a crash between the POST and the
+  delivered write can redeliver; receivers dedupe on the
+  `X-Idempotency-Key`/payload id. Manual `POST /notifications/{id}/unlock`
+  remains available.
 
 ## Backup (`backup.py`)
 

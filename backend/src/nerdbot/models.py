@@ -237,6 +237,7 @@ class Notification(BaseModel):
     attempts: int = 0
     next_attempt_at: datetime | None = None
     locked: bool = False
+    locked_at: datetime | None = None
     created_at: datetime = Field(default_factory=_utcnow)
 
 

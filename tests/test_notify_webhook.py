@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -105,7 +106,6 @@ def test_redirect_to_private_blocked(app_client: TestClient) -> None:
 
 
 def test_retry_then_success_and_exhaustion(app_client: TestClient) -> None:
-    from datetime import UTC, datetime, timedelta
 
     pid = _project(app_client)
     app_client.post(f"/projects/{pid}/webhook-targets", json={"url": TARGET}, headers=AUTH)
@@ -154,7 +154,6 @@ def test_retry_then_success_and_exhaustion(app_client: TestClient) -> None:
 
 
 def test_sweep_skips_locked_future_and_terminal(app_client: TestClient) -> None:
-    from datetime import UTC, datetime, timedelta
 
     pid = _project(app_client)
     app_client.post(f"/projects/{pid}/webhook-targets", json={"url": TARGET}, headers=AUTH)
@@ -245,3 +244,113 @@ def test_explicit_target_and_email_stub(app_client: TestClient) -> None:
     r = app_client.post(f"/projects/{pid}/notify",
                         json={"channel": "email", "kind": "x"}, headers=AUTH)
     assert r.status_code == 400 and "stub" in r.json()["detail"]
+
+
+def _crash_mid_send(conn, note_id: str, attempts: int, crashed_at: datetime) -> None:
+    """Simulate a worker death right after claiming + sending. No finally."""
+    assert store.claim_delivery_lock(conn, note_id, now=crashed_at) is True
+    store.set_notification_delivery(conn, note_id, "sending", attempts)
+
+
+def test_abandoned_lock_reclaimed_and_redelivered(app_client: TestClient) -> None:
+
+    pid = _project(app_client)
+    app_client.post(f"/projects/{pid}/webhook-targets", json={"url": TARGET}, headers=AUTH)
+    conn = store.connect(os.environ["NERDBOT_DB"])
+    note = store.create_notification(conn, pid, "webhook-out", "crashed")
+    crashed_at = datetime(2026, 1, 1, tzinfo=UTC)
+    _crash_mid_send(conn, note.id, attempts=1, crashed_at=crashed_at)
+
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("X-Idempotency-Key") or "")
+        return httpx.Response(200, text="ok")
+
+    transport = _transport(handler)
+    # Within the lease: left alone (still flagged sending, still locked).
+    early = notify_mod.sweep_due_deliveries(
+        conn, now=crashed_at + timedelta(seconds=notify_mod.LOCK_LEASE_S - 1),
+        transport=transport)
+    assert early == []
+    live = store.get_notification(conn, note.id)
+    assert live is not None and live.status == "sending" and live.locked is True
+    # Past the lease: reclaimed to queued with backoff, exactly one audit event.
+    late = crashed_at + timedelta(seconds=notify_mod.LOCK_LEASE_S + 1)
+    results = notify_mod.sweep_due_deliveries(conn, now=late, transport=transport)
+    assert results == [{"id": note.id, "status": "queued", "attempts": 1,
+                        "reclaimed": True}]
+    recovered = store.get_notification(conn, note.id)
+    assert recovered is not None and recovered.status == "queued"
+    assert recovered.locked is False and recovered.attempts == 1
+    assert recovered.next_attempt_at == late + timedelta(seconds=1.0)
+    events = [e.event_type for e in store.list_events(conn, pid)]
+    assert events.count("notification.reclaimed") == 1
+    # The next due sweep redelivers exactly once, same idempotency key.
+    assert recovered.next_attempt_at is not None
+    results = notify_mod.sweep_due_deliveries(
+        conn, now=recovered.next_attempt_at + timedelta(seconds=1), transport=transport)
+    assert results == [{"id": note.id, "status": "delivered", "attempts": 2}]
+    assert seen == [note.id]
+    conn.close()
+
+
+def test_abandoned_lock_at_max_attempts_fails(app_client: TestClient) -> None:
+
+    pid = _project(app_client)
+    app_client.post(f"/projects/{pid}/webhook-targets", json={"url": TARGET}, headers=AUTH)
+    conn = store.connect(os.environ["NERDBOT_DB"])
+    note = store.create_notification(conn, pid, "webhook-out", "maxed")
+    crashed_at = datetime(2026, 1, 1, tzinfo=UTC)
+    _crash_mid_send(conn, note.id, attempts=notify_mod.MAX_DELIVERY_ATTEMPTS,
+                    crashed_at=crashed_at)
+    calls = {"n": 0}
+
+    def never(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(200, text="ok")
+
+    results = notify_mod.sweep_due_deliveries(
+        conn, now=crashed_at + timedelta(seconds=notify_mod.LOCK_LEASE_S + 1),
+        transport=_transport(never))
+    assert results == [{"id": note.id, "status": "failed",
+                        "attempts": notify_mod.MAX_DELIVERY_ATTEMPTS,
+                        "reclaimed": True}]
+    stored = store.get_notification(conn, note.id)
+    assert stored is not None and stored.status == "failed" and stored.locked is False
+    events = [e.event_type for e in store.list_events(conn, pid)]
+    assert events.count("notification.failed") == 1
+    assert calls["n"] == 0  # terminal rows are never sent again
+    conn.close()
+
+
+def test_locked_at_migration_on_old_table(tmp_path) -> None:
+
+    import sqlite3 as _sqlite3
+
+    db = str(tmp_path / "oldlock.db")
+    raw = _sqlite3.connect(db)
+    raw.execute("CREATE TABLE projects (id TEXT PRIMARY KEY, owner TEXT NOT NULL,"
+                " repository TEXT NOT NULL DEFAULT '', config TEXT NOT NULL DEFAULT '{}')")
+    raw.execute("INSERT INTO projects (id, owner) VALUES ('prj_1', 'o')")
+    raw.execute("CREATE TABLE notifications (id TEXT PRIMARY KEY,"
+                " project_id TEXT NOT NULL REFERENCES projects(id),"
+                " channel TEXT NOT NULL DEFAULT 'outbox', kind TEXT NOT NULL DEFAULT '',"
+                " payload TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'queued',"
+                " created_at TEXT NOT NULL)")
+    raw.execute("INSERT INTO notifications (id, project_id, kind, created_at)"
+                " VALUES ('ntf_1', 'prj_1', 'x', '2026-01-01T00:00:00+00:00')")
+    raw.commit()
+    raw.close()
+    conn = store.connect(db)  # migration adds target_url/attempts/locked/locked_at
+    try:
+        note = store.get_notification(conn, "ntf_1")
+        assert note is not None
+        assert note.locked is False and note.locked_at is None
+        crashed_at = datetime(2026, 1, 1, tzinfo=UTC)
+        assert store.claim_delivery_lock(conn, "ntf_1", now=crashed_at) is True
+        relocked = store.get_notification(conn, "ntf_1")
+        assert relocked is not None
+        assert relocked.locked is True and relocked.locked_at == crashed_at
+    finally:
+        conn.close()
