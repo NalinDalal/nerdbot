@@ -20,6 +20,7 @@ import http.client
 import ipaddress
 import socket
 import ssl
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
@@ -74,6 +75,12 @@ def _is_public_ip(value: str) -> bool:
         ip = ipaddress.ip_address(value)
     except ValueError:
         return False
+    # IPv4-mapped IPv6 must be judged by its mapped IPv4 half. Stdlib
+    # is_private semantics for ::ffff: forms changed with the runtime
+    # version (post-CVE-2024-4032), so unwrap explicitly instead of
+    # trusting version-dependent behavior.
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
     return not (
         ip.is_private
         or ip.is_loopback
@@ -137,18 +144,28 @@ def fetch_url_text(
     policy: FetchPolicy | None = None,
     resolver: Callable[[str], list[str]] | None = None,
     transport: httpx.BaseTransport | None = None,
+    clock: Callable[[], float] | None = None,
 ) -> str:
     """Fetch a URL as text under policy. No auth, cookies, or credentials."""
     active = policy or FetchPolicy()
+    tick = clock or time.monotonic
     checked = check_url(url, active, resolver)
     if transport is None:
         transport = PinnedTransport(
             resolver=resolver, timeout_s=active.timeout_s, max_bytes=active.max_bytes
         )
     client = httpx.Client(follow_redirects=False, timeout=active.timeout_s, transport=transport)
+    # Whole-fetch wall-clock budget: per-connection timeouts cannot bound a
+    # fetch alone — redirect hops and slow (slowloris) body delivery stack up.
+    started = tick()
+    budget = active.timeout_s * (active.max_redirects + 1)
     try:
         current = checked
         for _ in range(active.max_redirects + 1):
+            if tick() - started > budget:
+                raise FetchTimeoutError(
+                    f"fetch exceeded total time budget ({budget:.1f}s)"
+                )
             try:
                 response = client.get(current, headers={"User-Agent": "nerdbot-fetch/0.1"})
             except httpx.TimeoutException as exc:
@@ -245,6 +262,7 @@ def _socket_roundtrip(
     else:
         conn = http.client.HTTPConnection(ip, port, timeout=timeout_s)
     try:
+        started = time.monotonic()
         conn.putrequest(request.method, path, skip_host=True, skip_accept_encoding=True)
         for key, value in headers:
             conn.putheader(key, value)
@@ -268,6 +286,14 @@ def _socket_roundtrip(
             if total > max_bytes:
                 raise FetchTooLargeError(f"response exceeds cap {max_bytes} bytes")
             chunks.append(piece)
+            # Slowloris bound: each socket op may individually stay inside
+            # timeout_s, so a dribbling server could otherwise keep the
+            # exchange alive indefinitely. Enforce one per-exchange deadline
+            # across all reads.
+            if time.monotonic() - started > timeout_s:
+                raise FetchTimeoutError(
+                    f"pinned response exceeded time budget ({timeout_s:.1f}s)"
+                )
     except TimeoutError as exc:
         raise FetchTimeoutError(f"pinned connection timed out: {exc}") from exc
     except (OSError, ssl.SSLError, http.client.HTTPException) as exc:

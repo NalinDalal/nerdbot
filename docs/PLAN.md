@@ -29,13 +29,47 @@ no company hierarchy, no org management.
 - Absent: real model calls, tool-call loop, web fetch, credentials encryption,
   lockouts/quotas, UI, push/PR automation, org hierarchy.
 
-## Milestones
+## Reconciled status (verified against code/history, 2026-10-17)
+
+History note: everything below is now verified against the repository, not
+owner-reported. The "Current verified architecture" section above describes
+the pre-Phase-3 baseline and is kept for history; the older capability
+inventory ("Absent: real model calls, web fetch, UI, dashboards") is
+superseded by the record below and the git log.
+
+- [x] Phase 3 fetch — hardened `fetch.py` (`f1f2e10`), DNS-rebinding
+  transport pinning (`a89f5a2`), wall-clock budget + IPv4-mapped unwrap +
+  encoding tests (this slice). ADR 0007. Acceptance: every resolved/pinned
+  address must be globally public; blocked targets provably never reach the
+  connector (recording-connector tests); redirects re-validated/re-pinned
+  per hop; no proxy bypass; size/decompression/total-time caps; untrusted
+  framing at `providers.py`.
+- [x] Phase 4 slice A' (fetch behavior, pre-dating that naming): real
+  webhook-out delivery behind the outbox (`b14d748`), scheduler-driven
+  backoff (`65bf04a`), read-only GitHub issue fetch + preview-then-ingest
+  (`449891c`), durable delivery states with locked claims and retry sweeps.
+- [x] Dashboard: read-mostly ops UI consuming the API (`135652c`) with a
+  chat home view (`2a239eb`) — strictly behind bearer auth.
+- Remaining Phase 3 item: web search provider (folded out of ADR 0007 scope
+  while fetch shipped first). Smallest open slice: credential-free bounded
+  search through `PinnedTransport` (provider to be selected with owner),
+  typed provider errors, bounded results. Not started.
+- Phase 4 remaining: per the prompt, the outbox/GitHub/webhook work that
+  exists is the *slice* that proved the pattern; the remaining durable-
+  delivery hardening (retry/backoff limits visibility, idempotent delivery
+  keys, failure surfaces) is tracked as follow-up in
+  `docs/phase4-architecture.md` review notes when the search slice closes.
+- Next action: owner selects the search slice, then OpenCode reviews the
+  Phase 3 diff before Phase 4 continuation.
+
+## Milestones (updated)
 
 - [x] Phase 0 — baseline checkpoint (`63ef83c`), provenance, gates green.
 - [x] Phase 1 — real provider execution + minimal tool-call loop (`82edd35`, ADR 0005).
 - [x] Phase 2 — personal-use security: credential encryption, approval hygiene,
   manifest import (`cfea25d`, `9b35cd8`, ADR 0006).
-- [ ] Phase 3 — web research with SSRF hardening (IN PROGRESS).
+- [ ] Phase 3 — web research with SSRF hardening (fetch complete + transport-pinned
+  + budgeted; search provider still open).
 - [ ] Phase 4 — durable integrations (one real channel, real GitHub fetch, outbox delivery).
 - [ ] Phase 5+ — productivity integrations, knowledge, MCP/delegation, automation, usability.
 
