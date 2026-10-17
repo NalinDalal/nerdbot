@@ -153,7 +153,7 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }) {
             <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} required />
           </label>
           <label className="field">
-            <span>API token (kept in memory only, never stored)</span>
+            <span>API token (kept in this browser's local storage only)</span>
             <input
               type="password"
               value={token}

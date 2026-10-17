@@ -27,15 +27,47 @@ export interface Session {
   token: string;
 }
 
-/** Session lives in module memory only. Never persisted, never logged. */
+/** Session key in this browser's localStorage (personal ops UI, owner's machine). */
+const SESSION_KEY = "nerdbot.session";
+
 let session: Session | null = null;
+
+function readStoredSession(): Session | null {
+  try {
+    const raw = typeof localStorage !== "undefined" ? localStorage.getItem(SESSION_KEY) : null;
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      "baseUrl" in parsed &&
+      "token" in parsed &&
+      typeof (parsed as Session).baseUrl === "string" &&
+      typeof (parsed as Session).token === "string" &&
+      (parsed as Session).token.length > 0
+    ) {
+      return parsed as Session;
+    }
+  } catch {
+    // corrupt or sandboxed storage — treat as signed out
+  }
+  return null;
+}
 
 export function setSession(next: Session | null): void {
   session = next && next.token ? next : null;
+  try {
+    if (typeof localStorage !== "undefined") {
+      if (session) localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+      else localStorage.removeItem(SESSION_KEY);
+    }
+  } catch {
+    // storage unavailable (private mode etc.) — memory-only session still works
+  }
 }
 
 export function getSession(): Session | null {
-  return session;
+  return session ?? readStoredSession();
 }
 
 export class ApiError extends Error {
