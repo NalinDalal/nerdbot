@@ -700,6 +700,15 @@ def fire_due_schedules(
                 "schedule.error",
                 {"schedule_id": schedule.id, "error": f"{type(exc).__name__}: {exc}"},
             )
+            fired.append(
+                {
+                    "schedule_id": schedule.id,
+                    "task_id": None,
+                    "run_id": None,
+                    "status": "error",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
     return fired
 
 

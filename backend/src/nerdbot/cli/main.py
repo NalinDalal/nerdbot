@@ -86,6 +86,53 @@ def deliveries_sweep(quiet: bool) -> None:
         raise click.exceptions.Exit(1)
 
 
+@cli.command("fire-due")
+@click.option("--quiet", is_flag=True, help="Print one summary line only.")
+@click.option(
+    "--timeout-s", default=300.0, show_default=True, type=float,
+    help="Per-firing run wall-clock budget.",
+)
+def fire_due(quiet: bool, timeout_s: float) -> None:
+    """Fire all due schedules once (lock -> task -> run -> notify -> unlock).
+
+    Intended to be wired to an OS cron/timer, e.g. every five minutes — the
+    store holds the schedule, cron provides the heartbeat. Exit code 0 when
+    no firing errored, 1 otherwise.
+    """
+    from nerdbot import orchestrator as orchestrator_mod
+    from nerdbot import store
+
+    db = os.environ.get("NERDBOT_DB", "nerdbot.db")
+    data_dir = os.environ.get("NERDBOT_DATA", ".nerdbot-data")
+    try:
+        conn = store.connect(db)
+    except OSError as exc:
+        raise click.ClickException(f"cannot open database {db!r}: {exc}") from exc
+    errors = 0
+    try:
+        fired = orchestrator_mod.fire_due_schedules(
+            conn, data_dir=data_dir, timeout_s=timeout_s
+        )
+    except click.ClickException:
+        raise
+    except Exception as exc:
+        raise click.ClickException(f"schedule firing failed: {exc}") from exc
+    finally:
+        conn.close()
+    for row in fired:
+        suffix = ""
+        if row.get("error"):
+            suffix = f" error={row['error']}"
+            errors += 1
+        if not quiet:
+            click.echo(
+                f"{row['schedule_id']} task={row.get('task_id')} status={row.get('status')}{suffix}"
+            )
+    click.echo(f"fire-due: {len(fired)} fired, {errors} errored")
+    if errors:
+        raise click.exceptions.Exit(1)
+
+
 @cli.command("ingest-issue")
 @click.option("--project", "project_id", required=True, help="Project id that owns the issue")
 @click.option("--title", required=True, help="Issue title")
