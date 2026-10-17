@@ -87,7 +87,9 @@ function joinUrl(base: string, path: string): string {
 }
 
 async function req<T>(path: string, options: { method?: string; body?: unknown } = {}): Promise<T> {
-  const current = session;
+  // getSession (not the bare module var) so a request path keeps working
+  // after a full page reload restores the session from localStorage.
+  const current = getSession();
   if (!current) throw new ApiError(0, "Not connected. Enter your API token first.");
   let res: Response;
   try {

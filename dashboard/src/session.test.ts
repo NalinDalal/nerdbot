@@ -6,7 +6,7 @@
  * Now setSession/getSession also persist to this browser's localStorage,
  * cleared on Disconnect.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getSession, setSession } from "./api";
 
 interface Store {
@@ -31,6 +31,43 @@ afterEach(() => {
 });
 
 describe("session persistence", () => {
+  it("req() falls back to persisted storage after a full page reload", async () => {
+    // simulates: connect (persisted) → reload (fresh module instance, empty memory)
+    const store = fakeStorage();
+    Object.defineProperty(globalThis, "localStorage", {
+      value: store,
+      writable: true,
+      configurable: true,
+    });
+    setSession({ baseUrl: "http://api:8088", token: "tok-refresh" });
+    const seen: Array<{ url: string; auth: string | null }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit = {}) => {
+        seen.push({
+          url,
+          auth: (init.headers as Record<string, string>)?.Authorization ?? null,
+        });
+        return { ok: true, status: 200, json: async () => ({ status: "ok" }) } as Response;
+      }),
+    );
+    vi.resetModules();
+    try {
+      const fresh = await import("./api");
+      // the fresh instance has no memory session; only storage
+      await fresh.api.health();
+      expect(seen).toEqual([
+        { url: "http://api:8088/health", auth: "Bearer tok-refresh" },
+      ]);
+      // and re-setSession(null) on the fresh instance clears storage too
+      fresh.setSession(null);
+      expect(fresh.getSession()).toBeNull();
+      expect(store.getItem("nerdbot.session")).toBeNull();
+    } finally {
+      vi.resetModules();
+    }
+  });
+
   it("survives a fresh module-scope read after reconnect (refresh shape)", () => {
     const store = fakeStorage();
     Object.defineProperty(globalThis, "localStorage", {
