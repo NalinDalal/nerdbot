@@ -9,6 +9,12 @@ Permission model:
 - Mutations on a project require the caller to be the project owner.
 - A task's owner teammate must belong to the same project as the task.
 - Secrets are never logged; only a redacted token prefix appears in errors.
+
+Token policy (fail-closed, 2026-10-17): the well-known dev default is
+accepted ONLY with the explicit ``NERDBOT_INSECURE_DEV_TOKEN=1`` opt-in
+environment variable. With ``NERDBOT_TOKEN`` unset and no opt-in, the
+server refuses every bearer token (HTTP 503) — serving a known public
+secret by accident is the failure mode this prevents.
 """
 
 from __future__ import annotations
@@ -22,16 +28,45 @@ from . import store
 
 DEV_DEFAULT_TOKEN = "dev-token-change-me"
 PRINCIPAL = "local-owner"
+_DEV_TOKEN_OPT_IN = "NERDBOT_INSECURE_DEV_TOKEN"
+
+
+def token_status() -> str:
+    """How the server resolves its bearer token.
+
+    - ``configured``: ``NERDBOT_TOKEN`` is set (its value is the token).
+    - ``dev``: NO token set but the explicit dev-only opt-in env var is
+      ``1`` — the well-known default is accepted.
+    - ``closed``: neither is present — NO token is valid; requests fail
+      closed instead of silently serving the public dev secret.
+    """
+    if os.environ.get("NERDBOT_TOKEN", ""):
+        return "configured"
+    if os.environ.get(_DEV_TOKEN_OPT_IN) == "1":
+        return "dev"
+    return "closed"
 
 
 def expected_token() -> str:
-    return os.environ.get("NERDBOT_TOKEN", DEV_DEFAULT_TOKEN)
+    """The valid token, or ``""`` when none is (fail-closed)."""
+    status = token_status()
+    if status == "configured":
+        return os.environ["NERDBOT_TOKEN"]
+    if status == "dev":
+        return DEV_DEFAULT_TOKEN
+    return ""
 
 
 def principal_from_header(authorization: str | None = Header(default=None)) -> str:
     """Validate ``Authorization: Bearer <token>`` and return the principal."""
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="missing bearer token")
+    if token_status() == "closed":
+        raise HTTPException(
+            status_code=503,
+            detail="server token not configured: set NERDBOT_TOKEN, or"
+            " NERDBOT_INSECURE_DEV_TOKEN=1 for explicit local-dev opt-in",
+        )
     presented = authorization[len("Bearer ") :]
     if presented != expected_token():
         raise HTTPException(status_code=403, detail="invalid token")

@@ -103,7 +103,11 @@ def create_app() -> FastAPI:
         request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:12]
         principal = "anonymous"
         auth = request.headers.get("Authorization", "")
-        if auth.startswith("Bearer ") and auth[len("Bearer ") :] == expected_token():
+        if (
+            expected_token()
+            and auth.startswith("Bearer ")
+            and auth[len("Bearer ") :] == expected_token()
+        ):
             principal = PRINCIPAL
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id

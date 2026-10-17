@@ -22,6 +22,21 @@ def cli() -> None:
 @click.option("--port", default=8088, show_default=True, type=int)
 def run(host: str, port: int) -> None:
     """Run the API server (primary workflow)."""
+    from nerdbot.auth import token_status
+
+    status = token_status()
+    if status == "closed":
+        click.echo(
+            "warning: NERDBOT_TOKEN is not set and the dev-default token is"
+            " not enabled: the API will reject every bearer token with 503."
+            " Set NERDBOT_TOKEN, or NERDBOT_INSECURE_DEV_TOKEN=1 to opt in to"
+            " the well-known local dev token."
+        )
+    elif status == "dev":
+        click.echo(
+            "warning: running with the well-known dev token"
+            " (NERDBOT_INSECURE_DEV_TOKEN=1). Never expose this port."
+        )
     db = os.environ.get("NERDBOT_DB", "nerdbot.db")
     data = os.environ.get("NERDBOT_DATA", ".nerdbot-data")
     click.echo(f"nerdbot: db={db} data={data} host={host} port={port}")

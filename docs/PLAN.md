@@ -338,15 +338,41 @@ and fleet design is a separate proposal. Against "single-user personal
 assistant workspace", the remaining productionization checklist is below.
 
 Before calling the current scope usable-for-daily-duty (owner checklist):
-1. [ ] Create a remote (GitHub private repo) and push — NOTHING is pushed;
-   there is no remote at all today. A local backup exists now (see below).
-2. [ ] Decide deliberate-vs-accident on the dev-default bearer token
-   (long-listed explicit follow-up) — required before any non-loopback use.
-3. [ ] Wire `nerdbot deliveries-sweep` to an OS cron/timer if autonomous
-   delivery matters; otherwise deliveries stay button-driven.
-4. [ ] Live webhook-out check against one real receiver.
-5. [ ] Configure a real model provider (OpenAI-compatible creds) and run one
-   real task — everything so far exercised the loop with mock/scripted chat.
+1. [x] Remote + push: `origin = https://github.com/NalinDalal/nerdbot.git`
+   (2026-10-17; main and origin/main verified identical at `97a432e`,
+   later CODE/doc commits pushed as they land).
+2. [x] Dev-default bearer token DECIDED + shipped fail-closed
+   (2026-10-17): the well-known `dev-token-change-me` token is valid ONLY
+   with explicit `NERDBOT_INSECURE_DEV_TOKEN=1`; a server with neither
+   `NERDBOT_TOKEN` nor the opt-in rejects every request with 503 instead
+   of silently serving a public secret. Tri-state `token_status()`
+   (configured/dev/closed); CLI warns at startup; 5 policy tests
+   (`tests/test_auth_policy.py`).
+3. [x] OS cron wired for delivery recovery (2026-10-17):
+   `*/15 * * * *` runs `nerdbot deliveries-sweep --quiet`, appending to
+   `.nerdbot-data/sweep.log`; manual verification run exited 0 with
+   "0 deliveries, 0 failed". Removal: `crontab -e` and delete the line.
+   Caveat: if macOS denies execution (Full Disk Access prompt), switch
+   the same line to a launchd timer.
+4. [x] Live webhook-out against a real internet receiver (2026-10-17):
+   delivered to webhook.site (uuid cb9ceff6-0b3c…); the receiver logged
+   the POST with `X-Idempotency-Key: ntf_3a48fedc9645` and the exact
+   payload body — transport, allowlist, idempotency, status all true
+   end-to-end. First listing lagged; confirmed on a plain re-read.
+5. [x] Real provider + real tool loop (2026-10-17): local Ollama
+   (`http://127.0.0.1:11434/v1`, `llama3.2:3b`) executed a task through
+   `resolve_run_provider`; transcript shows the REAL model emitting a
+   `run_command` tool call whose subprocess genuinely produced
+   `nerdbot-live-provider-check`, then a second turn: 2 turns, run
+   succeeded, test-log PASSED + transcript artifact persisted. The final
+   assistant message was empty (3B model verbosity quirk), so a larger
+   model is the Everyday driver — the loop itself is verified.
+
+Nothing from this checklist remains. Known Accepted Residuals
+(documented, not scheduled): schedules' due-firing stays trigger-only
+(same OS-cron pattern applies if ever wanted); email/Slack channels are
+stubs (webhook-out is the real channel); DNS time sits outside the fetch
+wall-clock budget; octop-review cosmetics (F4/N2-b) deferred.
 
 Backup taken 2026-10-17: `~/nerdbot-backups/` holds a git bundle + source
 tar of NerdBot @ 7ae4bf8, and read-only preservation bundles of
