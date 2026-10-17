@@ -179,7 +179,6 @@ def deliver_webhook(
         store.set_notification_delivery(conn, notification_id, "queued", attempts,
                                         _err_text(exc))
         next_at = moment + timedelta(seconds=_backoff_delay(attempts))
-        store.set_notification_delivery(conn, notification_id, "queued", attempts)
         store.set_notification_next_attempt(conn, notification_id, next_at)
         refreshed = store.get_notification(conn, notification_id)
         assert refreshed is not None

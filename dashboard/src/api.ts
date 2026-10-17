@@ -177,7 +177,10 @@ export const api = {
     req<{ notifications: Notification[] }>(`/projects/${projectId}/notifications`),
   deliverNotification: (id: string) => post<Notification>(`/notifications/${id}/deliver`),
   unlockNotification: (id: string) => post<{ id: string; locked: boolean }>(`/notifications/${id}/unlock`),
-  sweepWebhooks: () => post<{ fired: Array<Record<string, unknown>> }>("/webhooks/sweep"),
+  sweepWebhooks: () =>
+    post<{ fired: Array<{ id: string; status: string; attempts: number; reclaimed?: boolean; error?: string }> }>(
+      "/webhooks/sweep",
+    ),
   listWebhookTargets: (projectId: string) =>
     req<{ targets: Array<Record<string, unknown>> }>(`/projects/${projectId}/webhook-targets`),
   addWebhookTarget: (projectId: string, url: string) =>

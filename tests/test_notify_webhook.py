@@ -442,7 +442,7 @@ def test_transient_failure_keeps_reason_then_success_clears_it(app_client) -> No
 
         after_fail = notify_mod.deliver_webhook(conn, note.id, transport=_transport(flaky))
         assert after_fail.status == "queued" and after_fail.attempts == 1
-        assert "503" in after_fail.last_error or "busy" in after_fail.last_error
+        assert "transient upstream status 503" in after_fail.last_error
         assert after_fail.next_attempt_at is not None  # waits for the sweep
 
         after_ok = notify_mod.deliver_webhook(

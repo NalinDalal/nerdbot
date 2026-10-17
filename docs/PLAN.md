@@ -225,6 +225,18 @@ What landed:
 6. Gates: pytest 177 passed, ruff clean, mypy strict clean, dashboard vitest
    32 passed, `tsc --noEmit` clean, eslint clean.
 
+OpenCode review (approve-with-followups, no must-fix) — follow-ups landed: (1) redundant duplicate delivery write removed
+from the transient branch (F1); (2) `sweepWebhooks` contract typed so
+`reclaimed`/`error` passthrough is compile-enforced, not mock-only (F2); (3)
+the zero-innerHTML-sinks guarantee is now suite-enforced via
+`dashboard/src/source.test.ts` (+ the `@types/node` devDependency it needs)
+instead of a manual grep (F3); the transient-failure test asserts the exact
+deterministic upstream message (N1). Deferred as cosmetic polish, not
+residual risk: relative formatting/truncation styling for `next_attempt_at`
+and `last_error` cells (F4, N2-b). Note (recorded, not rewritten): fb6d181's
+commit message cites the contract tests and 32-count vitest gates that
+physically landed in d4c6c01 after a missed git add.
+
 ## Milestones (updated)
 
 - [x] Phase 0 — baseline checkpoint (`63ef83c`), provenance, gates green.
