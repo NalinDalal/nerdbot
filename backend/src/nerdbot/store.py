@@ -150,7 +150,8 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 CREATE TABLE IF NOT EXISTS chat_threads (
   id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
-  title TEXT NOT NULL DEFAULT '', provider_id TEXT, created_at TEXT NOT NULL
+  title TEXT NOT NULL DEFAULT '', provider_id TEXT, summary TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS chat_messages (
   id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES chat_threads(id),
@@ -270,6 +271,10 @@ _PHASE6_COLUMNS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
+_PHASE7_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "chat_threads": [("summary", "TEXT NOT NULL DEFAULT ''")],
+}
+
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Idempotent migrations for databases created by older schemas."""
@@ -279,6 +284,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
         **_PHASE4_COLUMNS,
         **_PHASE5_COLUMNS,
         **_PHASE6_COLUMNS,
+        **_PHASE7_COLUMNS,
     }
     for table, columns in phases.items():
         existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -1942,11 +1948,13 @@ HISTORY_PAGE_MAX = 100
 
 
 def _thread_from_row(row: sqlite3.Row) -> ChatThread:
+    keys = row.keys()
     return ChatThread(
         id=row["id"],
         project_id=row["project_id"],
         title=row["title"] or "",
         provider_id=row["provider_id"],
+        summary=row["summary"] if "summary" in keys and row["summary"] else "",
         created_at=datetime.fromisoformat(row["created_at"]),
     )
 
@@ -2016,6 +2024,28 @@ def set_thread_provider(
     thread.provider_id = provider_id
     record_event(conn, thread.project_id, "thread", thread_id, "thread.provider_switched")
     return thread
+
+
+def set_thread_summary(conn: sqlite3.Connection, thread_id: str, summary: str) -> ChatThread:
+    thread = get_thread(conn, thread_id)
+    if thread is None:
+        raise KeyError(f"unknown thread {thread_id}")
+    conn.execute("UPDATE chat_threads SET summary = ? WHERE id = ?", (summary, thread_id))
+    conn.commit()
+    thread.summary = summary
+    record_event(conn, thread.project_id, "thread", thread_id, "thread.summarized")
+    return thread
+
+
+def list_thread_summaries(
+    conn: sqlite3.Connection, project_id: str, exclude_id: str = "", limit: int = 3
+) -> list[ChatThread]:
+    rows = conn.execute(
+        "SELECT * FROM chat_threads WHERE project_id = ? AND id != ? AND summary != ''"
+        " ORDER BY rowid DESC LIMIT ?",
+        (project_id, exclude_id, limit),
+    ).fetchall()
+    return [_thread_from_row(r) for r in rows]
 
 
 def append_message(conn: sqlite3.Connection, thread_id: str, role: str, content: str) -> ChatMessage:

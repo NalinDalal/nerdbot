@@ -217,3 +217,55 @@ def test_history_window_bounded(tmp_path) -> None:
     assert len(user_texts) == chat_mod.HISTORY_WINDOW
     assert user_texts[0] == f"m{10}"
     conn.close()
+
+
+def test_summarize_persists_and_recalls_across_threads(app_client: TestClient) -> None:
+    pid = _project(app_client)
+    _mock_provider(app_client, pid)
+    first = _thread(app_client, pid, title="tea talk")
+    app_client.post(f"/threads/{first}/messages",
+                    json={"role": "user", "content": "i love green tea"}, headers=AUTH)
+    r = app_client.post(f"/threads/{first}/summarize", headers=AUTH)
+    assert r.status_code == 200, r.text
+    assert r.json()["summary"]  # provider-generated, non-empty
+    second = _thread(app_client, pid, title="new topic")
+    r = app_client.post(f"/threads/{second}/chat", json={"content": "what do I like?"},
+                        headers=AUTH)
+    assert r.status_code == 200, r.text
+    cited = [m for m in r.json()["memory_used"] if m["source"] == "thread-summary"]
+    assert len(cited) == 1 and cited[0]["id"] == first
+    view = app_client.get(f"/threads/{second}", headers=AUTH).json()
+    assert any(m["role"] == "assistant" for m in view["messages"])
+
+
+def test_summarize_empty_thread_rejected(app_client: TestClient) -> None:
+    pid = _project(app_client)
+    _mock_provider(app_client, pid)
+    tid = _thread(app_client, pid)
+    r = app_client.post(f"/threads/{tid}/summarize", headers=AUTH)
+    assert r.status_code == 400, r.text
+
+
+def test_summary_migration_on_old_table(tmp_path) -> None:
+    import sqlite3
+
+    db = str(tmp_path / "oldchat.db")
+    raw = sqlite3.connect(db)
+    raw.execute("CREATE TABLE projects (id TEXT PRIMARY KEY, owner TEXT NOT NULL,"
+                " repository TEXT NOT NULL DEFAULT '', config TEXT NOT NULL DEFAULT '{}')")
+    raw.execute("INSERT INTO projects (id, owner) VALUES ('prj_1', 'o')")
+    raw.execute("CREATE TABLE chat_threads (id TEXT PRIMARY KEY, project_id TEXT NOT NULL,"
+                " title TEXT NOT NULL DEFAULT '', provider_id TEXT,"
+                " created_at TEXT NOT NULL)")
+    raw.execute("INSERT INTO chat_threads (id, project_id, title, created_at)"
+                " VALUES ('thr_1', 'prj_1', 't', '2026-01-01T00:00:00+00:00')")
+    raw.commit()
+    raw.close()
+    conn = store.connect(db)  # migration adds summary
+    try:
+        thread = store.get_thread(conn, "thr_1")
+        assert thread is not None and thread.summary == ""
+        updated = store.set_thread_summary(conn, "thr_1", "old topic")
+        assert updated.summary == "old topic"
+    finally:
+        conn.close()

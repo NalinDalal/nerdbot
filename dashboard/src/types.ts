@@ -210,6 +210,7 @@ export interface ChatThread {
   project_id: string;
   title: string;
   provider_id: string | null;
+  summary: string;
   created_at: string;
 }
 

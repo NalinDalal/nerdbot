@@ -1,9 +1,64 @@
 import { useState } from "react";
+import { toast } from "sonner";
 import { api } from "./api";
 import { notifyError } from "./app";
 import type { ChatMessage, ChatThread } from "./types";
 import { EmptyState, ErrorState, LoadingState, ShortId, useAsync } from "./components";
 import { EntityForm } from "./forms";
+
+export function ChatHome({ projects, onOpen }: { projects: string[]; onOpen: (id: string) => void }) {
+  const [projectId, setProjectId] = useState(projects[0] ?? "");
+  const [manualId, setManualId] = useState("");
+  const [activeId, setActiveId] = useState<string | null>(projects[0] ?? null);
+
+  const talk = () => {
+    const trimmed = (manualId.trim() || projectId).trim();
+    if (!trimmed) return;
+    onOpen(trimmed);
+    setProjectId(trimmed);
+    setActiveId(trimmed);
+  };
+
+  return (
+    <div>
+      <h1>Chat</h1>
+      <p className="subtitle">Talk to NerdBot. Pick a project to begin — no setup needed.</p>
+      <div className="row" style={{ marginBottom: 16 }}>
+        <select
+          value={projectId}
+          onChange={(e) => {
+            setProjectId(e.target.value);
+            setManualId("");
+          }}
+          aria-label="Chat project"
+          style={{ maxWidth: 300 }}
+        >
+          <option value="">Select a project…</option>
+          {projects.map((id) => (
+            <option key={id} value={id}>
+              {id}
+            </option>
+          ))}
+        </select>
+        <input
+          value={manualId}
+          onChange={(e) => setManualId(e.target.value)}
+          placeholder="or paste prj_…"
+          aria-label="Project ID"
+          style={{ maxWidth: 260 }}
+        />
+        <button className="primary" onClick={talk}>
+          Talk
+        </button>
+      </div>
+      {activeId ? (
+        <ChatView projectId={activeId} />
+      ) : (
+        <EmptyState title="No project selected" hint="Choose or paste a project ID to start chatting." />
+      )}
+    </div>
+  );
+}
 
 export function ChatView({ projectId }: { projectId: string }) {
   const threads = useAsync(() => api.listThreads(projectId), [projectId]);
@@ -128,6 +183,20 @@ function ThreadPane({
     }
   };
 
+  const summarize = async () => {
+    setBusy(true);
+    try {
+      const updated = await api.summarizeThread(threadId);
+      toast.success("Summary saved");
+      void updated;
+      view.reload();
+    } catch (err) {
+      notifyError(err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div>
       <div className="row" style={{ marginBottom: 12 }}>
@@ -154,7 +223,16 @@ function ThreadPane({
           Stream
         </label>
         <button onClick={view.reload}>Refresh</button>
+        <button onClick={() => void summarize()} disabled={busy}>
+          Summarize thread
+        </button>
       </div>
+      {view.data?.thread.summary ? (
+        <div className="card">
+          <div className="muted" style={{ fontSize: 12 }}>Summary (recalled by other threads)</div>
+          <div>{view.data.thread.summary}</div>
+        </div>
+      ) : null}
       {view.loading ? (
         <LoadingState lines={5} />
       ) : view.error || !view.data ? (

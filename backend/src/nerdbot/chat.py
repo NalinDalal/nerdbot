@@ -87,18 +87,51 @@ def build_messages(
     messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
     memories = recall_context(conn, project_id)
     provenance: list[dict[str, Any]] = []
-    if memories:
-        lines = []
-        for entry in memories:
-            provenance.append(
-                {"id": entry.id, "source": entry.source, "confidence": entry.confidence}
-            )
-            lines.append(f"[{entry.source} · confidence {entry.confidence}] {entry.content}")
+    lines: list[str] = []
+    for entry in memories:
+        provenance.append(
+            {"id": entry.id, "source": entry.source, "confidence": entry.confidence}
+        )
+        lines.append(f"[{entry.source} · confidence {entry.confidence}] {entry.content}")
+    for other in store.list_thread_summaries(conn, project_id, exclude_id=thread.id):
+        provenance.append({"id": other.id, "source": "thread-summary", "confidence": 1.0})
+        title = other.title or other.id
+        lines.append(f"[thread-summary {title}] {other.summary}")
+    if lines:
         messages.append({"role": "system", "content": frame_untrusted("\n".join(lines))})
     history = store.list_messages(conn, thread.id, limit=HISTORY_WINDOW)
     for message in history:
         messages.append({"role": message.role, "content": message.content})
     return messages, provenance
+
+
+def summarize_thread(
+    conn: sqlite3.Connection,
+    thread_id: str,
+    provider: Provider | None = None,
+    transport: httpx.BaseTransport | None = None,
+    max_messages: int = 10,
+) -> ChatThread:
+    """Generate a short summary of recent messages and persist it on the thread."""
+    thread = store.get_thread(conn, thread_id)
+    if thread is None:
+        raise KeyError(f"unknown thread {thread_id}")
+    recent = store.list_messages(conn, thread_id, limit=max_messages)
+    if not recent:
+        raise ValueError("thread has no messages to summarize")
+    if provider is None:
+        provider = resolve_chat_provider(conn, thread.project_id, thread)
+    transcript = "\n".join(f"{m.role}: {m.content[:500]}" for m in recent)
+    prompt = (
+        "Summarize this conversation in two sentences or less. "
+        "Return only the summary.\n\n" + transcript
+    )
+    summary = chat_complete(
+        provider,
+        [{"role": "user", "content": prompt}],
+        transport=transport,
+    ).strip()
+    return store.set_thread_summary(conn, thread_id, summary)
 
 
 def _mock_reply(messages: list[dict[str, Any]]) -> str:

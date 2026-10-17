@@ -3,10 +3,12 @@ import { Toaster, toast } from "sonner";
 import { ApiError, api, getSession, setSession } from "./api";
 import { CapabilitiesView } from "./views-projects";
 import { ProjectDetailView } from "./views-project";
+import { ChatHome } from "./views-chat";
 import { ProjectsView } from "./views-projects";
 import { TaskDetailView } from "./views-task";
 
 export type Route =
+  | { name: "home" }
   | { name: "projects" }
   | { name: "project"; projectId: string }
   | { name: "task"; projectId: string; taskId: string }
@@ -15,6 +17,8 @@ export type Route =
 export function parseHash(): Route {
   const hash = window.location.hash.replace(/^#\/?/, "");
   const parts = hash.split("/").filter(Boolean);
+  if (parts.length === 0) return { name: "home" };
+  if (parts[0] === "projects") return { name: "projects" };
   if (parts[0] === "p" && parts[1] && parts[2] === "t" && parts[3]) {
     return { name: "task", projectId: parts[1], taskId: parts[3] };
   }
@@ -22,7 +26,7 @@ export function parseHash(): Route {
     return { name: "project", projectId: parts[1] };
   }
   if (parts[0] === "capabilities") return { name: "capabilities" };
-  return { name: "projects" };
+  return { name: "home" };
 }
 
 export function navigate(route: string): void {
@@ -59,14 +63,16 @@ export default function App() {
     <div className="layout">
       <aside className="sidebar">
         <div className="brand">
-          NerdBot Ops<small>teammate workspace</small>
+          NerdBot<small>personal assistant</small>
         </div>
         <nav className="nav">
-          {nav("#/", "Projects", route.name === "projects")}
+          {nav("#/", "Chat", route.name === "home")}
+          {nav("#/projects", "Projects", route.name === "projects")}
           {projects.map((id) => (
             <span key={id}>
               {nav(`#/p/${id}`, `· ${id.slice(0, 14)}…`, route.name !== "projects" &&
                 route.name !== "capabilities" &&
+                route.name !== "home" &&
                 "projectId" in route &&
                 route.projectId === id)}
             </span>
@@ -86,6 +92,9 @@ export default function App() {
         </div>
       </aside>
       <main className="main">
+        {route.name === "home" && (
+          <ChatHome projects={projects} onOpen={openProject} />
+        )}
         {route.name === "projects" && <ProjectsView onOpen={openProject} />}
         {route.name === "project" && (
           <ProjectDetailView projectId={route.projectId} onOpenTask={(taskId) => navigate(`#/p/${route.projectId}/t/${taskId}`)} />

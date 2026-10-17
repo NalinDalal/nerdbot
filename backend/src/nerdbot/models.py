@@ -144,6 +144,7 @@ class ChatThread(BaseModel):
     project_id: str
     title: str = ""
     provider_id: str | None = None
+    summary: str = ""
     created_at: datetime = Field(default_factory=_utcnow)
 
 

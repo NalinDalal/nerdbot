@@ -236,6 +236,7 @@ export const api = {
       `/threads/${threadId}/chat`,
       { content },
     ),
+  summarizeThread: (threadId: string) => post<ChatThread>(`/threads/${threadId}/summarize`),
   sendChatStream: (
     threadId: string,
     content: string,

@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -81,6 +82,17 @@ def create_app() -> FastAPI:
         yield
 
     app = FastAPI(title="NerdBot Workspace", lifespan=lifespan)
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:8080",
+            "http://127.0.0.1:8080",
+        ],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     import logging as _logging
 
@@ -252,10 +264,10 @@ def create_app() -> FastAPI:
                 conn,
                 project_id,
                 description=str(body.get("description", "")),
-                owner_teammate_id=body.get("owner_teammate_id"),
+                owner_teammate_id=body.get("owner_teammate_id") or None,
                 dependencies=list(body.get("dependencies", [])),
                 command=str(body.get("command", "")),
-                issue_id=body.get("issue_id"),
+                issue_id=body.get("issue_id") or None,
             )
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1386,6 +1398,23 @@ def create_app() -> FastAPI:
         if isinstance(exc, ProviderRateLimitError):
             return HTTPException(status_code=429, detail=str(exc))
         return HTTPException(status_code=502, detail=str(exc))
+
+    @app.post("/threads/{thread_id}/summarize")
+    def summarize_thread_endpoint(
+        thread_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, _chat_thread_project(conn, thread_id), principal)
+        thread = store.get_thread(conn, thread_id)
+        if thread is None:  # pragma: no cover - raced deletion
+            raise HTTPException(status_code=404, detail="thread not found")
+        try:
+            provider = chat_mod.resolve_chat_provider(conn, thread.project_id, thread)
+            updated = chat_mod.summarize_thread(conn, thread_id, provider=provider)
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return updated.model_dump(mode="json")
 
     @app.post("/threads/{thread_id}/chat")
     def chat_complete_endpoint(

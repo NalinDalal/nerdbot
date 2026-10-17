@@ -324,4 +324,25 @@ describe("views", () => {
       detail: "boom",
     });
   });
+
+  it("thread summarize action", async () => {
+    ok({ id: "thr_1", summary: "tea talk" });
+    const thread = await api.summarizeThread("thr_1");
+    expect(seen[seen.length - 1].url).toBe("http://api:8088/threads/thr_1/summarize");
+    expect(thread.summary).toBe("tea talk");
+  });
+
+  it("home route parses to chat", async () => {
+    vi.stubGlobal("window", { location: { hash: "" } });
+    const { parseHash } = await import("./app");
+    const setHash = (hash: string) => {
+      (window.location as { hash: string }).hash = hash;
+      return parseHash();
+    };
+    expect(setHash("")).toEqual({ name: "home" });
+    expect(setHash("#/")).toEqual({ name: "home" });
+    expect(setHash("#/projects")).toEqual({ name: "projects" });
+    expect(setHash("#/nope")).toEqual({ name: "home" });
+    vi.unstubAllGlobals();
+  });
 });
