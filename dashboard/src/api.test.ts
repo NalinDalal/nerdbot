@@ -196,6 +196,83 @@ describe("views", () => {
     expect(seen[3].url).toBe("http://api:8088/projects/prj_1/webhook-targets");
   });
 
+  it("notifications failure details: last_error, attempts, lock pass through", async () => {
+    ok({
+      notifications: [
+        {
+          id: "ntf_9",
+          channel: "webhook-out",
+          kind: "ping",
+          status: "failed",
+          attempts: 3,
+          next_attempt_at: null,
+          locked: false,
+          locked_at: null,
+          last_error: "FetchTimeoutError: delivery failed after 3 attempts: timeout",
+          created_at: "2026-10-17T00:00:00+00:00",
+        },
+        {
+          id: "ntf_10",
+          channel: "webhook-out",
+          kind: "ping",
+          status: "queued",
+          attempts: 1,
+          next_attempt_at: "2026-10-17T01:00:00+00:00",
+          locked: false,
+          locked_at: null,
+          last_error: "WebhookDeliveryError: upstream rejected (HTTP 503)",
+          created_at: "2026-10-17T00:05:00+00:00",
+        },
+      ],
+    });
+    const view = await api.listNotifications("prj_1");
+    expect(view.notifications[0]).toMatchObject({
+      id: "ntf_9",
+      status: "failed",
+      attempts: 3,
+      last_error: "FetchTimeoutError: delivery failed after 3 attempts: timeout",
+    });
+    expect(view.notifications[1]).toMatchObject({
+      status: "queued",
+      next_attempt_at: "2026-10-17T01:00:00+00:00",
+      last_error: "WebhookDeliveryError: upstream rejected (HTTP 503)",
+    });
+  });
+
+  it("sweep results surface reclaimed failures through the contract", async () => {
+    ok({
+      fired: [
+        { id: "ntf_11", status: "failed", attempts: 3, reclaimed: true },
+        { id: "ntf_12", status: "delivered", attempts: 2 },
+      ],
+    });
+    const view = await api.sweepWebhooks();
+    expect(view.fired[0]).toMatchObject({ reclaimed: true, status: "failed" });
+    expect(view.fired[1]).toMatchObject({ status: "delivered" });
+  });
+
+  it("events feed filters notification delivery transitions", async () => {
+    ok({
+      events: [
+        {
+          id: "evt_1",
+          entity: "notification",
+          entity_id: "ntf_9",
+          event_type: "notification.failed",
+          timestamp: "2026-10-17T00:00:00+00:00",
+        },
+      ],
+    });
+    const view = await api.projectEvents("prj_1", "notification");
+    expect(seen[0].url).toBe(
+      "http://api:8088/projects/prj_1/events?entity=notification",
+    );
+    expect(view.events[0]).toMatchObject({
+      entity: "notification",
+      event_type: "notification.failed",
+    });
+  });
+
   it("issues view + github preview + ingress", async () => {
     ok({ issues: [] });
     await api.listIssues("prj_1");
