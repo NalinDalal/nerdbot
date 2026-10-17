@@ -7,3 +7,7 @@ node_modules/
 dist/
 build/
 .env
+*.db
+*.db-shm
+*.db-wal
+
