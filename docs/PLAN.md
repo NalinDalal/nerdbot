@@ -127,12 +127,22 @@ Owner-selected smallest vertical: validate the product's CENTRAL workflow
 across the real system instead of adding an isolated feature.
 
 Acceptance criteria and actual results (all from
-`tests/test_e2e_github_to_run.py`; no live network — GitHub fetch uses an
-injected `httpx.MockTransport` + fake resolver, provider chat uses an
-injected `MockTransport`, mirroring the existing test seams):
+`tests/test_e2e_github_to_run.py`; no live network — GitHub fetch uses
+host-pinned `check_url` with a fake resolver plus an injected
+`httpx.MockTransport`, and provider chat uses an injected `MockTransport`,
+mirroring the existing test seams):
+
+Known scope limit (review follow-up F1): the fetch leg is invoked as the
+`fetch_github_issue` function rather than `POST /projects/{id}/github/preview`,
+and run/retry legs use `orchestrator.schedule_run`/`retry_task` directly
+rather than `POST /tasks/{id}/runs` and `POST /tasks/{id}/retry`. Those API
+endpoints are thin wrappers over the same functions (error mapping for the
+preview endpoint is covered in `tests/test_github_fetch.py`; a provider
+run via the API route is not transport-injectable and stays a documented
+limitation, not a secret gap):
 
 1. Chain works: preview (reduced to fetch against api.github.com with the
-   pinned-transport path) → `suggested_ingest` → `POST /projects/{id}/issues`
+   host-pinned `check_url` + fake resolver and injected mock transport) → `suggested_ingest` → `POST /projects/{id}/issues`
    → `POST /projects/{id}/tasks` with `issue_id` → run through the real
    OpenAI-compatible tool loop (scripted mock upstream) → run + task +
    `test-log` + `transcript` artifacts persisted with files on disk.
@@ -188,8 +198,10 @@ and the parser assumptions need re-verification offline first.
   wall-clock budgets; credential-free DuckDuckGo Lite search via `search.py`;
   post-review fixes applied — see ADR 0007 item 7; DNS-time residual documented).
 - [x] Phase 4 — durable integrations: GitHub fetch + outbox delivery + webhook-out
-  channel (all three implemented, tested, reviewed; see the four-state table
-  below for what is operationally enabled vs manual).
+  channel (all three implemented, tested, reviewed; the four-state table below
+  records what is operationally enabled vs manual. Marked here with the
+  verification that happened alongside the ops slice `ed1292c`, not from the
+  Phase 5(b) diff itself).
 - [x] Phase 5(b) — GitHub ingest → task → run end-to-end validation: full central
   workflow chained across API → execution → persistence → inspectable state
   (`tests/test_e2e_github_to_run.py`, 4 scenarios: success, invalid repository
