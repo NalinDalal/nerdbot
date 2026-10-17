@@ -1867,11 +1867,28 @@ def claim_delivery_lock(
     return cursor.rowcount == 1
 
 
-def release_delivery_lock(conn: sqlite3.Connection, notification_id: str) -> None:
-    conn.execute(
-        "UPDATE notifications SET locked = 0, locked_at = NULL WHERE id = ?",
-        (notification_id,),
-    )
+def release_delivery_lock(
+    conn: sqlite3.Connection, notification_id: str, locked_at: datetime | None = None
+) -> None:
+    """Clear the delivery lock.
+
+    With ``locked_at`` given, this is a lease compare-and-set: the lock is
+    cleared only when it still carries that exact claim stamp. A stale
+    worker finishing late can therefore never release a newer claimant's
+    lease. The manual/unlock path omits the stamp by design. The CAS keeps
+    at-least-once semantics; receivers dedupe on the idempotency key.
+    """
+    if locked_at is None:
+        conn.execute(
+            "UPDATE notifications SET locked = 0, locked_at = NULL WHERE id = ?",
+            (notification_id,),
+        )
+    else:
+        conn.execute(
+            "UPDATE notifications SET locked = 0, locked_at = NULL"
+            " WHERE id = ? AND locked_at = ?",
+            (notification_id, locked_at.isoformat()),
+        )
     conn.commit()
 
 
@@ -1881,11 +1898,14 @@ def stale_locked_deliveries(
     """Locked ``sending`` webhook rows whose lease started before cutoff.
 
     These are abandoned claims: the claiming process died mid-send and its
-    ``finally`` release never ran.
+    ``finally`` release never ran. Rows claimed before the lease upgrade
+    (``locked_at IS NULL``) are treated as already expired, and the
+    claim-but-not-yet-sending window is included so no lock can stick.
     """
     rows = conn.execute(
         "SELECT * FROM notifications WHERE channel = 'webhook-out' AND locked = 1"
-        " AND status = 'sending' AND locked_at IS NOT NULL AND locked_at <= ?"
+        " AND status IN ('sending', 'queued')"
+        " AND (locked_at IS NULL OR locked_at <= ?)"
         " ORDER BY locked_at, rowid",
         (cutoff.isoformat(),),
     ).fetchall()

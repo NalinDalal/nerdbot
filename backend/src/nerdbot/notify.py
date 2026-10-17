@@ -30,9 +30,11 @@ BACKOFF_SECONDS = (1.0, 2.0)
 RESPONSE_MAX_BYTES = 262_144
 REQUEST_TIMEOUT_S = 15.0
 # A held lock leaks only if the process dies mid-send (the ``finally``
-# release covers every in-process path). The lease must comfortably exceed
-# one pinned-exchange timeout (REQUEST_TIMEOUT_S) plus scheduler slack.
-LOCK_LEASE_S = 60.0
+# release covers every in-process path). Size the lease from the real
+# worst-case attempt bound — one attempt is up to
+# (DEFAULT_MAX_REDIRECTS + 1) pinned exchanges, each REQUEST_TIMEOUT_S,
+# plus unbudgeted per-hop DNS — not from a single exchange.
+LOCK_LEASE_S = REQUEST_TIMEOUT_S * (fetch_mod.DEFAULT_MAX_REDIRECTS + 1) + 30.0
 
 
 class ChannelNotConfiguredError(RuntimeError):
@@ -167,7 +169,9 @@ def deliver_webhook(
         assert refreshed is not None
         return refreshed
     finally:
-        store.release_delivery_lock(conn, notification_id)
+        # Lease CAS: only clear the lock we ourselves claimed (moment is
+        # the stamp deliver_webhook passed to claim_delivery_lock).
+        store.release_delivery_lock(conn, notification_id, locked_at=moment)
     store.set_notification_delivery(conn, notification_id, "delivered", attempts)
     store.record_event(conn, note.project_id, "notification", notification_id,
                        "notification.delivered")

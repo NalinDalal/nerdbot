@@ -162,6 +162,7 @@ export interface Notification {
   attempts: number;
   next_attempt_at: string | null;
   locked: boolean;
+  locked_at: string | null;
   created_at: string;
 }
 

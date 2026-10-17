@@ -324,6 +324,77 @@ def test_abandoned_lock_at_max_attempts_fails(app_client: TestClient) -> None:
     conn.close()
 
 
+def test_claim_crash_window_reclaimed(app_client: TestClient) -> None:
+    # Crash between claim and the sending write: row is locked + queued
+    # with attempts unincremented. The sweep must still reclaim it.
+    from datetime import UTC, datetime, timedelta
+
+    pid = _project(app_client)
+    app_client.post(f"/projects/{pid}/webhook-targets", json={"url": TARGET}, headers=AUTH)
+    conn = store.connect(os.environ["NERDBOT_DB"])
+    note = store.create_notification(conn, pid, "webhook-out", "claim-crash")
+    crashed_at = datetime(2026, 1, 1, tzinfo=UTC)
+    assert store.claim_delivery_lock(conn, note.id, now=crashed_at) is True
+    conn.execute("UPDATE notifications SET status = 'queued' WHERE id = ?", (note.id,))
+    conn.commit()
+
+    def never(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="ok")
+
+    gone = crashed_at + timedelta(seconds=notify_mod.LOCK_LEASE_S + 1)
+    results = notify_mod.sweep_due_deliveries(conn, now=gone, transport=_transport(never))
+    assert results == [{"id": note.id, "status": "queued", "attempts": 0,
+                        "reclaimed": True}]
+    stored = store.get_notification(conn, note.id)
+    assert stored is not None and stored.locked is False and stored.attempts == 0
+    assert [e.event_type for e in store.list_events(conn, pid)].count(
+        "notification.reclaimed") == 1
+    conn.close()
+
+
+def test_legacy_locked_without_stamp_reclaimed(app_client: TestClient) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    pid = _project(app_client)
+    app_client.post(f"/projects/{pid}/webhook-targets", json={"url": TARGET}, headers=AUTH)
+    conn = store.connect(os.environ["NERDBOT_DB"])
+    note = store.create_notification(conn, pid, "webhook-out", "legacy")
+    # Pre-upgrade row: locked, sending, but no lease stamp at all.
+    conn.execute("UPDATE notifications SET locked = 1, status = 'sending',"
+                 " attempts = 1 WHERE id = ?", (note.id,))
+    conn.commit()
+
+    def never(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="ok")
+
+    gone = datetime.now(UTC) + timedelta(seconds=notify_mod.LOCK_LEASE_S + 1)
+    results = notify_mod.sweep_due_deliveries(conn, now=gone, transport=_transport(never))
+    assert results == [{"id": note.id, "status": "queued", "attempts": 1,
+                        "reclaimed": True}]
+    conn.close()
+
+
+def test_release_is_lease_compare_and_set(app_client: TestClient) -> None:
+    from datetime import UTC, datetime
+
+    pid = _project(app_client)
+    conn = store.connect(os.environ["NERDBOT_DB"])
+    note = store.create_notification(conn, pid, "webhook-out", "cas")
+    t1 = datetime(2026, 1, 1, tzinfo=UTC)
+    t2 = datetime(2026, 1, 1, 0, 1, tzinfo=UTC)
+    assert store.claim_delivery_lock(conn, note.id, now=t1) is True
+    # Stale finisher late by one full lease: armed with the OLD stamp.
+    store.release_delivery_lock(conn, note.id)          # real reclaim (override)
+    assert store.claim_delivery_lock(conn, note.id, now=t2) is True  # new claimant
+    store.release_delivery_lock(conn, note.id, locked_at=t1)  # stale finally (CAS)
+    still = store.get_notification(conn, note.id)
+    assert still is not None and still.locked is True  # newer claim survives
+    store.release_delivery_lock(conn, note.id, locked_at=t2)  # correct finisher
+    done = store.get_notification(conn, note.id)
+    assert done is not None and done.locked is False and done.locked_at is None
+    conn.close()
+
+
 def test_locked_at_migration_on_old_table(tmp_path) -> None:
 
     import sqlite3 as _sqlite3

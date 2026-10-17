@@ -42,14 +42,20 @@ else is a capability flag (see `docs/integration-adapters.md`).
 - `outbox` channel persists redacted notification rows. `email`, `slack`,
   `webhook-out` raise `ChannelNotConfiguredError` (400 with stub message).
 - `webhook-out` delivery claims a lease-stamped lock (`locked_at`); a
-  lock that outlives `LOCK_LEASE_S` (60s, well beyond one pinned-exchange
-  timeout) is reclaimed by the due sweep: re-queue with backoff, or
-  terminal `failed` once `MAX_DELIVERY_ATTEMPTS` is exhausted. Every
-  reclaim records `notification.reclaimed` (or `notification.failed`).
-  Semantics are at-least-once: a crash between the POST and the
-  delivered write can redeliver; receivers dedupe on the
-  `X-Idempotency-Key`/payload id. Manual `POST /notifications/{id}/unlock`
-  remains available.
+  lock that outlives `LOCK_LEASE_S`
+  (one full attempt bound: `(redirects + 1) × request timeout` + slack)
+  is reclaimed by the due sweep: re-queue with backoff, or terminal
+  `failed` once `MAX_DELIVERY_ATTEMPTS` is exhausted. Every reclaim
+  records `notification.reclaimed` (or `notification.failed`). Release is
+  a lease compare-and-set, so a stale worker finishing late cannot clear
+  a newer claimant's lock; the manual `POST /notifications/{id}/unlock`
+  stays an unconditional admin override. Recovery happens when the sweep
+  runs (`POST /webhooks/sweep`) — there is no background trigger; wire
+  the sweep into a cron/scheduler cadence if you want unattended
+  recovery. Semantics are at-least-once: a crash between the POST and
+  the delivered write can redeliver; receivers dedupe on the
+  `X-Idempotency-Key`/payload id. The sweep response mixes delivery
+  outcomes with reclaim entries (`"reclaimed": true`).
 
 ## Backup (`backup.py`)
 
