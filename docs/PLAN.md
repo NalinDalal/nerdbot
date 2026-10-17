@@ -76,9 +76,14 @@ absent.
 - B. **Durable outbox — DONE, one residual to verify/harden.** Delivery
   states + locked claims (`b14d748`), backoff via `next_attempt_at`,
   `MAX_DELIVERY_ATTEMPTS` terminal failure, due sweep (`65bf04a`),
-  failure events. Residual to verify: **stale delivery lock after a
-  crash mid-send** — confirm whether recovery clears `locked=1` rows on
-  restart or sweeps them after a lease timeout; add a tested fix if not.
+  failure events. In-process paths release the lock in a `finally`
+  (notify.py `deliver_webhook`) and owner can `POST /notifications/{id}/unlock`.
+  Verified residual: **crash mid-send** leaves `locked=1`/`sending` with no
+  restart sweep or lease expiry — stuck until manual unlock. Slice B':
+  add a lease-expiry rule (e.g. `locked=1` AND `status='sending'` AND
+  `next_attempt_at`/lock age past a threshold → sweep reclaims or fails
+  it, with an audit event) plus tests proving an abandoned lock is
+  recovered without double-delivery while a live send is flagged.
 - C. **One real outbound channel — DONE (webhook-out).** Allowlisted
   HTTPS targets, SSRF-guarded via the same pinned transport, idempotent
   re-send payloads (receiver dedupes on notification id). No email/Slack
