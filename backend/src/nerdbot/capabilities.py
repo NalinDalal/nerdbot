@@ -92,7 +92,12 @@ CAPABILITIES: list[dict[str, Any]] = [
     {
         "id": "tools.fetch_url",
         "status": "ready",
-        "description": "SSRF-guarded public-URL fetch for the agent loop; fetch-only, not web search.",
+        "description": "SSRF-guarded public-URL fetch for the agent loop.",
+    },
+    {
+        "id": "tools.web_search",
+        "status": "ready",
+        "description": "Credential-free DuckDuckGo Lite search for the agent loop; bounded results; rides the SSRF-pinned fetch transport.",
     },
     {
         "id": "backup.manifest",

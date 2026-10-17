@@ -88,6 +88,18 @@ def tool_schemas() -> list[dict[str, Any]]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": "Search the public web (credential-free DuckDuckGo Lite).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            },
+        },
     ]
 
 
@@ -157,6 +169,13 @@ def execute_tool(
         if not isinstance(url, str):
             raise ValueError("fetch_url requires a url string")
         return truncate_output(fetch_mod.fetch_url_text(url, transport=transport))
+    if name == "web_search":
+        from . import search as search_mod
+
+        query = arguments.get("query", "")
+        if not isinstance(query, str):
+            raise ValueError("web_search requires a query string")
+        return truncate_output(search_mod.tool_payload(query, transport=transport))
     raise ValueError(f"unknown tool: {name!r}")
 
 

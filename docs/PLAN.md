@@ -50,17 +50,16 @@ superseded by the record below and the git log.
   (`449891c`), durable delivery states with locked claims and retry sweeps.
 - [x] Dashboard: read-mostly ops UI consuming the API (`135652c`) with a
   chat home view (`2a239eb`) — strictly behind bearer auth.
-- Remaining Phase 3 item: web search provider (folded out of ADR 0007 scope
-  while fetch shipped first). Smallest open slice: credential-free bounded
-  search through `PinnedTransport` (provider to be selected with owner),
-  typed provider errors, bounded results. Not started.
+- Remaining Phase 3 item: none — web search now implemented
+  (credential-free DuckDuckGo Lite via `search.py`, ADR 0007 item 6,
+  owner-selected). `tools.web_search` capability `ready`.
 - Phase 4 remaining: per the prompt, the outbox/GitHub/webhook work that
   exists is the *slice* that proved the pattern; the remaining durable-
   delivery hardening (retry/backoff limits visibility, idempotent delivery
   keys, failure surfaces) is tracked as follow-up in
   `docs/phase4-architecture.md` review notes when the search slice closes.
-- Next action: owner selects the search slice, then OpenCode reviews the
-  Phase 3 diff before Phase 4 continuation.
+- Next action: OpenCode reviews the Phase 3 diff (fetch + search +
+  transport hardening) before any Phase 4 continuation.
 
 ## Milestones (updated)
 
@@ -68,8 +67,8 @@ superseded by the record below and the git log.
 - [x] Phase 1 — real provider execution + minimal tool-call loop (`82edd35`, ADR 0005).
 - [x] Phase 2 — personal-use security: credential encryption, approval hygiene,
   manifest import (`cfea25d`, `9b35cd8`, ADR 0006).
-- [ ] Phase 3 — web research with SSRF hardening (fetch complete + transport-pinned
-  + budgeted; search provider still open).
+- [x] Phase 3 — web research with SSRF hardening (fetch + transport pinning +
+  wall-clock budgets; credential-free DuckDuckGo Lite search via `search.py`).
 - [ ] Phase 4 — durable integrations (one real channel, real GitHub fetch, outbox delivery).
 - [ ] Phase 5+ — productivity integrations, knowledge, MCP/delegation, automation, usability.
 

@@ -50,6 +50,10 @@ class FetchTimeoutError(RuntimeError):
 class FetchProtocolError(RuntimeError):
     """Unreachable host, bad status, too many redirects, or bad payload."""
 
+    def __init__(self, message: str = "", status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
+
 
 @dataclass(frozen=True)
 class FetchPolicy:
@@ -179,7 +183,10 @@ def fetch_url_text(
                 current = check_url(urljoin(current, location), active, resolver)
                 continue
             if response.status_code != 200:
-                raise FetchProtocolError(f"unexpected status (HTTP {response.status_code})")
+                raise FetchProtocolError(
+                    f"unexpected status (HTTP {response.status_code})",
+                    status=response.status_code,
+                )
             length = response.headers.get("content-length")
             if length is not None:
                 try:

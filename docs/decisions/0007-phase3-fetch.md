@@ -39,16 +39,22 @@ network access.
    version-dependent stdlib semantics. Non-canonical IPv4 encodings
    (hex/decimal/octal prefixes) normalize at resolution and are blocked by
    the all-pass rule; pinned by tests.
+6. **`search.py`: credential-free DuckDuckGo Lite search** (owner-selected
+   2026-10-17). `GET https://lite.duckduckgo.com/lite/?q=<urlencoded query>`:
+   rides `fetch.fetch_url_text` (pinned transport, bounded budget, no
+   credentials/cookies ever sent); defensive HTMLParser for result rows
+   (max 5 default, hard cap 10, ≤400-char query); `uddg` redirect wrappers
+   unwrapped; typed `SearchProviderError` for rate limits (HTTP 429 via
+   `FetchProtocolError.status`), provider failures, and timeouts; empty
+   result pages are valid zero results, never fabricated. Tool contract
+   identical to `fetch_url`: bounded output, untrusted framing in the loop.
 
 ## Consequences
 
-- Model can now call `fetch_url` within existing turn/timeout budgets.
-- `tools.fetch_url` capability is `ready`; web search (ranking/snippets)
-  remains absent — this is fetch-only, not search. A bounded, credential-
-  free search provider is the remaining Phase 3 item and needs an owner
-  decision (e.g. DuckDuckGo HTML/lite endpoint through the same
-  `PinnedTransport` + policy, bounded result count, no credentials, typed
-  errors for provider failures/rate limits) before Phase 4 slices start.
+- Model can now call `fetch_url` and `web_search` within existing
+  turn/timeout budgets; `tools.web_search` is capability `ready`.
 - Known accepted limitations (documented, fail-safe): no content-type
   filter (binary is bounded-text-decoded); zone-ID IPv6 literals fail
-  closed via resolver/protocol errors rather than an explicit allowlist.
+  closed via resolver/protocol errors rather than an explicit allowlist;
+  the Lite HTML structure assumption is defensive — a page that parses to
+  zero anchors is a legitimate empty search, never a fabricated success.

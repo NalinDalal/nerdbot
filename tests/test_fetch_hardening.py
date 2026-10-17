@@ -165,7 +165,7 @@ def test_timeout_and_status() -> None:
 
 def test_fetch_tool_dispatch_and_bounds(tmp_path) -> None:
     names = [t["function"]["name"] for t in agent_tools.tool_schemas()]
-    assert names == ["run_command", "read_file", "write_file", "fetch_url"]
+    assert names == ["run_command", "read_file", "write_file", "fetch_url", "web_search"]
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, text="z" * 9000)
