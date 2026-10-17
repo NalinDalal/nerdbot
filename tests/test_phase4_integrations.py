@@ -62,11 +62,13 @@ def test_provider_lifecycle_and_redaction(app_client: TestClient, monkeypatch) -
         headers=AUTH,
     )
     assert r.status_code == 200, r.text
-    assert r.json()["config"] == {"api_key": "[redacted]", "region": "us"}
+    # S1 BYOK: secret config values are fingerprinted ("****" for short keys);
+    # neither plaintext ("SECRET") nor the stored ciphertext is served.
+    assert r.json()["config"] == {"api_key": "****", "region": "us"}
     prv = r.json()["id"]
 
     r = app_client.get(f"/providers/{prv}", headers=AUTH)
-    assert r.json()["config"]["api_key"] == "[redacted]"
+    assert r.json()["config"]["api_key"] == "****"
 
     r = app_client.post(f"/projects/{pid}/providers", json={"kind": "bogus"}, headers=AUTH)
     assert r.status_code == 400

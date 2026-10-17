@@ -21,6 +21,8 @@ from . import knowledge as knowledge_mod
 from . import metrics as metrics_mod
 from . import notify as notify_mod
 from . import orchestrator, store
+from . import providers as providers_impl
+from . import secrets as secrets_mod
 from . import workspace as workspace_mgr
 from .auth import PRINCIPAL, expected_token, principal_from_header, require_project_owner
 from .integrations.github import (
@@ -139,6 +141,7 @@ def create_app() -> FastAPI:
             "status": "ok",
             "version": "0.1.0",
             "db": "ok" if db_ok else "error",
+            "secret_key": "configured" if secrets_mod.keyring() else "absent",
             "restarts": restarts,
         }
 
@@ -885,7 +888,20 @@ def create_app() -> FastAPI:
 
     def _provider_public(provider: Provider) -> dict[str, Any]:
         dumped = provider.model_dump(mode="json")
-        dumped["config"] = backup_mod.redact_provider_config(provider.config)
+        # S1 BYOK: secret-shaped values surface as fingerprints only. Neither
+        # the plaintext of a legacy inline key nor cascading ciphertext ever
+        # leaves this function.
+        masked: dict[str, Any] = {}
+        for key, value in provider.config.items():
+            if (
+                secrets_mod.is_secret_key(key)
+                and isinstance(value, str)
+                and value.strip()
+            ):
+                masked[key] = secrets_mod.mask_stored(value)
+            else:
+                masked[key] = value
+        dumped["config"] = masked
         return dumped
 
     @app.post("/projects/{project_id}/providers")
@@ -947,8 +963,69 @@ def create_app() -> FastAPI:
         provider = store.set_provider_status(conn, provider_id, ProviderStatus.DISABLED)
         return _provider_public(provider)
 
-    # -- Phase 4: knowledge ----------------------------------------------------
+    # -- S1 BYOK: partial provider update + model catalog ----------------------
 
+    @app.patch("/providers/{provider_id}")
+    def update_provider(
+        provider_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        provider = store.get_provider(conn, provider_id)
+        if provider is None:
+            raise HTTPException(status_code=404, detail="provider not found")
+        require_project_owner(conn, provider.project_id, principal)
+        name = body.get("name")
+        status_raw = body.get("status")
+        status: ProviderStatus | None = None
+        if status_raw is not None:
+            try:
+                status = ProviderStatus(str(status_raw))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="invalid provider status") from exc
+        config_raw = body.get("config")
+        if config_raw is not None and not isinstance(config_raw, dict):
+            raise HTTPException(status_code=400, detail="config must be an object")
+        try:
+            updated = store.update_provider(
+                conn,
+                provider_id,
+                name=None if name is None else str(name),
+                config=None if config_raw is None else dict(config_raw),
+                status=status,
+            )
+        except secrets_mod.SecretKeyMissingError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{exc} BYOK keys cannot be saved in the clear: start the server with"
+                " NERDBOT_SECRET_KEY (a Fernet key) and retry.",
+            ) from exc
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _provider_public(updated)
+
+    @app.get("/providers/{provider_id}/models")
+    def provider_models(
+        provider_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        provider = store.get_provider(conn, provider_id)
+        if provider is None:
+            raise HTTPException(status_code=404, detail="provider not found")
+        require_project_owner(conn, provider.project_id, principal)
+        try:
+            models = providers_impl.list_upstream_models(provider)
+        except (providers_impl.ProviderConfigurationError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except providers_impl.ProviderNetworkError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except Exception as exc:  # pragma: no cover - defensive for secret errors
+            raise HTTPException(status_code=502, detail=f"model catalog failed: {exc}") from exc
+        return {"models": models}
+
+    # -- Phase 4: knowledge ----------------------------------------------------
     @app.post("/projects/{project_id}/knowledge")
     def ingest_knowledge(
         project_id: str,

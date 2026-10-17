@@ -101,3 +101,26 @@ def decrypt_secret(blob: str) -> str:
 
 def is_secret_key(name: str) -> bool:
     return name.lower() in SECRET_KEYS
+
+
+def mask(plaintext: str) -> str:
+    """Human-facing fingerprint of a secret; reveals at most the last 4 chars."""
+    if not plaintext:
+        return "[unset]"
+    if len(plaintext) < 8:
+        return "****"
+    return f"****{plaintext[-4:]}"
+
+
+def mask_stored(value: str) -> str:
+    """Fingerprint for a stored secret value (ciphertext or legacy plaintext).
+
+    Undecryptable ciphertext masks as ``[encrypted]`` — never an error and
+    never a partial reveal.
+    """
+    if is_encrypted(value):
+        try:
+            return mask(decrypt_secret(value))
+        except SecretDecryptError:
+            return "[encrypted]"
+    return mask(value)

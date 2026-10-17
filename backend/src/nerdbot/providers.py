@@ -60,6 +60,10 @@ class ProviderProtocolError(RuntimeError):
     """Malformed provider response or unexpected HTTP status."""
 
 
+class ProviderNetworkError(RuntimeError):
+    """Transport-level failure reaching the provider (unreachable / bad body)."""
+
+
 class ProviderToolError(RuntimeError):
     """A tool call failed repeatedly inside the bounded loop."""
 
@@ -339,6 +343,49 @@ def adapter_for_provider(provider: Provider | None) -> RuntimeAdapter:
     return OpenAICompatibleAdapter(
         {k: v for k, v in provider.config.items() if isinstance(v, object)}
     )
+
+
+def list_upstream_models(
+    provider: Provider, transport: httpx.BaseTransport | None = None
+) -> list[str]:
+    """Fetch the model catalog from an openai-compatible provider.
+
+    Tolerant parse: any ``{"data": [...]}`` or bare list with ``id`` strings
+    is accepted; entries without ids are ignored. Returns a sorted, deduped
+    list of model ids. Transport is injectable for tests (no live network).
+    """
+    if provider.kind is not ProviderKind.OPENAI_COMPATIBLE:
+        raise ProviderConfigurationError("model catalog requires an openai-compatible provider")
+    base_url = provider.config.get("base_url", "")
+    if not isinstance(base_url, str) or not base_url.strip():
+        raise ProviderConfigurationError("provider has no base_url to list models from")
+    api_key = resolve_api_key(provider.config)
+    if not api_key:
+        raise ProviderConfigurationError("provider has no usable api key; save one in Settings")
+    url = base_url.rstrip("/") + "/models"
+    try:
+        with httpx.Client(timeout=15.0, transport=transport) as client:
+            resp = client.get(url, headers={"Authorization": f"Bearer {api_key}"})
+    except httpx.TransportError as exc:
+        raise ProviderNetworkError(f"model catalog unreachable: {exc}") from exc
+    if resp.status_code != 200:
+        raise ProviderNetworkError(
+            f"model catalog request failed: upstream returned {resp.status_code}"
+        )
+    try:
+        payload = resp.json()
+    except ValueError as exc:
+        raise ProviderNetworkError("model catalog returned a non-JSON body") from exc
+    entries: list[Any] = []
+    if isinstance(payload, dict) and isinstance(payload.get("data"), list):
+        entries = payload["data"]
+    elif isinstance(payload, list):
+        entries = payload
+    ids: set[str] = set()
+    for entry in entries:
+        if isinstance(entry, dict) and isinstance(entry.get("id"), str) and entry["id"].strip():
+            ids.add(entry["id"].strip())
+    return sorted(ids)
 
 
 def resolve_run_provider(

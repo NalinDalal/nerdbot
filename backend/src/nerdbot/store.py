@@ -1485,6 +1485,43 @@ def get_provider(conn: sqlite3.Connection, provider_id: str) -> Provider | None:
     return _provider_from_row(row)
 
 
+def update_provider(
+    conn: sqlite3.Connection,
+    provider_id: str,
+    *,
+    name: str | None = None,
+    config: dict[str, Any] | None = None,
+    status: ProviderStatus | None = None,
+) -> Provider:
+    """Partial provider update (BYOK slice S1). ``config`` REPLACES only the
+    secret-bearing keys it carries onto the stored config, then re-encrypts
+    the whole thing via ``encrypt_provider_config``: plaintext secret values
+    fail closed without a runtime key, ciphertext envelopes are verified,
+    plain keys (base_url, model, api_key_env) pass through untouched."""
+    current = get_provider(conn, provider_id)
+    if current is None:
+        raise KeyError(f"unknown provider {provider_id}")
+    new_name = current.name if name is None else name
+    new_status = current.status if status is None else status
+    if config is None:
+        stored_config = current.config
+    else:
+        merged = dict(current.config)
+        merged.update(config)
+        stored_config = encrypt_provider_config(merged)
+    conn.execute(
+        "UPDATE providers SET name = ?, config = ?, status = ? WHERE id = ?",
+        (new_name, json.dumps(stored_config), new_status.value, provider_id),
+    )
+    conn.commit()
+    record_event(
+        conn, current.project_id, "provider", provider_id, "provider.updated"
+    )
+    updated = get_provider(conn, provider_id)
+    assert updated is not None
+    return updated
+
+
 def list_providers(conn: sqlite3.Connection, project_id: str) -> list[Provider]:
     rows = conn.execute(
         "SELECT * FROM providers WHERE project_id = ? ORDER BY rowid", (project_id,)

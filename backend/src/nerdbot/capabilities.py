@@ -117,7 +117,7 @@ CAPABILITIES: list[dict[str, Any]] = [
     {
         "id": "secrets.keyless-dev",
         "status": "ready",
-        "description": "Keyless local-dev allowed only for non-secret configs; secret writes require NERDBOT_SECRET_KEY, stored secrets fail closed without it.",
+        "description": "Keyless local-dev allowed only for non-secret configs; secret writes (BYOK api keys) fail closed without NERDBOT_SECRET_KEY and are always stored Fernet-encrypted.",
     },
     {
         "id": "database.postgres",
