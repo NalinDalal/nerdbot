@@ -184,6 +184,16 @@ export a repo-scoped token and pass ``token_env="GH_TOKEN"``:
     print(fetch_github_issue("owner/repo", 1, token_env="GH_TOKEN"))
     PY
 
+SMOKE OUTCOME (2026-10-17, executed): PASSED on first attempt.
+- `fetch_github_issue("psf/requests", 1)` → real api.github.com through the
+  pinned transport; returned "Cookie support?", `external_id == psf/requests#1`,
+  source/state/labels as expected, `authenticated == False`. Parser shape
+  holds — no drift between the offline assumptions and the real service.
+- Negative path: `psf/does-not-exist-zz#1` → typed `GitHubNotFoundError`,
+  fail-closed as designed.
+- Authenticated mode (GH_TOKEN) still unexercised — no token available; the
+  documented `token_env` path remains covered by tests.
+
 Expected: printed dict with `suggested_ingest.external_id == "owner/repo#1"`.
 If the fetch raises `GitHubProtocolError`, the real HTML/JSON shape drifted
 and the parser assumptions need re-verification offline first.
@@ -309,3 +319,37 @@ Inspected: `providers.py` (dispatch + refusal stub), `runtime.py`
   documented procedure before relying on real fetch. Owner selects the next
   vertical; fleet-of-bots design (isolation, delegation, memory, scheduling
   acceptance criteria) is a separate proposal, not this roadmap.
+
+## Product standing (2026-10-17, three definitions of complete)
+
+IMPLEMENTATION COMPLETE: yes — all currently scoped milestones (Phase 0–4,
+5(b), 5(c), N2) implemented, tested, reviewed. Gates at 7ae4bf8: pytest 177,
+vitest 33, ruff/mypy strict/tsc/eslint clean.
+
+OPERATIONALLY VERIFIED: now yes for GitHub fetch (live smoke passed 2026-10-17
+above; negative path fail-closed confirmed). Still NOT verified live:
+webhook-out against a real receiver, authenticated GitHub mode, and a real
+model provider run — each needs owner-controlled credentials/endpoints.
+
+PRODUCT COMPLETE: owner decision. Against the ORIGINAL vision (fleet of bots
+with per-bot Docker sandboxes, persistent memory, delegation, scheduling),
+NerdBot is deliberately NOT feature-complete — those were explicitly descope-,
+and fleet design is a separate proposal. Against "single-user personal
+assistant workspace", the remaining productionization checklist is below.
+
+Before calling the current scope usable-for-daily-duty (owner checklist):
+1. [ ] Create a remote (GitHub private repo) and push — NOTHING is pushed;
+   there is no remote at all today. A local backup exists now (see below).
+2. [ ] Decide deliberate-vs-accident on the dev-default bearer token
+   (long-listed explicit follow-up) — required before any non-loopback use.
+3. [ ] Wire `nerdbot deliveries-sweep` to an OS cron/timer if autonomous
+   delivery matters; otherwise deliveries stay button-driven.
+4. [ ] Live webhook-out check against one real receiver.
+5. [ ] Configure a real model provider (OpenAI-compatible creds) and run one
+   real task — everything so far exercised the loop with mock/scripted chat.
+
+Backup taken 2026-10-17: `~/nerdbot-backups/` holds a git bundle + source
+tar of NerdBot @ 7ae4bf8, and read-only preservation bundles of
+ai-teammates (6bea24c), octop (ecec9f70), odysseus (c3819e3c). See
+`~/nerdbot-backups/MANIFEST.txt`. Nothing deleted; elimination decisions
+and pushes remain with the owner per the standing direction.
