@@ -48,6 +48,22 @@ network access.
    `FetchProtocolError.status`), provider failures, and timeouts; empty
    result pages are valid zero results, never fabricated. Tool contract
    identical to `fetch_url`: bounded output, untrusted framing in the loop.
+7. **Post-review fixes** (OpenCode security review, 2026-10-17):
+   - `SearchProviderError` re-parented to `ValueError` so the agent loop
+     treats rate limits/failures as recoverable tool error text instead of
+     aborting the run (loop-level test proves a 429 completes the run).
+   - NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`) embedded IPv4 targets
+     are classified by their IPv4 half; trailing-dot FQDNs are normalized
+     before the local-host gate; DDG unwrap requires exact host match.
+   - Response header block capped (`HEADERS_MAX_BYTES` = 128KB) in the
+     pinned path — per-line caps exist in http.client, total cap added.
+   - Whole-fetch budget re-checked AFTER each response, so budget
+     expiration during the final response still aborts the fetch.
+   - Accepted residual (documented): DNS resolution time itself remains
+     outside the wall-clock budget (`getaddrinfo` has no deadline on this
+     platform); worst-case total overshoot ≈ one resolver timeout × hops
+     plus one in-flight exchange. Direction considered; not implementable
+     portably without a thread-pool resolver — revisit only if needed.
 
 ## Consequences
 

@@ -23,6 +23,7 @@ import ssl
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -30,6 +31,10 @@ import httpx
 DEFAULT_MAX_BYTES = 1_000_000
 DEFAULT_MAX_REDIRECTS = 3
 DEFAULT_TIMEOUT_S = 15.0
+HEADERS_MAX_BYTES = 131_072
+
+_NAT64_NET = ipaddress.ip_network("64:ff9b::/96")
+_TO4_NET = ipaddress.ip_network("2002::/16")
 
 BLOCKED_HOSTS = frozenset({"localhost"})
 BLOCKED_SUFFIXES = (".local", ".internal", ".lan", ".localdomain", ".invalid", ".test")
@@ -79,12 +84,18 @@ def _is_public_ip(value: str) -> bool:
         ip = ipaddress.ip_address(value)
     except ValueError:
         return False
-    # IPv4-mapped IPv6 must be judged by its mapped IPv4 half. Stdlib
-    # is_private semantics for ::ffff: forms changed with the runtime
-    # version (post-CVE-2024-4032), so unwrap explicitly instead of
-    # trusting version-dependent behavior.
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
+    # Embedded IPv4 forms must be judged by their IPv4 half. Stdlib
+    # is_private semantics changed with the runtime (post-CVE-2024-4032),
+    # and NAT64/6to4 embed routable targets that egress may translate, so
+    # unwrap explicitly instead of trusting version-dependent behavior.
+    if isinstance(ip, ipaddress.IPv6Address):
+        mapped = ip.ipv4_mapped
+        if mapped is not None:
+            ip = mapped
+        elif ip in _NAT64_NET:  # RFC 6052 well-known prefix; v4 in low 32 bits
+            ip = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+        elif ip in _TO4_NET:  # 6to4 (RFC 3056); v4 in bits 16-47
+            ip = ipaddress.IPv4Address((int(ip) >> 80) & 0xFFFFFFFF)
     return not (
         ip.is_private
         or ip.is_loopback
@@ -107,7 +118,7 @@ def check_hostname(url: str) -> str:
         raise FetchBlockedError(f"scheme not allowed: {parts.scheme!r}")
     if parts.username or parts.password:
         raise FetchBlockedError("credentials in URL are not allowed")
-    host = (parts.hostname or "").lower()
+    host = (parts.hostname or "").lower().rstrip(".")
     if not host:
         raise FetchBlockedError("URL has no host")
     if host in BLOCKED_HOSTS or host.endswith(BLOCKED_SUFFIXES):
@@ -123,7 +134,7 @@ def check_url(
     """Validate a URL against SSRF policy. Returns it unchanged or raises."""
     _ = policy
     checked = check_hostname(url)
-    host = (urlparse(checked).hostname or "").lower()
+    host = ((urlparse(checked).hostname or "").lower()).rstrip(".")
     if _is_public_ip(host):
         return checked
     try:
@@ -176,6 +187,10 @@ def fetch_url_text(
                 raise FetchTimeoutError(f"fetch timed out: {exc}") from exc
             except httpx.TransportError as exc:
                 raise FetchProtocolError(f"fetch failed: {exc}") from exc
+            if tick() - started > budget:
+                raise FetchTimeoutError(
+                    f"fetch exceeded total time budget ({budget:.1f}s)"
+                )
             if response.status_code in (301, 302, 303, 307, 308):
                 location = response.headers.get("location", "")
                 if not location:
@@ -210,6 +225,54 @@ def fetch_url_text(
         client.close()
 
 
+class _HeaderBoundedFile:
+    """Proxy over the response file that caps the header block. Header
+    lines accumulate until the blank separator; beyond the cap the
+    exchange fails with FetchTooLargeError. Body reads are untouched
+    (bounded separately by the byte cap)."""
+
+    def __init__(self, fp: Any, cap: int) -> None:
+        self._fp = fp
+        self._cap = cap
+        self._count = 0
+        self._done = False
+
+    def readline(self, *args: Any) -> bytes:
+        line: bytes = self._fp.readline(*args)
+        if not self._done:
+            if not line.strip():
+                self._done = True
+            else:
+                self._count += len(line)
+                if self._count > self._cap:
+                    raise FetchTooLargeError(
+                        f"response headers exceed cap {self._cap} bytes"
+                    )
+        return line
+
+    def read(self, *args: Any) -> bytes:
+        data: bytes = self._fp.read(*args)
+        return data
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._fp, name)
+
+
+def _bounded_sock(sock: Any, cap: int) -> Any:
+    class _SockProxy:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(sock, name)
+
+        def makefile(self, *args: Any, **kwargs: Any) -> Any:
+            fp = sock.makefile(*args, **kwargs)
+            mode = args[0] if args else kwargs.get("mode")
+            if mode == "rb":
+                return _HeaderBoundedFile(fp, cap)
+            return fp
+
+    return _SockProxy()
+
+
 def _default_port(scheme: str, explicit: int | None) -> int:
     if explicit is not None:
         return explicit
@@ -222,6 +285,14 @@ def _host_header(host: str, scheme: str, port: int | None) -> str:
     if ":" in host and not host.startswith("["):
         host = f"[{host}]"
     return f"{host}:{port}"
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    """HTTP connection whose response file caps the header block."""
+
+    def connect(self) -> None:
+        super().connect()
+        self.sock = _bounded_sock(self.sock, HEADERS_MAX_BYTES)
 
 
 class _PinnedHTTPSConnection(http.client.HTTPSConnection):
@@ -243,6 +314,7 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
     def connect(self) -> None:
         sock = socket.create_connection((self.host, self.port), self.timeout)
         self.sock = self._pin_context.wrap_socket(sock, server_hostname=self._sni_host)
+        self.sock = _bounded_sock(self.sock, HEADERS_MAX_BYTES)
 
 
 def _socket_roundtrip(
@@ -267,7 +339,7 @@ def _socket_roundtrip(
             ip, port, host, timeout=timeout_s, context=ssl.create_default_context()
         )
     else:
-        conn = http.client.HTTPConnection(ip, port, timeout=timeout_s)
+        conn = _PinnedHTTPConnection(ip, port, timeout=timeout_s)
     try:
         started = time.monotonic()
         conn.putrequest(request.method, path, skip_host=True, skip_accept_encoding=True)
@@ -338,7 +410,7 @@ class PinnedTransport(httpx.BaseTransport):
         self._max_bytes = max_bytes
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
-        host = (request.url.host or "").lower()
+        host = ((request.url.host or "").lower()).rstrip(".")
         check_hostname(str(request.url))
         if _is_public_ip(host):
             ips = [host]

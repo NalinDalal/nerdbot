@@ -16,6 +16,7 @@ from nerdbot.fetch import (
     FetchBlockedError,
     FetchPolicy,
     FetchTimeoutError,
+    FetchTooLargeError,
     PinnedTransport,
     check_url,
     fetch_url_text,
@@ -166,6 +167,36 @@ def test_sni_host_header_and_verification(monkeypatch) -> None:
     assert "Accept-Encoding: identity" in sent
 
 
+def test_trailing_dot_fqdns_normalized() -> None:
+    # Trailing dots are stripped before the local-host gate, so
+    # "localhost." and "app.local." are refused like their bare forms.
+    for url in (
+        "http://localhost./",
+        "http://LOCALHOST.:8000/x",
+        "http://app.local./",
+        "http://db.internal./",
+        "http://127.0.0.1./",
+    ):
+        with pytest.raises(FetchBlockedError):
+            check_url(url, resolver=lambda h: [PUBLIC_IP])
+    assert check_url("http://public.example./", resolver=lambda h: [PUBLIC_IP]) is not None
+
+
+def test_nat64_and_6to4_embedded_ipv4_blocked() -> None:
+    # RFC 6052 NAT64 (64:ff9b::/96) embeds the v4 target in the low 32
+    # bits; 6to4 (2002::/16) in bits 16-47. Both are classified by the
+    # embedded half, so a NAT64-capable egress cannot be tricked into
+    # reaching metadata or RFC1918 space.
+    for host in ("64:ff9b::a9fe:a9fe",  # 169.254.169.254
+                 "64:ff9b::7f00:1",     # 127.0.0.1
+                 "2002:ac10:0a01::",    # 172.16.10.1
+                 "2002:e000:0a01::"):   # 224.0.10.1 multicast
+        with pytest.raises(FetchBlockedError):
+            check_url(f"http://[{host}]/", resolver=lambda h: [PUBLIC_IP])
+    # A 6to4 address carrying a public v4 tail is still allowed.
+    assert check_url("http://[2002:5dd8:0d05::]/", resolver=lambda h: [PUBLIC_IP]) is not None
+
+
 def test_default_tls_context_verifies(monkeypatch) -> None:
     # Verification itself must stay intact: real default context properties.
     real_create = ssl.create_default_context
@@ -310,3 +341,51 @@ def test_whole_fetch_budget_spans_redirect_hops() -> None:
             clock=clock,
         )
     assert calls["n"] == 3
+
+
+def test_whole_budget_also_bounds_the_final_response() -> None:
+    # Budget elapsed during the LAST response: the check after the
+    # response must still abort, not return success.
+
+    t = {"now": 0.0}
+
+    def clock() -> float:
+        return t["now"]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        t["now"] += 100.0
+        return httpx.Response(200, text="late", request=request)
+
+    with pytest.raises(FetchTimeoutError, match="total time budget"):
+        fetch_url_text(
+            "https://public.example/r1",
+            resolver=lambda h: [PUBLIC_IP],
+            transport=httpx.MockTransport(handler),
+            policy=FetchPolicy(timeout_s=10.0, max_redirects=3),
+            clock=clock,
+        )
+
+
+def test_oversized_response_headers_capped(monkeypatch) -> None:
+    # A header block beyond HEADERS_MAX_BYTES fails the exchange before
+    # the body is ever read; the dial still goes to the pinned IP.
+    received = bytearray()
+    dialed: dict = {}
+
+    def fake_create_connection(address, timeout: float | None = None,
+                               source_address=None) -> _FakeSock:  # type: ignore[no-untyped-def]
+        dialed["addr"] = address
+        # Many modest lines (each under http.client's 64KB per-line cap):
+        # only the TOTAL header block overflows our cap first.
+        block = b"".join(b"X-Y: %s\r\n" % (b"z" * 2048) for _ in range(100))
+        return _FakeSock(received, b"HTTP/1.1 200 OK\r\n" + block + b"\r\nhello")
+
+    monkeypatch.setattr(socket, "create_connection", fake_create_connection)
+
+    transport = fetch_mod.PinnedTransport(
+        resolver=lambda h: [PUBLIC_IP], timeout_s=5.0, max_bytes=1_000_000
+    )
+    request = httpx.Request("GET", f"http://{PUBLIC_IP}/huge-headers")
+    with pytest.raises(FetchTooLargeError, match="headers exceed cap"):
+        transport.handle_request(request)
+    assert dialed["addr"] == (PUBLIC_IP, 80)

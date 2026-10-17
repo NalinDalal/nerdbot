@@ -61,6 +61,33 @@ superseded by the record below and the git log.
 - Next action: OpenCode reviews the Phase 3 diff (fetch + search +
   transport hardening) before any Phase 4 continuation.
 
+## Phase 4 plan (written 2026-10-17; implementation gated on Phase 3 review)
+
+Verified reality: the original Phase 4 acceptance criteria are already
+substantially implemented — nothing below may restate completed work as
+absent.
+
+- A. **Real GitHub issue retrieval — DONE, keep verified.** One host
+  (`api.github.com`), env-referenced token only (`449891c`), read-only,
+  preview-then-ingest, typed errors (404/401/403/429/protocol), size/time
+  caps, redirects re-validated on-host. Slice owner verifies test coverage
+  (`tests/test_github_fetch.py`) once more during this review; no new
+  build unless a gap is found.
+- B. **Durable outbox — DONE, one residual to verify/harden.** Delivery
+  states + locked claims (`b14d748`), backoff via `next_attempt_at`,
+  `MAX_DELIVERY_ATTEMPTS` terminal failure, due sweep (`65bf04a`),
+  failure events. Residual to verify: **stale delivery lock after a
+  crash mid-send** — confirm whether recovery clears `locked=1` rows on
+  restart or sweeps them after a lease timeout; add a tested fix if not.
+- C. **One real outbound channel — DONE (webhook-out).** Allowlisted
+  HTTPS targets, SSRF-guarded via the same pinned transport, idempotent
+  re-send payloads (receiver dedupes on notification id). No email/Slack
+  work is scheduled; those remain stub capabilities.
+- Acceptance for the B residual slice: a crashed `sending` delivery is
+  retried or terminated per policy after restart or lease expiry; at most
+  one in-flight send per notification row (lock testified by a test);
+  failure path still records `notification.failed` with attempt count.
+
 ## Milestones (updated)
 
 - [x] Phase 0 — baseline checkpoint (`63ef83c`), provenance, gates green.
@@ -68,7 +95,8 @@ superseded by the record below and the git log.
 - [x] Phase 2 — personal-use security: credential encryption, approval hygiene,
   manifest import (`cfea25d`, `9b35cd8`, ADR 0006).
 - [x] Phase 3 — web research with SSRF hardening (fetch + transport pinning +
-  wall-clock budgets; credential-free DuckDuckGo Lite search via `search.py`).
+  wall-clock budgets; credential-free DuckDuckGo Lite search via `search.py`;
+  post-review fixes applied — see ADR 0007 item 7; DNS-time residual documented).
 - [ ] Phase 4 — durable integrations (one real channel, real GitHub fetch, outbox delivery).
 - [ ] Phase 5+ — productivity integrations, knowledge, MCP/delegation, automation, usability.
 

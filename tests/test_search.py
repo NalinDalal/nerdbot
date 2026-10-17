@@ -116,3 +116,77 @@ def test_tool_dispatch_and_bounds(tmp_path) -> None:
 
 def test_search_url_is_constant_https() -> None:
     assert SEARCH_URL == "https://lite.duckduckgo.com/lite/"
+
+
+def test_loop_web_search_rate_limit_is_tool_error_not_run_failure(tmp_path) -> None:
+    # A DDG rate limit must reach the model as recoverable tool-error text
+    # and complete the run — never abort it.
+    import json as _json
+
+    from nerdbot import orchestrator, store
+    from nerdbot.providers import OpenAICompatibleAdapter
+
+    def tool_msg() -> dict:
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "s1",
+                                "type": "function",
+                                "function": {
+                                    "name": "web_search",
+                                    "arguments": _json.dumps({"query": "rate"}),
+                                },
+                            }
+                        ],
+                    }
+                }
+            ]
+        }
+
+    state = {"n": 0}
+
+    def router(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/chat/completions"):
+            state["n"] += 1
+            if state["n"] == 1:
+                return httpx.Response(200, json=tool_msg())
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"role": "assistant", "content": "gave up"}}]},
+            )
+        return httpx.Response(429, text="slow down")
+
+    adapter = OpenAICompatibleAdapter(
+        {"base_url": "https://provider.example/v1", "model": "m", "api_key": "k"},
+        transport=httpx.MockTransport(router),
+    )
+    conn = store.connect(":memory:")
+    project = store.create_project(conn, owner="o")
+    task = store.create_task(conn, project.id, "t", command="search")
+    run, result, _ = orchestrator.schedule_run(
+        conn, task.id, adapter=adapter, data_dir=str(tmp_path)
+    )
+    assert result is not None and result.exit_code == 0 and "gave up" in result.output
+    tool = [t for t in adapter.last_transcript if t["role"] == "tool"]
+    assert len(tool) == 1
+    assert "SearchProviderError" in tool[0]["content"]
+    assert "rate-limited" in tool[0]["content"]
+    conn.close()
+
+
+def test_ddg_unwrap_requires_exact_host() -> None:
+    from nerdbot.search import _unwrap_ddg_href
+
+    # Only real DuckDuckGo hosts unwrap; look-alike hosts keep their URL.
+    assert _unwrap_ddg_href(
+        "//duckduckgo.com/l/?uddg=https%3A%2F%2Freal.example%2Fok"
+    ) == "https://real.example/ok"
+    lookalike = _unwrap_ddg_href(
+        "//xduckduckgo.com/l/?uddg=https%3A%2F%2Fevil.example%2Fx"
+    )
+    assert lookalike == "https://xduckduckgo.com/l/?uddg=https%3A%2F%2Fevil.example%2Fx"

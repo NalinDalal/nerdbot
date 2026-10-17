@@ -29,15 +29,20 @@ HARD_MAX_RESULTS = 10
 SEARCH_MAX_BYTES = 512_000
 
 
-class SearchProviderError(RuntimeError):
-    """Search provider unavailable, rejected the request, or rate-limited."""
+class SearchProviderError(ValueError):
+    """Search provider unavailable, rejected the request, or rate-limited.
+
+    Subclasses ValueError so the agent loop treats it as a recoverable
+    tool error (framed text to the model) rather than a run failure.
+    """
 
 
 def _unwrap_ddg_href(href: str) -> str:
     """Resolve protocol-relative wrappers and unwrap uddg redirect links."""
     base = urljoin(SEARCH_URL, href)
     parts = urlparse(base)
-    if (parts.hostname or "").endswith("duckduckgo.com") and parts.query:
+    if (parts.hostname or "") in ("duckduckgo.com", "www.duckduckgo.com",
+                                  "lite.duckduckgo.com") and parts.query:
         qs = parse_qs(parts.query)
         if "uddg" in qs and qs["uddg"]:
             return qs["uddg"][0]  # parse_qs already URL-decoded the target once
