@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { api } from "./api";
+import { ApiError, api } from "./api";
 import { notifyError } from "./app";
 import type { Approval, Provider } from "./types";
-import { maskSecrets } from "./types";
-import { EmptyState, ErrorState, LoadingState, Modal, ShortId, StatusBadge, useAsync } from "./components";
+import type { Teammate as TeammateT } from "./types";
+import { EmptyState, ErrorState, Field, LoadingState, Modal, ShortId, StatusBadge, useAsync } from "./components";
 import { EntityForm } from "./forms";
 import { ChatView } from "./views-chat";
 
@@ -156,39 +156,23 @@ function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenTask: (i
 
 function TeammatesTab({ projectId }: { projectId: string }) {
   const list = useReloadable(() => api.listTeammates(projectId), [projectId]);
+  const providers = useReloadable(() => api.listProviders(projectId), [projectId]);
   const [showCreate, setShowCreate] = useState(false);
-
-  const act = async (fn: () => Promise<unknown>) => {
-    try {
-      await fn();
-      list.reload();
-    } catch (err) {
-      notifyError(err);
-    }
-  };
 
   return (
     <div>
       <div className="row" style={{ marginBottom: 12 }}>
         <button className="primary" onClick={() => setShowCreate(true)}>
-          New teammate
+          New bot
         </button>
         <button onClick={list.reload}>Refresh</button>
       </div>
       {showCreate ? (
-        <Modal title="New teammate" onClose={() => setShowCreate(false)}>
-          <EntityForm
-            submitLabel="Create teammate"
-            fields={[
-              { name: "persona", label: "Persona", required: true, placeholder: "coder" },
-              { name: "instructions", label: "Instructions", type: "textarea" },
-              { name: "capabilities", label: "Capabilities (comma separated)", placeholder: "code, review" },
-            ]}
-            onSubmit={async (values) => {
-              await api.createTeammate(projectId, {
-                ...values,
-                capabilities: values.capabilities.split(",").map((s) => s.trim()).filter(Boolean),
-              });
+        <Modal title="New bot" onClose={() => setShowCreate(false)}>
+          <BotForm
+            projectId={projectId}
+            providers={providers.data?.providers ?? []}
+            onDone={() => {
               setShowCreate(false);
               list.reload();
             }}
@@ -201,41 +185,229 @@ function TeammatesTab({ projectId }: { projectId: string }) {
         <ErrorState error={list.error} onRetry={list.reload} />
       ) : list.data && list.data.teammates.length > 0 ? (
         list.data.teammates.map((mate) => (
-          <div className="card" key={mate.id}>
-            <div className="row" style={{ justifyContent: "space-between" }}>
-              <div>
-                <strong>{mate.persona || "Unnamed"}</strong>{" "}
-                <span className="muted mono">{mate.id}</span> <StatusBadge status={mate.status} />
-              </div>
-              <div className="row">
-                <button onClick={() => act(() => api.disableTeammate(mate.id))}>Disable</button>
-                <button onClick={() => act(() => api.archiveTeammate(mate.id))}>Archive</button>
-              </div>
-            </div>
-            <div className="muted">{mate.instructions || "No instructions"}</div>
-          </div>
+          <BotCard
+            key={mate.id}
+            mate={mate}
+            providers={providers.data?.providers ?? []}
+            onChanged={() => {
+              list.reload();
+              providers.reload();
+            }}
+          />
         ))
       ) : (
-        <EmptyState title="No teammates" hint="Create one to own tasks." />
+        <EmptyState
+          title="No bots yet"
+          hint="Create a bot with a persona and instructions, then attach a model connection so it can think. Bots own and run tasks."
+        />
       )}
     </div>
+  );
+}
+
+function BotCard({
+  mate,
+  providers,
+  onChanged,
+}: {
+  mate: TeammateT;
+  providers: Provider[];
+  onChanged: () => void;
+}) {
+  const [showAttach, setShowAttach] = useState(false);
+  const act = async (fn: () => Promise<unknown>) => {
+    try {
+      await fn();
+      onChanged();
+    } catch (err) {
+      notifyError(err);
+    }
+  };
+  const attached = providers.find((p) => p.id === mate.provider_id);
+
+  return (
+    <div className="card">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <div>
+          <strong>{mate.persona || "Unnamed bot"}</strong>{" "}
+          <span className="muted mono">{mate.id}</span> <StatusBadge status={mate.status} />
+        </div>
+        <div className="row">
+          <button onClick={() => setShowAttach(true)}>
+            {attached ? "Switch model" : "Attach model"}
+          </button>
+          <button onClick={() => void act(() => api.disableTeammate(mate.id))}>Disable</button>
+          <button onClick={() => void act(() => api.archiveTeammate(mate.id))}>Archive</button>
+        </div>
+      </div>
+      <div className="muted">{mate.instructions || "No instructions yet."}</div>
+      <div className="mono muted" style={{ marginTop: 8 }}>
+        brain:{" "}
+        {attached ? (
+          <>
+            {attached.name} · {String(attached.config.model ?? "model not set")}
+          </>
+        ) : mate.provider_id ? (
+          <>{mate.provider_id} (connection not found)</>
+        ) : (
+          <span style={{ color: "#b58a00" }}>none — the bot cannot think until one is attached</span>
+        )}
+      </div>
+      {showAttach ? (
+        <Modal title={`Model for ${mate.persona || mate.id}`} onClose={() => setShowAttach(false)}>
+          {providers.length === 0 ? (
+            <div className="error-box">
+              This project has no model connections yet — create one under the{" "}
+              <strong>Providers</strong> tab first.
+            </div>
+          ) : (
+            <div>
+              {providers.map((p) => (
+                <div
+                  key={p.id}
+                  className="row"
+                  style={{ justifyContent: "space-between", padding: "6px 0" }}
+                >
+                  <span>
+                    <strong>{p.name || p.id}</strong>{" "}
+                    <span className="mono muted">{String(p.config.model ?? "")}</span>
+                    {mate.provider_id === p.id ? " (current)" : null}
+                  </span>
+                  <button
+                    disabled={mate.provider_id === p.id}
+                    onClick={() =>
+                      void act(() => api.patchTeammate(mate.id, {
+                        provider_id: mate.provider_id === p.id ? null : p.id,
+                      }))
+                    }
+                  >
+                    {mate.provider_id === p.id ? "Detach" : "Attach"}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </Modal>
+      ) : null}
+    </div>
+  );
+}
+
+function BotForm({
+  projectId,
+  providers,
+  onDone,
+}: {
+  projectId: string;
+  providers: Provider[];
+  onDone: () => void;
+}) {
+  const [persona, setPersona] = useState("");
+  const [instructions, setInstructions] = useState("");
+  const [capabilities, setCapabilities] = useState("");
+  const [providerId, setProviderId] = useState<string>(providers[0]?.id ?? "");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <form
+      onSubmit={async (e: React.FormEvent) => {
+        e.preventDefault();
+        setError(null);
+        setBusy(true);
+        try {
+          const created = await api.createTeammate(projectId, {
+            persona,
+            instructions,
+            capabilities: capabilities
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean),
+          });
+          if (providerId) {
+            await api.patchTeammate(created.id, { provider_id: providerId });
+          }
+          onDone();
+        } catch (err) {
+          setError(err instanceof ApiError ? `Error ${err.status}: ${err.detail}` : String(err));
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <Field label="Name (its job)">
+        <input
+          required
+          value={persona}
+          onChange={(e) => setPersona(e.target.value)}
+          placeholder="coder"
+        />
+      </Field>
+      <Field label="Instructions — how it should behave">
+        <textarea
+          rows={3}
+          value={instructions}
+          onChange={(e) => setInstructions(e.target.value)}
+          placeholder="Be terse. Show real command output. Ask before destructive steps."
+        />
+      </Field>
+      <Field label="Capabilities (comma separated)">
+        <input
+          value={capabilities}
+          onChange={(e) => setCapabilities(e.target.value)}
+          placeholder="code, review"
+        />
+      </Field>
+      <Field label="Model connection (change or detach later)">
+        {providers.length === 0 ? (
+          <div className="muted">No connections in this project yet — attach one after creating the bot.</div>
+        ) : (
+          <select value={providerId} onChange={(e) => setProviderId(e.target.value)}>
+            <option value="">(attach later)</option>
+            {providers.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name || p.id} — {String(p.config.model ?? "")}
+              </option>
+            ))}
+          </select>
+        )}
+      </Field>
+      {error ? (
+        <div className="error-box" role="alert">
+          {error}
+        </div>
+      ) : null}
+      <div className="row" style={{ marginTop: 8 }}>
+        <button className="primary" type="submit" disabled={busy}>
+          {busy ? "Creating…" : "Create bot"}
+        </button>
+      </div>
+    </form>
   );
 }
 
 function ProvidersTab({ projectId }: { projectId: string }) {
   const list = useReloadable(() => api.listProviders(projectId), [projectId]);
   const [showCreate, setShowCreate] = useState(false);
+  const health = useAsync(() => api.health(), [projectId]);
 
   return (
     <div>
+      {health.data && health.data.secret_key === "absent" ? (
+        <div className="error-box" style={{ marginBottom: 12 }}>
+          No <code>NERDBOT_SECRET_KEY</code> on this server: pasting an API key will be
+          refused (we never store keys in the clear). Start the server with a Fernet key to
+          enable BYOK — the <code>api_key_env</code> path keeps working meanwhile.
+        </div>
+      ) : null}
       <div className="row" style={{ marginBottom: 12 }}>
         <button className="primary" onClick={() => setShowCreate(true)}>
-          New provider
+          New model connection
         </button>
         <button onClick={list.reload}>Refresh</button>
       </div>
       {showCreate ? (
-        <Modal title="New provider" onClose={() => setShowCreate(false)}>
+        <Modal title="New model connection" onClose={() => setShowCreate(false)}>
           <ProviderForm
             projectId={projectId}
             onDone={() => {
@@ -254,65 +426,255 @@ function ProvidersTab({ projectId }: { projectId: string }) {
           <ProviderCard key={provider.id} provider={provider} onChanged={list.reload} />
         ))
       ) : (
-        <EmptyState title="No providers" hint="Local and mock need no credentials." />
+        <EmptyState
+          title="No model connections"
+          hint="Bots need a brain: connect one openai-compatible provider (Groq, OpenRouter, OpenAI, Kimi…) above. Keys are stored Fernet-encrypted, or referenced via an env var name."
+        />
       )}
     </div>
   );
 }
 
+const BASE_URL_PRESETS: Array<{ label: string; url: string }> = [
+  { label: "Groq", url: "https://api.groq.com/openai/v1" },
+  { label: "OpenRouter", url: "https://openrouter.ai/api/v1" },
+  { label: "OpenAI", url: "https://api.openai.com/v1" },
+  { label: "Kimi (Moonshot)", url: "https://api.moonshot.cn/v1" },
+];
+
+function providerModelName(config: Record<string, unknown>): string {
+  return typeof config.model === "string" ? config.model : "";
+}
+
 function ProviderCard({ provider, onChanged }: { provider: Provider; onChanged: () => void }) {
-  const masked = maskSecrets(provider.config);
+  const [showModels, setShowModels] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
+  const disabled = provider.status !== "active";
+
   return (
-    <div className="card">
+    <div className="card" style={disabled ? { opacity: 0.6 } : undefined}>
       <div className="row" style={{ justifyContent: "space-between" }}>
         <div>
-          <strong>{provider.name}</strong> <span className="muted mono">{provider.kind}</span>{" "}
+          <strong>{provider.name || provider.id}</strong> <span className="muted mono">{provider.kind}</span>{" "}
           <StatusBadge status={provider.status} />
+          {providerModelName(provider.config) ? (
+            <span className="chip">{providerModelName(provider.config)}</span>
+          ) : (
+            <span className="chip muted">no model set</span>
+          )}
         </div>
-        <button
-          onClick={async () => {
-            try {
-              await api.disableProvider(provider.id);
-              onChanged();
-            } catch (err) {
-              notifyError(err);
-            }
-          }}
-        >
-          Disable
-        </button>
+        <div className="row">
+          <button onClick={() => setShowModels(true)}>Models</button>
+          <button onClick={() => setShowEdit(true)}>Edit</button>
+          <button
+            onClick={async () => {
+              try {
+                await api.patchProvider(provider.id, {
+                  status: disabled ? "active" : "disabled",
+                });
+                onChanged();
+              } catch (err) {
+                notifyError(err);
+              }
+            }}
+          >
+            {disabled ? "Enable" : "Disable"}
+          </button>
+        </div>
       </div>
       <div className="mono muted" style={{ marginTop: 8 }}>
-        {provider.id}
+        {provider.id} · {String(provider.config.base_url ?? "")}
+        {typeof provider.config.api_key === "string" && provider.config.api_key ? (
+          <> · key <code>{provider.config.api_key}</code></>
+        ) : typeof provider.config.api_key_env === "string" && provider.config.api_key_env ? (
+          <> · key env <code>{provider.config.api_key_env}</code></>
+        ) : null}
       </div>
-      <pre className="log">{JSON.stringify(masked, null, 2)}</pre>
+      {showModels ? (
+        <Modal title={`Models · ${provider.name || provider.id}`} onClose={() => setShowModels(false)}>
+          <ModelCatalogPicker provider={provider} onDone={() => setShowModels(false)} />
+        </Modal>
+      ) : null}
+      {showEdit ? (
+        <Modal title="Edit connection" onClose={() => setShowEdit(false)}>
+          <EditProviderForm provider={provider} onDone={() => { setShowEdit(false); onChanged(); }} />
+        </Modal>
+      ) : null}
     </div>
   );
 }
 
-export function ProviderForm({ projectId, onDone }: { projectId?: string; onDone?: () => void }) {
+function ModelCatalogPicker({ provider, onDone }: { provider: Provider; onDone: () => void }) {
+  const list = useAsync(() => api.providerModels(provider.id), [provider.id]);
+  const [applying, setApplying] = useState<string | null>(null);
+  const current = providerModelName(provider.config);
+
   return (
-    <EntityForm
-      submitLabel="Create provider"
-      fields={[
-        ...(projectId ? [] : [{ name: "project_id", label: "Project ID", required: true }]),
-        { name: "kind", label: "Kind", type: "select", options: ["local", "mock", "openai-compatible"] },
-        { name: "name", label: "Name", placeholder: "default" },
-        { name: "base_url", label: "Base URL (openai-compatible only)", placeholder: "https://api.example.com/v1" },
-        { name: "model", label: "Model (openai-compatible only)" },
-        { name: "api_key", label: "API key (password, never echoed back)", type: "password" },
-        { name: "api_key_env", label: "Or env var name holding the key", hint: "Prefer this over pasting a key. Never use NERDBOT_* names." },
-      ]}
-      onSubmit={async (values) => {
-        const target = projectId ?? values.project_id;
-        const config: Record<string, string> = {};
-        for (const key of ["base_url", "model", "api_key", "api_key_env"]) {
-          if (values[key]) config[key] = values[key];
+    <div>
+      {list.loading ? <LoadingState lines={4} /> : list.error ? (
+        <ErrorState error={list.error} onRetry={list.reload} />
+      ) : (
+        <div style={{ maxHeight: 320, overflowY: "auto" }}>
+          {list.data?.models.map((model) => (
+            <div className="row" key={model} style={{ justifyContent: "space-between", padding: "4px 0" }}>
+              <span className="mono" style={model === current ? { fontWeight: 700 } : undefined}>
+                {model === current ? `${model} (current)` : model}
+              </span>
+              <button
+                disabled={model === current || applying !== null}
+                onClick={async () => {
+                  setApplying(model);
+                  try {
+                    await api.patchProvider(provider.id, { config: { model } });
+                    onDone();
+                  } catch (err) {
+                    notifyError(err);
+                  } finally {
+                    setApplying(null);
+                  }
+                }}
+              >
+                {applying === model ? "Setting…" : "Use"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="muted" style={{ marginTop: 8 }}>
+        Fetched live from the provider's <code>/models</code>; picking one rewrites this connection's model.
+      </div>
+    </div>
+  );
+}
+
+function EditProviderForm({ provider, onDone }: { provider: Provider; onDone: () => void }) {
+  const [name, setName] = useState(provider.name);
+  const [baseUrl, setBaseUrl] = useState(typeof provider.config.base_url === "string" ? provider.config.base_url : "");
+  const [apiKey, setApiKey] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <form
+      onSubmit={async (e: React.FormEvent) => {
+        e.preventDefault();
+        setError(null);
+        setBusy(true);
+        const body: Record<string, unknown> = { name, config: { base_url: baseUrl } };
+        if (apiKey) body.config = { ...(body.config as Record<string, unknown>), api_key: apiKey };
+        try {
+          await api.patchProvider(provider.id, body);
+          onDone();
+        } catch (err) {
+          setError(err instanceof ApiError ? `Error ${err.status}: ${err.detail}` : String(err));
+        } finally {
+          setBusy(false);
         }
-        await api.createProvider(target, { kind: values.kind || "local", name: values.name, config });
-        onDone?.();
       }}
-    />
+    >
+      <Field label="Name">
+        <input value={name} onChange={(e) => setName(e.target.value)} />
+      </Field>
+      <Field label="Base URL">
+        <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
+      </Field>
+      <Field label="API key — leave empty to keep the current one" error={error ?? undefined}>
+        <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} autoComplete="off" />
+      </Field>
+      <div className="row" style={{ marginTop: 8 }}>
+        <button className="primary" type="submit" disabled={busy}>
+          {busy ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+export function ProviderForm({ projectId, onDone }: { projectId?: string; onDone?: () => void }) {
+  const [name, setName] = useState("");
+  const [baseUrl, setBaseUrl] = useState(BASE_URL_PRESETS[0].url);
+  const [model, setModel] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [apiKeyEnv, setApiKeyEnv] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const applyPreset = (label: string) => {
+    const preset = BASE_URL_PRESETS.find((p) => p.label === label);
+    if (preset) {
+      setPresetLabel(label);
+      setBaseUrl(preset.url);
+    }
+  };
+  const [presetLabel, setPresetLabel] = useState(BASE_URL_PRESETS[0].label);
+
+  return (
+    <form
+      onSubmit={async (e: React.FormEvent) => {
+        e.preventDefault();
+        setError(null);
+        setBusy(true);
+        const target = projectId;
+        if (!target) {
+          setError("Project ID required");
+          setBusy(false);
+          return;
+        }
+        const config: Record<string, string> = {};
+        if (baseUrl) config.base_url = baseUrl;
+        if (model) config.model = model;
+        if (apiKey) config.api_key = apiKey;
+        if (apiKeyEnv) config.api_key_env = apiKeyEnv;
+        try {
+          await api.createProvider(target, { kind: "openai-compatible", name, config });
+          onDone?.();
+        } catch (err) {
+          setError(err instanceof ApiError ? `Error ${err.status}: ${err.detail}` : String(err));
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      {projectId ? null : <input type="hidden" />}
+      <Field label="Preset">
+        <select value={presetLabel} onChange={(e) => applyPreset(e.target.value)}>
+          {BASE_URL_PRESETS.map((p) => (
+            <option key={p.label} value={p.label}>
+              {p.label}
+            </option>
+          ))}
+          <option value="custom">Custom (edit base URL)</option>
+        </select>
+      </Field>
+      <Field label="Name">
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="groq" />
+      </Field>
+      <Field label="Base URL">
+        <input className="mono" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
+      </Field>
+      <Field label="Model (you can pick from the catalog after connecting)">
+        <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="openai/gpt-oss-120b" />
+      </Field>
+      <Field label="API key — stored Fernet-encrypted (server needs NERDBOT_SECRET_KEY)">
+        <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} autoComplete="off" />
+      </Field>
+      <Field label="Or env var name holding the key" >
+        <input value={apiKeyEnv} onChange={(e) => setApiKeyEnv(e.target.value)} placeholder="CLOUD_MODEL_KEY" />
+        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+          Alternative to pasting a key. Never a NERDBOT_* name.
+        </div>
+      </Field>
+      {error ? (
+        <div className="error-box" role="alert">
+          {error}
+        </div>
+      ) : null}
+      <div className="row" style={{ marginTop: 8 }}>
+        <button className="primary" type="submit" disabled={busy}>
+          {busy ? "Connecting…" : "Connect"}
+        </button>
+      </div>
+    </form>
   );
 }
 

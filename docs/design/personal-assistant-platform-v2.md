@@ -56,14 +56,20 @@ browser/desktop powers. The owner wants the ai-teammates *user journey* (sign in
 
 ### S1 — BYOK + Settings + Bot CRUD UI  (the "product exists" slice)
 
-- Backend:
-  - New `POST /providers` + `PATCH /providers/{id}` accept inline `api_key` → stored via the
-    encrypted-secret column path; responses only ever return a **fingerprint** (`sk-****abcd`).
-    `resolve_api_key` (providers.py:93 area) gains a stored-secret decrypt branch;
-    keyless-dev stays legal only for non-secret configs (unchanged).
-  - `NERDBOT_SECRET_KEY` becomes **required** to save BYOK (fail closed, stated in Settings UI).
-  - Model catalog endpoint `GET /providers/{id}/models` → upstream `/v1/models`, allowlist-
-    honoring, tolerant parse.
+Status update 2026-10-18: backend DONE (`86fff30`). Learning: encrypt-on-write +
+fail-closed already existed (`store.encrypt_provider_config`, Fernet, error type
+subclassing ValueError) — so S1 backend added: `PATCH /providers/{id}` (partial
+name/config/status, secrets re-encrypted), `GET /providers/{id}/models` (tolerant
+catalog proxy), fingerprinted reads (`secrets.mask/stored`, `[encrypted]` for
+undecryptable), `/health.secret_key` state, and 10 BYOK tests (192 total).
+Remaining S1 work this slice = dashboard UX (settings view, bot/model UI, presets).
+
+- Backend (SHIPPED `86fff30`):
+  - `PATCH /providers/{id}` (partial name/config/status; secret re-encryption on write)
+  - `GET /providers/{id}/models` (tolerant catalog proxy, 502 on upstream failure)
+  - fingerprinted reads (`****last4`; `[encrypted]` when undecryptable); backups keep `[redacted]`
+  - `/health.secret_key` configured|absent
+  - encrypt-on-write + fail-closed WITHOUT key already pre-existing (no new code needed)
 - Dashboard:
   - Settings view: connection status, key form (validate → fingerprint), secret-key state.
   - Bots view: real CRUD (list + create form + edit persona/model/tools/memory) — replaces

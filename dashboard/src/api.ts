@@ -137,6 +137,7 @@ export const api = {
     post<Teammate>(`/projects/${projectId}/teammates`, body),
   disableTeammate: (id: string) => post<Teammate>(`/teammates/${id}/disable`),
   archiveTeammate: (id: string) => post<Teammate>(`/teammates/${id}/archive`),
+  patchTeammate: (id: string, body: Record<string, unknown>) => patch<Teammate>(`/teammates/${id}`, body),
 
   createTask: (projectId: string, body: Record<string, unknown>) =>
     post<TaskView["task"]>(`/projects/${projectId}/tasks`, body),
@@ -180,6 +181,8 @@ export const api = {
   createProvider: (projectId: string, body: Record<string, unknown>) =>
     post<Provider>(`/projects/${projectId}/providers`, body),
   disableProvider: (id: string) => post<Provider>(`/providers/${id}/disable`),
+  patchProvider: (id: string, body: Record<string, unknown>) => patch<Provider>(`/providers/${id}`, body),
+  providerModels: (id: string) => req<{ models: string[] }>(`/providers/${id}/models`),
 
   ingestKnowledge: (projectId: string, body: Record<string, unknown>) =>
     post<{ source_id: string; chunks: number }>(`/projects/${projectId}/knowledge`, body),

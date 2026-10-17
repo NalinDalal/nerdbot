@@ -196,6 +196,8 @@ export interface Health {
   version: string;
   db: string;
   restarts: number;
+  /** "configured" (Fernet key present) or "absent" (BYOK writes are blocked). */
+  secret_key?: string;
 }
 
 export interface TaskView {

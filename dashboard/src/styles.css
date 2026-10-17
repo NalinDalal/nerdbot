@@ -369,3 +369,16 @@ pre.log {
     animation: none !important;
   }
 }
+
+/* S1 BYOK: small inline metadata chips (model name, key fingerprint state) */
+.chip {
+  display: inline-block;
+  padding: 1px 8px;
+  margin-left: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  vertical-align: 1px;
+}

@@ -6,10 +6,12 @@ import { ProjectDetailView } from "./views-project";
 import { ChatHome } from "./views-chat";
 import { ProjectsView } from "./views-projects";
 import { TaskDetailView } from "./views-task";
+import { SettingsView } from "./views-settings";
 
 export type Route =
   | { name: "home" }
   | { name: "projects" }
+  | { name: "settings" }
   | { name: "project"; projectId: string }
   | { name: "task"; projectId: string; taskId: string }
   | { name: "capabilities" };
@@ -19,6 +21,7 @@ export function parseHash(): Route {
   const parts = hash.split("/").filter(Boolean);
   if (parts.length === 0) return { name: "home" };
   if (parts[0] === "projects") return { name: "projects" };
+  if (parts[0] === "settings") return { name: "settings" };
   if (parts[0] === "p" && parts[1] && parts[2] === "t" && parts[3]) {
     return { name: "task", projectId: parts[1], taskId: parts[3] };
   }
@@ -68,6 +71,7 @@ export default function App() {
         <nav className="nav">
           {nav("#/", "Chat", route.name === "home")}
           {nav("#/projects", "Projects", route.name === "projects")}
+          {nav("#/settings", "Settings", route.name === "settings")}
           {projects.map((id) => (
             <span key={id}>
               {nav(`#/p/${id}`, `· ${id.slice(0, 14)}…`, route.name !== "projects" &&
@@ -96,6 +100,7 @@ export default function App() {
           <ChatHome projects={projects} onOpen={openProject} />
         )}
         {route.name === "projects" && <ProjectsView onOpen={openProject} />}
+        {route.name === "settings" && <SettingsView />}
         {route.name === "project" && (
           <ProjectDetailView projectId={route.projectId} onOpenTask={(taskId) => navigate(`#/p/${route.projectId}/t/${taskId}`)} />
         )}

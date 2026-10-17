@@ -423,3 +423,34 @@ describe("views", () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe("BYOK client surface (S1)", () => {
+  it("patchProvider PATCHes with partial body", async () => {
+    ok({ id: "prv_1" });
+    const out = await api.patchProvider("prv_1", { status: "disabled" });
+    expect(out).toEqual({ id: "prv_1" });
+    const call = seen[0];
+    expect(call.method).toBe("PATCH");
+    expect(call.url).toBe("http://api:8088/providers/prv_1");
+    expect(call.auth).toBe("Bearer tok-123");
+    expect(call.body).toEqual({ status: "disabled" });
+  });
+
+  it("providerModels GETs the catalog", async () => {
+    ok({ models: ["openai/gpt-oss-120b"] });
+    const out = await api.providerModels("prv_1");
+    expect(out.models).toEqual(["openai/gpt-oss-120b"]);
+    const call = seen[0];
+    expect(call.method).toBe("GET");
+    expect(call.url).toBe("http://api:8088/providers/prv_1/models");
+  });
+
+  it("patchTeammate PATCHes provider attachment (null detaches)", async () => {
+    ok({ id: "tm_1" });
+    await api.patchTeammate("tm_1", { provider_id: null });
+    const call = seen[0];
+    expect(call.method).toBe("PATCH");
+    expect(call.url).toBe("http://api:8088/teammates/tm_1");
+    expect(call.body).toEqual({ provider_id: null });
+  });
+});
