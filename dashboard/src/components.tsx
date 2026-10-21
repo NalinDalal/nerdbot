@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { cloneElement, isValidElement, useEffect, useRef, useState, useId } from "react";
+import type { ReactElement } from "react";
 import type { ReactNode } from "react";
 import { api, describeError } from "./api";
 import type { Permission, Task } from "./types";
@@ -327,15 +328,55 @@ export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () =>
 /* --- Modal --- */
 
 export function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    // Move focus to the first sensible control while open; restore it on close.
+    const previous = document.activeElement as HTMLElement | null;
+    const panel = panelRef.current;
+    const selector =
+      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    const firstInput = panel?.querySelector<HTMLElement>("textarea, input, select");
+    const first = firstInput ?? panel?.querySelector<HTMLElement>(selector);
+    first?.focus();
+    return () => {
+      previous?.focus();
+    };
+  }, []);
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      onClose();
+      return;
+    }
+    // Keep Tab cycling inside the dialog (minimal focus trap).
+    if (e.key !== "Tab" || !panelRef.current) return;
+    const focusables = Array.from(
+      panelRef.current.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    );
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+
   return (
     <div
       className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/55 backdrop-blur-sm"
       onClick={onClose}
-      onKeyDown={(e) => {
-        if (e.key === "Escape") onClose();
-      }}
+      onKeyDown={handleKeyDown}
     >
       <div
+        ref={panelRef}
         className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-lg"
         role="dialog"
         aria-modal="true"
@@ -369,12 +410,26 @@ export function Field({
   error?: string;
   children: ReactNode;
 }) {
+  const id = useId();
+  const single = isValidElement(children)
+    ? (children as ReactElement<Record<string, unknown> & { id?: string }>)
+    : null;
+  const isNativeControl =
+    single !== null &&
+    typeof single.type === "string" &&
+    ["input", "select", "textarea"].includes(single.type as string);
+  // Associate the visible label with the control; keep any id the caller set.
+  const controlId = isNativeControl ? (single!.props.id ?? id) : undefined;
+  const control = isNativeControl ? cloneElement(single!, { id: controlId }) : children;
   return (
     <div className="mb-4">
-      <span className="block text-[var(--step-minus-1)] font-medium text-[var(--muted)] mb-1.5 uppercase tracking-wide">
+      <label
+        htmlFor={controlId}
+        className="block text-[var(--step-minus-1)] font-medium text-[var(--muted)] mb-1.5 uppercase tracking-wide"
+      >
         {label}
-      </span>
-      {children}
+      </label>
+      {control}
       {error ? (
         <div className="mt-1.5 text-[var(--step-minus-1)] text-[var(--danger)]">{error}</div>
       ) : null}

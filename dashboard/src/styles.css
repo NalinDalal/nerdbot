@@ -29,7 +29,8 @@
   --text-soft: #b9c4cf;
   --text-inverse: #071014;
   --muted: #8b98a5;
-  --faint: #5b6a77;
+  /* AA-checked: 4.99:1 on --surface, 5.43:1 on --bg */
+  --faint: #79899a;
   --ring: rgba(46, 158, 107, 0.35);
 
   /* Semantic colors */
@@ -91,8 +92,10 @@
   --text: #0f171d;
   --text-soft: #47535f;
   --text-inverse: #f7f8f9;
-  --muted: #6b7783;
-  --faint: #93a0ab;
+  --muted: #5d6873;
+  /* AA-checked: 4.83:1 on --surface, 4.54:1 on --bg; muted stays a legible
+     step above (5.69:1 on surface). */
+  --faint: #68737f;
   --ring: rgba(46, 158, 107, 0.25);
 
   --accent: #2e9e6b;
@@ -125,7 +128,7 @@
     --text-soft: #b9c4cf;
     --text-inverse: #071014;
     --muted: #8b98a5;
-    --faint: #5b6a77;
+    --faint: #79899a;
     --accent-dim: rgba(46, 158, 107, 0.10);
     --danger-dim: rgba(215, 95, 93, 0.08);
     --warn-dim: rgba(201, 143, 51, 0.08);

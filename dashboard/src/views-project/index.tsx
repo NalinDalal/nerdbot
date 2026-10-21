@@ -56,12 +56,15 @@ export function ProjectDetailView({
         </div>
         <div
           role="tablist"
+          aria-label="Project sections"
           className="mb-6 flex flex-wrap gap-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1"
         >
           {TABS.map((name) => (
             <button
               key={name}
               role="tab"
+              id={`project-tab-${name}`}
+              aria-controls="project-tab-panel"
               aria-selected={tab === name}
               onClick={() => setTab(name)}
               className={`rounded-md px-3 py-1.5 text-[var(--step-minus-1)] font-medium transition-colors ${
@@ -74,24 +77,26 @@ export function ProjectDetailView({
             </button>
           ))}
         </div>
-        {tab === "Tasks" && <TasksTab projectId={projectId} onOpenTask={onOpenTask} />}
-        {tab === "Chat" && (
-          <div className="h-[75vh] min-h-[480px] overflow-hidden rounded-xl border border-[var(--border)]">
-            <ConversationView projectId={projectId} />
-          </div>
-        )}
-        {tab === "Teammates" && <TeammatesTab projectId={projectId} />}
-        {tab === "Providers" && <ProvidersTab projectId={projectId} />}
-        {tab === "Issues" && <IssuesTab projectId={projectId} />}
-        {tab === "Knowledge" && <KnowledgeTab projectId={projectId} />}
-        {tab === "Schedules" && <SchedulesTab projectId={projectId} />}
-        {tab === "Approvals" && <ApprovalsTab projectId={projectId} />}
-        {tab === "Messages" && <MessagesTab projectId={projectId} />}
-        {tab === "Notifications" && <NotificationsTab projectId={projectId} />}
-        {tab === "Memory" && <MemoryTab projectId={projectId} />}
-        {tab === "Backup" && <BackupTab projectId={projectId} />}
-        {tab === "Metrics" && <MetricsTab projectId={projectId} />}
-        {tab === "Events" && <EventsTab projectId={projectId} />}
+        <div role="tabpanel" id="project-tab-panel" aria-labelledby={`project-tab-${tab}`} className="min-h-0">
+          {tab === "Tasks" && <TasksTab projectId={projectId} onOpenTask={onOpenTask} />}
+          {tab === "Chat" && (
+            <div className="h-[75vh] min-h-[480px] overflow-hidden rounded-xl border border-[var(--border)]">
+              <ConversationView projectId={projectId} />
+            </div>
+          )}
+          {tab === "Teammates" && <TeammatesTab projectId={projectId} />}
+          {tab === "Providers" && <ProvidersTab projectId={projectId} />}
+          {tab === "Issues" && <IssuesTab projectId={projectId} />}
+          {tab === "Knowledge" && <KnowledgeTab projectId={projectId} />}
+          {tab === "Schedules" && <SchedulesTab projectId={projectId} />}
+          {tab === "Approvals" && <ApprovalsTab projectId={projectId} />}
+          {tab === "Messages" && <MessagesTab projectId={projectId} />}
+          {tab === "Notifications" && <NotificationsTab projectId={projectId} />}
+          {tab === "Memory" && <MemoryTab projectId={projectId} />}
+          {tab === "Backup" && <BackupTab projectId={projectId} />}
+          {tab === "Metrics" && <MetricsTab projectId={projectId} />}
+          {tab === "Events" && <EventsTab projectId={projectId} />}
+        </div>
       </div>
     </div>
   );
