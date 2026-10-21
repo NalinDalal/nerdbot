@@ -12,3 +12,7 @@ build/
 *.db-wal
 
 .nerdbot-data/
+
+# runtime task checkouts + produced evidence (never committed)
+workspaces/
+artifacts/
