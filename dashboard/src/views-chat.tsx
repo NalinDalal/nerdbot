@@ -296,6 +296,89 @@ function NewThreadModal({
   );
 }
 
+/* --- Inline model chip (landing composer) --- */
+
+/** Grok-pattern model switcher: a quiet chip in the composer that opens a
+ *  small menu, so model selection lives in the composer instead of buried
+ *  in the thread header. */
+function ModelChip({
+  providers,
+  value,
+  onChange,
+  disabled,
+}: {
+  providers: { id: string; name: string; kind: string }[];
+  value: "__default__" | string;
+  onChange: (id: "__default__" | string) => void;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const current = providers.find((p) => p.id === value);
+  const label = current ? current.name : "Default model";
+  const options: Array<{ id: "__default__" | string; label: string; kind?: string }> = [
+    { id: "__default__", label: "Default model" },
+    ...providers.map((p) => ({ id: p.id, label: p.name, kind: p.kind })),
+  ];
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        disabled={disabled}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Model provider"
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-[var(--step-minus-1)] text-[var(--text-soft)] transition-colors hover:border-[var(--faint)] disabled:pointer-events-none disabled:opacity-50"
+      >
+        <span aria-hidden className="text-[var(--faint)]">Model:</span> {label}
+        <span aria-hidden className="text-[var(--faint)]">{open ? "▴" : "▾"}</span>
+      </button>
+      {open ? (
+        <>
+          <div
+            aria-hidden
+            className="fixed inset-0 z-20"
+            onClick={() => setOpen(false)}
+          />
+          <div
+            role="menu"
+            aria-label="Model provider options"
+            className="absolute bottom-full right-0 z-30 mb-2 w-56 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 shadow-lg"
+          >
+            {options.map((option) => {
+              const selected = option.id === value;
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={selected}
+                  onClick={() => {
+                    onChange(option.id);
+                    setOpen(false);
+                  }}
+                  className={`flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-[var(--step-minus-1)] transition-colors ${
+                    selected
+                      ? "bg-[var(--surface-3)] text-[var(--text)]"
+                      : "text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
+                  }`}
+                >
+                  <span className="truncate">{option.label}</span>
+                  {selected ? (
+                    <span aria-hidden className="text-[var(--accent)]">✓</span>
+                  ) : option.kind ? (
+                    <span className="text-[var(--faint)]">{option.kind}</span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 /* --- Thread pane --- */
 
 const PROVIDER_SELECT_CLASS =
@@ -1066,20 +1149,12 @@ function CommandCenter({
                 aria-label="Start a conversation"
                 className="max-h-48 min-h-[52px] flex-1 resize-none bg-transparent p-2.5 leading-relaxed outline-none placeholder:text-[var(--faint)] disabled:opacity-50"
               />
-              <select
+              <ModelChip
+                providers={providers}
                 value={selectedProviderId}
-                onChange={(e) => setSelectedProviderId(e.target.value)}
+                onChange={setSelectedProviderId}
                 disabled={busy || !hasProvider}
-                aria-label="Model provider"
-                className={PROVIDER_SELECT_CLASS}
-              >
-                <option value="__default__">Default model</option>
-                {providers.map((provider) => (
-                  <option key={provider.id} value={provider.id}>
-                    {provider.name} ({provider.kind})
-                  </option>
-                ))}
-              </select>
+              />
               {busy ? (
                 <Button variant="danger" type="button" onClick={stop} disabled={!streaming}>
                   ■ Stop
