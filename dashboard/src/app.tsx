@@ -10,7 +10,9 @@ import { SettingsView } from "./views-settings";
 import { TeamsView, TeamDetailView } from "./views-teams";
 import { BotDetailView, BotsView } from "./views-bot";
 import { BoardsView, BoardDetailView } from "./views-boards";
-import { EmptyState, LoadingState, useAsync } from "./components";
+import {
+  EmptyState,
+} from "./components";
 
 export type Route =
   | { name: "home" }
@@ -60,17 +62,18 @@ export default function App() {
   const [route, setRoute] = useState<Route>(parseHash);
   const [connected, setConnected] = useState(() => getSession() !== null);
   const [activeThreadId, setActiveThread] = useState<string | null>(null);
-  const [search, setSearch] = useState("");
-  const home = useAsync(() => api.getHome(), []);
-  const threads = useAsync(
-    () => (home.data ? api.listThreads(home.data.id) : Promise.resolve({ threads: [] })),
-    [home.data?.id],
-  );
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   useEffect(() => {
     const onHash = () => setRoute(parseHash());
     window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
+    const mq = window.matchMedia("(max-width: 760px)");
+    const onResize = () => setDrawerOpen(false);
+    mq.addEventListener("change", onResize);
+    return () => {
+      window.removeEventListener("hashchange", onHash);
+      mq.removeEventListener("change", onResize);
+    };
   }, []);
 
   const openProject = (id: string) => {
@@ -83,6 +86,8 @@ export default function App() {
     return <ConnectScreen onConnected={() => setConnected(true)} />;
   }
 
+  const isChatRoute = route.name === "home" || route.name === "chat";
+
   const nav = (href: string, label: string, active: boolean) => (
     <button
       key={href}
@@ -93,15 +98,33 @@ export default function App() {
     </button>
   );
 
-  const isChatRoute = route.name === "home" || route.name === "chat";
-
   return (
     <div className="layout">
-      <aside className="sidebar">
+      <button
+        className="mobile-menu"
+        aria-label="Open navigation"
+        onClick={() => setDrawerOpen((d) => !d)}
+      >
+        ☰
+      </button>
+
+      <aside className={`sidebar${drawerOpen ? " open" : ""}`}>
         <div className="sidebar-inner">
-          <div className="brand">
-            <strong>NerdBot</strong>
-            <div className="brand-sub">personal assistant</div>
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <div className="brand">
+              <strong>NerdBot</strong>
+              <div className="brand-sub">personal assistant</div>
+            </div>
+            {drawerOpen && (
+              <button
+                className="button"
+                onClick={() => setDrawerOpen(false)}
+                aria-label="Close navigation"
+                style={{ padding: "6px 10px", fontSize: 12 }}
+              >
+                Close
+              </button>
+            )}
           </div>
 
           <div className="sidebar-section">
@@ -112,43 +135,6 @@ export default function App() {
             >
               New chat
             </button>
-            <div className="field" style={{ marginTop: 14, marginBottom: 8 }}>
-              <input
-                className="search-input"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search conversations"
-                aria-label="Search conversations"
-              />
-            </div>
-            <div className="sidebar-section-label">Recent</div>
-            <div className="recent-list">
-              {threads.loading ? (
-                <LoadingState lines={2} />
-              ) : threads.error ? (
-                <div className="error-box" style={{ padding: 8, fontSize: 12 }}>
-                  {apiDescribeError(threads.error)}
-                </div>
-              ) : (threads.data?.threads ?? []).length === 0 ? (
-                <div className="muted" style={{ fontSize: 12 }}>No conversations yet</div>
-              ) : null}
-              {(threads.data?.threads ?? [])
-                .filter((t) => !search || t.title.toLowerCase().includes(search.toLowerCase()))
-                .slice(0, 8)
-                .map((thread) => (
-                <div
-                  key={thread.id}
-                  className="recent-item"
-                  onClick={() => {
-                    setActiveThread(thread.id);
-                    navigate("#/");
-                  }}
-                >
-                  <div className="recent-title">{thread.title || "Untitled"}</div>
-                  <div className="recent-meta mono muted">{thread.id.slice(0, 10)}…</div>
-                </div>
-              ))}
-            </div>
           </div>
 
           <div className="sidebar-section">
@@ -176,7 +162,7 @@ export default function App() {
         </div>
       </aside>
 
-      <main className="main">
+      <div className={`main${drawerOpen ? " dimmed" : ""}`}>
         {isChatRoute && (
           <ConversationView
             projectId={route.name === "chat" ? route.projectId : undefined}
@@ -223,7 +209,7 @@ export default function App() {
           <EmptyState title="Workspace" hint="Select a workspace area from the sidebar." />
         )}
         <Toaster position="bottom-right" richColors closeButton />
-      </main>
+      </div>
     </div>
   );
 }
