@@ -47,6 +47,12 @@ export interface WorkspaceSummary {
   blockedTasks: number;
 }
 
+/** What the async loader resolves to: the summary plus load honesty. */
+export interface WorkspaceLoadResult {
+  summary: WorkspaceSummary;
+  loadFailed: boolean;
+}
+
 const count = (n: number, singular: string, plural?: string) =>
   `${n} ${n === 1 ? singular : plural ?? `${singular}s`}`;
 
@@ -102,45 +108,60 @@ export function summarize(
   };
 }
 
-/** Aggregate everything the Command Center banner and rollup need. */
-export function useWorkspaceSummary(): ReturnType<typeof useAsync<WorkspaceSummary>> & {
+/** Aggregate everything the Command Center banner and rollup need.
+ *
+ *  Per-parcel failures stay soft (one broken project must not blank the
+ *  rest), but they are never hidden: the result reports whether any fetch
+ *  failed so the caller can show an honest, retryable error. */
+export function useWorkspaceSummary(): ReturnType<typeof useAsync<WorkspaceLoadResult>> & {
   summary: WorkspaceSummary;
+  loadFailed: boolean;
 } {
-  const state = useAsync(async () => {
+  const state = useAsync(async (): Promise<WorkspaceLoadResult> => {
+    let loadFailed = false;
+    const soft = <T,>(p: Promise<T>, fallback: T): Promise<T> =>
+      p.catch(() => {
+        loadFailed = true;
+        return fallback;
+      });
     const [projectsRes, teamsRes, botsRes] = await Promise.all([
-      api.listProjects().catch(() => ({ projects: [] })),
-      api.listTeams().catch(() => ({ teams: [] })),
-      api.listAllTeammates().catch(() => ({ teammates: [] })),
+      soft(api.listProjects(), { projects: [] } as Awaited<ReturnType<typeof api.listProjects>>),
+      soft(api.listTeams(), { teams: [] } as Awaited<ReturnType<typeof api.listTeams>>),
+      soft(api.listAllTeammates(), { teammates: [] } as Awaited<ReturnType<typeof api.listAllTeammates>>),
     ]);
     const projectList = projectsRes.projects ?? [];
     const bundles: ProjectBundle[] = await Promise.all(
       projectList.map(async (project) => {
         const [tasks, runs, approvals, teammates] = await Promise.all([
-          api.projectTasks(project.id).then((r) => r.tasks).catch(() => [] as Task[]),
-          api.projectRuns(project.id).then((r) => r.runs).catch(() => [] as Run[]),
-          api.projectApprovals(project.id).then((r) => r.approvals).catch(() => [] as Approval[]),
-          api.listTeammates(project.id).then((r) => r.teammates).catch(() => [] as Teammate[]),
+          soft(api.projectTasks(project.id).then((r) => r.tasks), [] as Task[]),
+          soft(api.projectRuns(project.id).then((r) => r.runs), [] as Run[]),
+          soft(api.projectApprovals(project.id).then((r) => r.approvals), [] as Approval[]),
+          soft(api.listTeammates(project.id).then((r) => r.teammates), [] as Teammate[]),
         ]);
         return { project, tasks, runs, approvals, teammates };
       }),
     );
     const teams: TeamBundle[] = await Promise.all(
       (teamsRes.teams ?? []).map(async (team) => {
-        try {
-          const detail = await api.getTeam(team.id);
-          return {
-            team,
-            projects: detail.projects.map((p) => p.id),
-            teammates: detail.teammates,
-          };
-        } catch {
-          return { team, projects: [], teammates: [] };
-        }
+        const detail = await soft(api.getTeam(team.id), null);
+        if (!detail) return { team, projects: [], teammates: [] };
+        return {
+          team,
+          projects: detail.projects.map((p) => p.id),
+          teammates: detail.teammates,
+        };
       }),
     );
-    return summarize({ bundles, teams, bots: botsRes.teammates ?? [] });
+    return {
+      summary: summarize({ bundles, teams, bots: botsRes.teammates ?? [] }),
+      loadFailed,
+    };
   }, []);
-  return { ...state, summary: state.data ?? emptySummary() };
+  return {
+    ...state,
+    summary: state.data?.summary ?? emptySummary(),
+    loadFailed: state.data?.loadFailed ?? false,
+  };
 }
 
 function emptySummary(): WorkspaceSummary {

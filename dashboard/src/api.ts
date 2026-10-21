@@ -485,7 +485,9 @@ async function streamChat(
   let buffer = "";
   let full = "";
   if (opts?.signal) {
-    const onAbort = () => void reader.cancel();
+    // reader.cancel() rejects when the stream already errored (that is how an
+    // abort surfaces); swallow that so it cannot become an unhandled rejection.
+    const onAbort = () => reader.cancel().catch(() => undefined);
     opts.signal.addEventListener("abort", onAbort, { once: true });
   }
   for (;;) {

@@ -107,8 +107,14 @@ export function ConversationView({
 
       {/* Workspace-wide attention banner */}
       <div className="px-4 pt-3 md:px-6">
+        {summary.loadFailed && !summary.loading ? (
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-[var(--step-minus-1)] text-[var(--danger)]">
+            <span>Couldn't load some fleet data — the Command Center below may be incomplete.</span>
+            <Button onClick={summary.reload}>Retry</Button>
+          </div>
+        ) : null}
         <AttentionBanner
-          summary={summary.data}
+          summary={summary.data?.summary ?? null}
           busy={decideBusy}
           onDecide={decideApproval}
           onOpenTask={openTask}
@@ -189,8 +195,6 @@ export function ConversationView({
               }}
               refreshProviders={() => providers.reload()}
               refreshThreads={() => threads.reload()}
-              onDecide={decideApproval}
-              decideBusy={decideBusy}
             />
           ) : (
             <EmptyState
@@ -318,6 +322,7 @@ function ThreadPane({
   const [contextPanel, setContextPanel] = useState<"files" | "bots" | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<Array<{ name: string; content: string }>>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const providerId = view.data?.thread.provider_id ?? "__default__";
@@ -331,9 +336,12 @@ function ThreadPane({
     e.preventDefault();
     const content = draft.trim();
     if (!content || busy) return;
+    const controller = new AbortController();
+    abortRef.current = controller;
     setBusy(true);
     setStreaming("");
     setRetryFrom(null);
+    let stopped = false;
     try {
       let fullContent = content;
       if (attachedFiles.length > 0) {
@@ -346,49 +354,62 @@ function ThreadPane({
       if (useStream) {
         await api.sendChatStream(threadId, fullContent, (chunk) => {
           setStreaming((prev) => prev + chunk);
-        });
+        }, { signal: controller.signal });
       } else {
         await api.sendChat(threadId, fullContent);
       }
       setDraft("");
       await onReload();
     } catch (err) {
-      notifyError(err);
+      if (controller.signal.aborted && err instanceof ApiError && err.detail === "Stream stopped") {
+        stopped = true;
+        setStreaming((prev) => (prev ? `${prev}\n[stopped]` : ""));
+      } else {
+        notifyError(err);
+      }
     } finally {
+      abortRef.current = null;
       setBusy(false);
-      setStreaming("");
+      if (!stopped) setStreaming("");
     }
   };
 
   const stop = () => {
-    setBusy(false);
-    setStreaming("");
-    toast.info("Stopped streaming");
+    abortRef.current?.abort();
   };
 
   const retry = async () => {
     if (!view.data) return;
     const target = retryFrom ?? view.data.messages[view.data.messages.length - 1]?.id;
     if (!target) return;
+    const controller = new AbortController();
+    abortRef.current = controller;
     setBusy(true);
     setStreaming("");
+    let stopped = false;
     try {
       const content =
         view.data.messages.find((m) => m.id === target)?.content ?? "";
       if (useStream) {
         await api.sendChatStream(threadId, content, (chunk) => {
           setStreaming((prev) => prev + chunk);
-        });
+        }, { signal: controller.signal });
       } else {
         await api.sendChat(threadId, content);
       }
       setRetryFrom(null);
       await onReload();
     } catch (err) {
-      notifyError(err);
+      if (controller.signal.aborted && err instanceof ApiError && err.detail === "Stream stopped") {
+        stopped = true;
+        setStreaming((prev) => (prev ? `${prev}\n[stopped]` : ""));
+      } else {
+        notifyError(err);
+      }
     } finally {
+      abortRef.current = null;
       setBusy(false);
-      setStreaming("");
+      if (!stopped) setStreaming("");
     }
   };
 
@@ -718,6 +739,7 @@ function ExecutionView({
   const [mates, setMates] = useState<Teammate[] | null>(null);
 
   useEffect(() => {
+    if (view.error) return;
     if (
       !view.data ||
       (view.data.task.status !== "done" &&
@@ -727,7 +749,7 @@ function ExecutionView({
       const t = setTimeout(() => setPoll((n) => n + 1), 3000);
       return () => clearTimeout(t);
     }
-  }, [view.data, poll]);
+  }, [view.data, view.error, poll]);
 
   useEffect(() => {
     if (view.data?.task.owner_teammate_id && !mates) {
@@ -746,6 +768,28 @@ function ExecutionView({
     : null;
   const terminal = task?.status === "done" || task?.status === "failed" || task?.status === "cancelled";
   const awaitingDecision = task?.status === "blocked";
+
+  if (view.error) {
+    return (
+      <div className="mx-4 mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-sm md:mx-6">
+        <div className="flex items-center justify-between border-b border-[var(--border-dim)] px-4 py-2">
+          <span className="text-[var(--step-minus-2)] font-medium uppercase tracking-[0.14em] text-[var(--faint)]">
+            Execution
+          </span>
+          <button
+            onClick={onClose}
+            aria-label="Close execution view"
+            className="rounded-sm p-1 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
+          >
+            ×
+          </button>
+        </div>
+        <div className="px-4 py-4">
+          <ErrorState error={view.error} onRetry={view.reload} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-4 mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-sm md:mx-6">
@@ -922,8 +966,6 @@ function CommandCenter({
   onThreadCreated,
   refreshProviders,
   refreshThreads,
-  onDecide,
-  decideBusy,
 }: {
   projectId: string;
   threads: ChatThread[];
@@ -933,8 +975,6 @@ function CommandCenter({
   onThreadCreated: (threadId: string) => void;
   refreshProviders?: () => void;
   refreshThreads?: () => void;
-  onDecide: (approvalId: string, decision: "approved" | "approved_forever" | "denied") => void;
-  decideBusy: boolean;
 }) {
   const hasProvider = providers.length > 0;
   const [draft, setDraft] = useState("");
@@ -962,6 +1002,7 @@ function CommandCenter({
     abortRef.current = controller;
     setBusy(true);
     setStreaming("");
+    let stopped = false;
     try {
       const thread = await api.createThread(projectId, { title: content.slice(0, 60) });
       onThreadCreated(thread.id);
@@ -972,6 +1013,7 @@ function CommandCenter({
       refreshThreads?.();
     } catch (err) {
       if (err instanceof ApiError && err.detail === "Stream stopped") {
+        stopped = true;
         setStreaming((prev) => (prev ? `${prev}\n[stopped]` : ""));
       } else {
         notifyError(err);
@@ -979,15 +1021,12 @@ function CommandCenter({
     } finally {
       abortRef.current = null;
       setBusy(false);
-      setStreaming("");
+      if (!stopped) setStreaming("");
     }
   };
 
   const stop = () => {
-    const controller = abortRef.current;
-    if (!controller) return;
-    controller.abort();
-    setStreaming((prev) => `${prev}\n[stopped]`);
+    abortRef.current?.abort();
   };
 
   const sorted = [...threads].sort(
@@ -997,13 +1036,7 @@ function CommandCenter({
   return (
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto flex w-full max-w-[680px] flex-col gap-8 px-4 py-10 md:px-6">
-        {/* Attention first: the fleet state is more urgent than the composer */}
-        <AttentionBanner
-          summary={summary.data}
-          busy={decideBusy}
-          onDecide={onDecide}
-          onOpenTask={openTask}
-        />
+        {/* The workspace banner renders once above this pane (ConversationView). */}
 
         {/* Landing composer */}
         <div className="scroll-mt-6">
@@ -1182,13 +1215,13 @@ function CommandCenter({
             <SectionLabel>Fleet execution</SectionLabel>
             {summary.data ? (
               <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
-                {summary.data.runningTasks} running · {summary.data.queuedTasks} queued ·{" "}
-                {summary.data.blockedTasks} awaiting approval
+                {summary.data.summary.runningTasks} running · {summary.data.summary.queuedTasks} queued ·{" "}
+                {summary.data.summary.blockedTasks} awaiting approval
               </span>
             ) : null}
           </div>
           <ExecutionRollup
-            summary={summary.data}
+            summary={summary.data?.summary ?? null}
             onOpenTeam={(teamId) => { window.location.hash = `#/team/${teamId}`; }}
           />
         </section>

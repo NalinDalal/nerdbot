@@ -402,6 +402,40 @@ describe("views", () => {
     });
   });
 
+  it("chat stream stops when aborted, mapping abort to Stream stopped", async () => {
+    let abortStream: (() => void) | null = null;
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {"text": "par"}\n\n'));
+        abortStream = () => {
+          const abortErr = new Error("The operation was aborted");
+          abortErr.name = "AbortError";
+          controller.error(abortErr);
+        };
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit = {}) => {
+        // A real browser/undici rejects in-flight reads when the signal aborts.
+        const signal = init.signal as AbortSignal | undefined;
+        signal?.addEventListener("abort", () => abortStream?.(), { once: true });
+        return { ok: true, status: 200, body: stream } as Response;
+      }),
+    );
+    const chunks: string[] = [];
+    const controller = new AbortController();
+    const pending = api.sendChatStream("thr_1", "hi", (text) => chunks.push(text), {
+      signal: controller.signal,
+    });
+    // Let the reader attach and absorb the first chunk before aborting.
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    expect(chunks).toContain("par");
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ status: 0, detail: "Stream stopped" });
+    expect(chunks).toEqual(["par"]);
+  });
+
   it("thread summarize action", async () => {
     ok({ id: "thr_1", summary: "tea talk" });
     const thread = await api.summarizeThread("thr_1");
