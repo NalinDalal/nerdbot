@@ -22,13 +22,54 @@ const DOT_BY_STATUS: Record<string, string> = {
   needs_work: "warn",
 };
 
-export function StatusBadge({ status }: { status: string }) {
+export function StatusBadge({
+  status,
+  label,
+}: {
+  status: string;
+  label?: string;
+}) {
   return (
     <span className="badge">
       <span className={`dot ${DOT_BY_STATUS[status] ?? ""}`} />
-      {status}
+      {label ?? taskStatusLabel(status)}
     </span>
   );
+}
+
+/** Human-readable label for task statuses, per the backend TaskStatus enum. */
+export function taskStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    pending: "Queued",
+    ready: "Ready",
+    running: "Running",
+    done: "Completed",
+    failed: "Failed",
+    blocked: "Awaiting approval",
+    cancelled: "Cancelled",
+  };
+  return labels[status] ?? status;
+}
+
+/** Human-readable label for run statuses, per the backend RunStatus enum. */
+export function runStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    queued: "Queued",
+    running: "Running",
+    failed: "Failed",
+    blocked: "Blocked",
+  };
+  return labels[status] ?? status;
+}
+
+/** Whether a task is in a terminal state. */
+export function isTerminalTaskStatus(status: string): boolean {
+  return status === "done" || status === "failed" || status === "cancelled";
+}
+
+/** Whether a task is awaiting a user decision (approval). */
+export function isAwaitingApproval(status: string): boolean {
+  return status === "blocked";
 }
 
 export function EmptyState({ title, hint, action }: { title: string; hint?: string; action?: ReactNode }) {

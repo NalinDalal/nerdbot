@@ -13,6 +13,8 @@ import {
   Field,
   StatusBadge,
   useAsync,
+  taskStatusLabel,
+  runStatusLabel,
 } from "./components";
 
 export function ConversationView({
@@ -288,7 +290,7 @@ function ThreadPane({
   const [busy, setBusy] = useState(false);
   const [useStream, setUseStream] = useState(true);
   const [retryFrom, setRetryFrom] = useState<string | null>(null);
-  const [execView, setExecView] = useState<{ kind: "task"; taskId: string } | null>(null);
+  const [execView, setExecView] = useState<{ kind: "task"; taskId: string; projectId: string } | null>(null);
   const [contextPanel, setContextPanel] = useState<"files" | "bots" | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<Array<{ name: string; content: string }>>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -397,7 +399,7 @@ function ThreadPane({
         owner_teammate_id: null,
       });
       toast.success("Task created");
-      setExecView({ kind: "task", taskId: task.id });
+      setExecView({ kind: "task", taskId: task.id, projectId });
       await onReload();
     } catch (err) {
       notifyError(err);
@@ -682,11 +684,12 @@ function ExecutionView({
   state,
   onClose,
 }: {
-  state: { kind: "task"; taskId: string };
+  state: { kind: "task"; taskId: string; projectId: string };
   onClose: () => void;
 }) {
   const view = useAsync(() => api.taskView(state.taskId), [state.taskId]);
   const [poll, setPoll] = useState(0);
+  const [mates, setMates] = useState<Teammate[] | null>(null);
 
   useEffect(() => {
     if (
@@ -700,10 +703,23 @@ function ExecutionView({
     }
   }, [view.data, poll]);
 
+  useEffect(() => {
+    if (view.data?.task.owner_teammate_id && !mates) {
+      api.listTeammates(state.projectId)
+        .then((res) => setMates(res.teammates))
+        .catch(() => setMates([]));
+    }
+  }, [view.data?.task.owner_teammate_id, state.projectId, mates]);
+
   const task = view.data?.task;
   const runs = view.data?.runs ?? [];
   const artifacts = view.data?.artifacts ?? [];
   const latestRun = runs[runs.length - 1];
+  const owner = task?.owner_teammate_id
+    ? mates?.find((m) => m.id === task.owner_teammate_id)
+    : null;
+  const terminal = task?.status === "done" || task?.status === "failed" || task?.status === "cancelled";
+  const awaitingDecision = task?.status === "blocked";
 
   return (
     <div className="execution-view">
@@ -720,17 +736,34 @@ function ExecutionView({
       <div className="execution-body">
         <div className="execution-task">
           <strong>Task</strong>
-          <div className="mono muted" style={{ fontSize: 12 }}>
-            {task?.description || ""}
-          </div>
+          <div className="mono muted" style={{ fontSize: 12 }}>{task?.description || ""}</div>
           <div style={{ marginTop: 6 }}>
-            <StatusBadge status={task?.status || "pending"} />
+            <StatusBadge
+              status={task?.status || "pending"}
+              label={taskStatusLabel(task?.status || "pending")}
+            />
+            {owner && (
+              <span style={{ marginLeft: 8, fontSize: 12, color: "var(--muted)" }}>
+                {owner.persona || "bot"} is responsible
+              </span>
+            )}
             {latestRun && (
               <span style={{ marginLeft: 8, fontSize: 12, color: "var(--muted)" }}>
-                run {latestRun.status}
+                run {runStatusLabel(latestRun.status)}
               </span>
             )}
           </div>
+          {awaitingDecision && (
+            <div className="error-box" style={{ marginTop: 6, padding: 6, fontSize: 12 }}>
+              This run needs your decision. Open the project&rsquo;s Approvals tab to approve or
+              deny it.
+            </div>
+          )}
+          {!terminal && !awaitingDecision && latestRun && latestRun.status === "failed" && (
+            <div className="error-box" style={{ marginTop: 6, padding: 6, fontSize: 12 }}>
+              The last run failed. You can retry it from the task page.
+            </div>
+          )}
         </div>
         {latestRun && (
           <div className="execution-run">

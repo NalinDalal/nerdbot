@@ -16,6 +16,7 @@ import {
   ShortId,
   StatusBadge,
   useAsync,
+  runStatusLabel,
 } from "./components";
 import { EntityForm } from "./forms";
 
@@ -28,7 +29,9 @@ const runColumns = [
   }),
   runColumnsHelper.accessor("status", {
     header: "Status",
-    cell: (info) => <StatusBadge status={info.getValue()} />,
+    cell: (info) => (
+      <StatusBadge status={info.getValue()} label={runStatusLabel(info.getValue())} />
+    ),
   }),
   runColumnsHelper.accessor("exit_code", {
     header: "Exit",
@@ -350,12 +353,32 @@ export function TaskDetailView({
           <strong>
             Latest run <ShortId id={latestRun.id} />
           </strong>{" "}
-          <StatusBadge status={latestRun.status} />
+          <StatusBadge status={latestRun.status} label={runStatusLabel(latestRun.status)} />
           <div className="muted" style={{ fontSize: 12, margin: "4px 0" }}>
             command: <span className="mono">{latestRun.command || "—"}</span> ·{" "}
             {Number(latestRun.duration_s ?? 0).toFixed(1)}s
             {latestRun.provider_id ? ` · provider ${latestRun.provider_id.slice(0, 12)}…` : ""}
           </div>
+          {latestRun.status === "failed" && latestRun.exit_code !== null && (
+            <div className="error-box" style={{ marginTop: 8, padding: 8, fontSize: 12 }}>
+              Run failed with exit code <span className="mono">{latestRun.exit_code}</span>.
+              {latestRun.stderr ? (
+                <>
+                  <div style={{ marginTop: 4 }}>Error output:</div>
+                  <pre className="log" style={{ marginTop: 4, fontSize: 11, maxHeight: 200, overflow: "auto" }}>
+                    {latestRun.stderr.slice(0, 2000)}
+                  </pre>
+                </>
+              ) : null}
+              <button
+                className="primary"
+                style={{ marginTop: 6, padding: "4px 10px", fontSize: 12 }}
+                onClick={() => void act("retry", () => api.retryTask(taskId))}
+              >
+                Retry (new run)
+              </button>
+            </div>
+          )}
           <div className="row">
             <button
               onClick={() =>
