@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { api, describeError } from "./api";
-import type { Permission } from "./types";
+import type { Permission, Task } from "./types";
 
 export function StatusBadge({
   status,
@@ -49,14 +49,6 @@ export function runStatusLabel(status: string): string {
     blocked: "Blocked",
   };
   return labels[status] ?? status;
-}
-
-export function isTerminalTaskStatus(status: string): boolean {
-  return status === "done" || status === "failed" || status === "cancelled";
-}
-
-export function isAwaitingApproval(status: string): boolean {
-  return status === "blocked";
 }
 
 /* --- Theme --- */
@@ -434,86 +426,6 @@ export function Button({
   );
 }
 
-/* --- Input / select / textarea --- */
-
-export function Input({
-  id,
-  label,
-  value,
-  onChange,
-  placeholder,
-  disabled,
-  error,
-  type = "text",
-}: {
-  id?: string;
-  label?: string;
-  value?: string;
-  onChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  placeholder?: string;
-  disabled?: boolean;
-  error?: string;
-  type?: string;
-}) {
-  return (
-    <div className="mb-4">
-      {label && (
-        <span className="block text-[var(--step-minus-1)] font-medium text-[var(--muted)] mb-1.5 uppercase tracking-wide">
-          {label}
-        </span>
-      )}
-      <input
-        id={id}
-        type={type}
-        value={value ?? ""}
-        onChange={onChange}
-        placeholder={placeholder}
-        disabled={disabled}
-        className={`rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-0)] text-[var(--text)] transition-colors focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)] outline-none disabled:opacity-50 ${error ? "border-[var(--danger)]" : ""} w-full`}
-      />
-      {error && <div className="mt-1.5 text-[var(--step-minus-1)] text-[var(--danger)]">{error}</div>}
-    </div>
-  );
-}
-
-export function Select({
-  id,
-  label,
-  value,
-  onChange,
-  children,
-  disabled,
-  placeholder,
-}: {
-  id?: string;
-  label?: string;
-  value?: string;
-  onChange?: (e: React.ChangeEvent<HTMLSelectElement>) => void;
-  children?: ReactNode;
-  disabled?: boolean;
-  placeholder?: string;
-}) {
-  return (
-    <div className="mb-4">
-      {label && (
-        <span className="block text-[var(--step-minus-1)] font-medium text-[var(--muted)] mb-1.5 uppercase tracking-wide">
-          {label}
-        </span>
-      )}
-      <select
-        id={id}
-        value={value}
-        onChange={onChange}
-        disabled={disabled}
-        className="rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-0)] text-[var(--text)] transition-colors focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)] outline-none disabled:opacity-50 w-full"
-      >
-        {placeholder && <option value="" disabled hidden>{placeholder}</option>}
-        {children}
-      </select>
-    </div>
-  );
-}
-
 /* --- Badge --- */
 
 export function Badge({
@@ -532,58 +444,64 @@ export function Badge({
   );
 }
 
-/* --- Card --- */
-
-export function Card({ children, className }: { children?: ReactNode; className?: string }) {
-  return (
-    <div className={`rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm ${className || ""}`}>
-      {children}
-    </div>
-  );
-}
-
-/* --- Dialog (modal) --- */
-
-export function Dialog({
-  open,
-  onClose,
-  title,
-  children,
-}: {
-  open: boolean;
-  onClose: () => void;
-  title: string;
-  children?: ReactNode;
-}) {
-  if (!open) return null;
-  return (
-    <div
-      className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/55 backdrop-blur-sm"
-      onClick={onClose}
-      onKeyDown={(e) => {
-        if (e.key === "Escape") onClose();
-      }}
-    >
-      <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-6 w-full max-w-lg shadow-lg" role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <strong className="text-[var(--step-1)] font-semibold modal-title">{title}</strong>
-          <button className="modal-close rounded-sm p-1.5 text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--surface-2)] transition-colors" onClick={onClose} aria-label="Close">
-            ×
-          </button>
-        </div>
-        {children}
-      </div>
-    </div>
-  );
-}
-
 export function ShortId({ id }: { id: string }) {
   return <span className="mono text-[var(--step-minus-1)]" title={id}>{id.length > 18 ? `${id.slice(0, 18)}…` : id}</span>;
 }
 
+/* --- Shared table chrome --- */
+/* One definition for the flat data-table treatment used by every evidence
+ * surface (runs, boards, tasks). Views import these instead of re-declaring
+ * near-identical string constants that drift apart over time. */
+export const TABLE_SHELL =
+  "overflow-x-auto rounded-xl border border-[var(--border)] bg-[var(--surface)]";
+export const TABLE_TH =
+  "border-b border-[var(--border)] px-3 py-2 text-left text-[var(--step-minus-1)] font-medium uppercase tracking-wide text-[var(--faint)]";
+export const TABLE_TD =
+  "border-b border-[var(--border-dim)] px-3 py-2.5 align-top";
+
+/* --- Shared form + evidence chrome --- */
+/** Full-width form field input (entity forms, inline modals). */
+export const FORM_INPUT =
+  "w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-0)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]";
+/** Compact input variant for dense inline forms. */
+export const FORM_INPUT_SM =
+  "rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-minus-1)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]";
+/** Mono evidence block (stdout, diffs, roll-up JSON). */
+export const LOG_BLOCK =
+  "mono mt-3 overflow-x-auto whitespace-pre rounded-lg bg-[var(--surface-2)] px-3 py-2 text-[var(--step-minus-1)] leading-relaxed text-[var(--text-soft)]";
+
+/* --- Shared task tally --- */
+/** The one task-status tally: queued = pending | ready, plus running,
+ *  blocked, done, failed. Unknown statuses are ignored. Every aggregate
+ *  surface (workspace summary, team rollups, per-team counts) derives its
+ *  numbers through this so the status vocabulary cannot drift. */
+export function taskTally(tasks: Task[]): {
+  running: number;
+  queued: number;
+  blocked: number;
+  done: number;
+  failed: number;
+} {
+  let running = 0;
+  let queued = 0;
+  let blocked = 0;
+  let done = 0;
+  let failed = 0;
+  for (const task of tasks) {
+    if (task.status === "running") running += 1;
+    else if (task.status === "blocked") blocked += 1;
+    else if (task.status === "pending" || task.status === "ready") queued += 1;
+    else if (task.status === "done") done += 1;
+    else if (task.status === "failed") failed += 1;
+  }
+  return { running, queued, blocked, done, failed };
+}
+
 /* --- Async --- */
 
-export interface AsyncState<T> {
+/** Return type of {@link useAsync}. Internal: consumers reference it via
+ *  `ReturnType<typeof useAsync>` rather than importing the name. */
+interface AsyncState<T> {
   data: T | null;
   error: unknown;
   loading: boolean;
@@ -646,7 +564,8 @@ function loadCatalogue(): Promise<Permission[]> {
   return cataloguePromise;
 }
 
-export interface PermissionCatalogue {
+/** Shape of {@link usePermissionCatalogue}'s result. */
+interface PermissionCatalogue {
   permissions: Permission[];
   loading: boolean;
   error: unknown;

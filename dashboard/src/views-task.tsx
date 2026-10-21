@@ -1,10 +1,5 @@
-import {
-  createColumnHelper,
-  flexRender,
-  getCoreRowModel,
-  useReactTable,
-} from "@tanstack/react-table";
 import { useState } from "react";
+import type { ReactNode } from "react";
 import { api } from "./api";
 import { notifyError } from "./app";
 import type { Run } from "./types";
@@ -15,6 +10,11 @@ import {
   Modal,
   ShortId,
   StatusBadge,
+  TABLE_SHELL,
+  TABLE_TD as TD,
+  TABLE_TH as TH,
+  FORM_INPUT_SM as FORM_INPUT,
+  LOG_BLOCK,
   Button,
   BotChip,
   SectionLabel,
@@ -26,55 +26,36 @@ import {
 } from "./components";
 import { EntityForm } from "./forms";
 
-/* Shared class strings for the execution-evidence surfaces (stdout, diffs,
- * roll-up JSON). Same treatment as the settings connection block. */
-const LOG_BLOCK =
-  "mono mt-3 overflow-x-auto whitespace-pre rounded-lg bg-[var(--surface-2)] px-3 py-2 text-[var(--step-minus-1)] leading-relaxed text-[var(--text-soft)]";
+/* Plain render columns over the static runs data — the core-row-model only
+ * treatment TanStack was giving this table, without the dependency. */
+interface RunColumn {
+  header: string;
+  cell: (run: Run) => ReactNode;
+}
 
-const TABLE_SHELL =
-  "overflow-x-auto rounded-xl border border-[var(--border)] bg-[var(--surface)]";
-const TH =
-  "border-b border-[var(--border)] px-3 py-2 text-left text-[var(--step-minus-1)] font-medium uppercase tracking-wide text-[var(--faint)]";
-const TD = "border-b border-[var(--border-dim)] px-3 py-2.5 align-top";
-
-const FORM_INPUT =
-  "rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-minus-1)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]";
-
-const runColumnsHelper = createColumnHelper<Run>();
-
-const runColumns = [
-  runColumnsHelper.accessor("id", {
-    header: "Run",
-    cell: (info) => <ShortId id={info.getValue()} />,
-  }),
-  runColumnsHelper.accessor("status", {
+const runColumns: RunColumn[] = [
+  { header: "Run", cell: (run) => <ShortId id={run.id} /> },
+  {
     header: "Status",
-    cell: (info) => (
-      <StatusBadge status={info.getValue()} label={runStatusLabel(info.getValue())} />
-    ),
-  }),
-  runColumnsHelper.accessor("exit_code", {
+    cell: (run) => <StatusBadge status={run.status} label={runStatusLabel(run.status)} />,
+  },
+  {
     header: "Exit",
-    cell: (info) => <span className="mono text-[var(--text-soft)]">{info.getValue() ?? "—"}</span>,
-  }),
-  runColumnsHelper.accessor("runtime", {
+    cell: (run) => <span className="mono text-[var(--text-soft)]">{run.exit_code ?? "—"}</span>,
+  },
+  {
     header: "Runtime",
-    cell: (info) => <span className="text-[var(--muted)]">{info.getValue()}</span>,
-  }),
-  runColumnsHelper.accessor("duration_s", {
+    cell: (run) => <span className="text-[var(--muted)]">{run.runtime}</span>,
+  },
+  {
     header: "Secs",
-    cell: (info) => <span className="mono text-[var(--text-soft)]">{Number(info.getValue() ?? 0).toFixed(1)}</span>,
-  }),
+    cell: (run) => (
+      <span className="mono text-[var(--text-soft)]">{Number(run.duration_s ?? 0).toFixed(1)}</span>
+    ),
+  },
 ];
 
 function RunsTable({ runs }: { runs: Run[] }) {
-  // TanStack Table v8 is intentionally not compiler-memoized; data is static per render.
-  // eslint-disable-next-line react-hooks/incompatible-library
-  const table = useReactTable({
-    data: runs,
-    columns: runColumns,
-    getCoreRowModel: getCoreRowModel(),
-  });
   if (runs.length === 0) {
     return <EmptyState title="No runs yet" hint="Run the task to produce execution evidence." />;
   }
@@ -82,24 +63,20 @@ function RunsTable({ runs }: { runs: Run[] }) {
     <div className={TABLE_SHELL}>
       <table className="w-full">
         <thead>
-          {table.getHeaderGroups().map((group) => (
-            <tr key={group.id}>
-              {group.headers.map((header) => (
-                <th key={header.id} className={TH}>
-                  {header.isPlaceholder
-                    ? null
-                    : flexRender(header.column.columnDef.header, header.getContext())}
-                </th>
-              ))}
-            </tr>
-          ))}
+          <tr>
+            {runColumns.map((column) => (
+              <th key={column.header} className={TH}>
+                {column.header}
+              </th>
+            ))}
+          </tr>
         </thead>
         <tbody>
-          {table.getRowModel().rows.map((row) => (
-            <tr key={row.id} className="transition-colors hover:bg-[var(--surface-2)]">
-              {row.getVisibleCells().map((cell) => (
-                <td key={cell.id} className={TD}>
-                  {flexRender(cell.column.columnDef.cell, cell.getContext())}
+          {runs.map((run) => (
+            <tr key={run.id} className="transition-colors hover:bg-[var(--surface-2)]">
+              {runColumns.map((column) => (
+                <td key={column.header} className={TD}>
+                  {column.cell(run)}
                 </td>
               ))}
             </tr>

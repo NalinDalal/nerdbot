@@ -2,17 +2,8 @@ import { useState } from "react";
 import { ApiError, api } from "./api";
 import { notifyError } from "./app";
 import type { Plan } from "./types";
-import { EmptyState, ErrorState, LoadingState, Modal, ShortId, StatusBadge, Button, SectionLabel, Page, PageHeader, useAsync } from "./components";
+import { EmptyState, ErrorState, LoadingState, Modal, ShortId, StatusBadge, TABLE_SHELL, TABLE_TD as TD, TABLE_TH as TH, FORM_INPUT, Button, SectionLabel, Page, PageHeader, useAsync } from "./components";
 import { EntityForm } from "./forms";
-
-const FORM_INPUT =
-  "w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-0)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]";
-
-const TABLE_SHELL =
-  "overflow-x-auto rounded-xl border border-[var(--border)] bg-[var(--surface)]";
-const TH =
-  "border-b border-[var(--border)] px-3 py-2 text-left text-[var(--step-minus-1)] font-medium uppercase tracking-wide text-[var(--faint)]";
-const TD = "border-b border-[var(--border-dim)] px-3 py-2.5 align-top";
 
 export function BoardsView() {
   const list = useAsync(() => api.listBoards(), []);

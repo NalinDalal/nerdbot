@@ -15,6 +15,7 @@ import {
   PageHeader,
   useAsync,
   taskStatusLabel,
+  taskTally,
 } from "./components";
 import { EntityForm } from "./forms";
 
@@ -134,13 +135,14 @@ function teamRollup(
       ownerByTaskId.set(task.id, { id: member.id, persona: member.persona });
     }
   }
+  const tally = taskTally(members.flatMap((member) => member.tasks));
+  entry.running = tally.running;
+  entry.queued = tally.queued;
+  entry.blocked = tally.blocked;
+  entry.done = tally.done;
+  entry.failed = tally.failed;
   for (const member of members) {
     for (const task of member.tasks) {
-      if (task.status === "running") entry.running += 1;
-      else if (task.status === "blocked") entry.blocked += 1;
-      else if (task.status === "pending" || task.status === "ready") entry.queued += 1;
-      else if (task.status === "done") entry.done += 1;
-      else if (task.status === "failed") entry.failed += 1;
       if (task.parent_task_id) {
         const parent = ownerByTaskId.get(task.parent_task_id);
         if (parent && parent.id !== member.id) {

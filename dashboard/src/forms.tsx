@@ -1,9 +1,8 @@
 import { useState } from "react";
-import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { describeError } from "./api";
 import { notifyError } from "./app";
-import { Field, Modal } from "./components";
+import { Field } from "./components";
 
 export interface FormField {
   name: string;
@@ -15,6 +14,15 @@ export interface FormField {
   hint?: string;
 }
 
+const CONTROL_CLASS =
+  "w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-0)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]";
+
+type ControlEvent = React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>;
+
+/** Small controlled form over a flat string map. One required rule per
+ *  field, inline errors, and an honest inline failure box — deliberately
+ *  plain React instead of a form library, which cost more bundle than it
+ *  bought for a form this simple. */
 export function EntityForm({
   fields,
   submitLabel,
@@ -24,15 +32,28 @@ export function EntityForm({
   submitLabel: string;
   onSubmit: (values: Record<string, string>) => Promise<unknown>;
 }) {
-  const {
-    register,
-    handleSubmit,
-    formState: { errors, isSubmitting },
-  } = useForm<Record<string, string>>();
+  const [values, setValues] = useState<Record<string, string>>(() =>
+    Object.fromEntries(fields.map((field) => [field.name, ""])),
+  );
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const [failed, setFailed] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
-  const submit = handleSubmit(async (values) => {
+  const set = (name: string) => (event: ControlEvent) =>
+    setValues((prev) => ({ ...prev, [name]: event.target.value }));
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const next: Record<string, string> = {};
+    for (const field of fields) {
+      if (field.required && !(values[field.name] ?? "").trim()) {
+        next[field.name] = `${field.label} is required`;
+      }
+    }
+    setErrors(next);
+    if (Object.keys(next).length > 0) return;
     setFailed(null);
+    setSubmitting(true);
     try {
       await onSubmit(values);
       toast.success("Saved");
@@ -40,8 +61,10 @@ export function EntityForm({
       const message = describeError(err);
       setFailed(message);
       notifyError(err);
+    } finally {
+      setSubmitting(false);
     }
-  });
+  };
 
   return (
     <form onSubmit={submit}>
@@ -51,18 +74,20 @@ export function EntityForm({
         </div>
       ) : null}
       {fields.map((field) => (
-        <Field key={field.name} label={field.label} error={errors[field.name]?.message as string | undefined}>
+        <Field key={field.name} label={field.label} error={errors[field.name]}>
           {field.type === "textarea" ? (
             <textarea
               rows={3}
               placeholder={field.placeholder}
-              className="w-full resize-y rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-0)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
-              {...register(field.name, { required: field.required ? `${field.label} is required` : false })}
+              className={`${CONTROL_CLASS} resize-y`}
+              value={values[field.name] ?? ""}
+              onChange={set(field.name)}
             />
           ) : field.type === "select" ? (
             <select
-              className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-0)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
-              {...register(field.name, { required: field.required ? `${field.label} is required` : false })}
+              className={CONTROL_CLASS}
+              value={values[field.name] ?? ""}
+              onChange={set(field.name)}
             >
               {(field.options ?? []).map((option) => (
                 <option key={option} value={option}>
@@ -75,8 +100,9 @@ export function EntityForm({
               type={field.type === "password" ? "password" : "text"}
               placeholder={field.placeholder}
               autoComplete="off"
-              className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-0)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
-              {...register(field.name, { required: field.required ? `${field.label} is required` : false })}
+              className={CONTROL_CLASS}
+              value={values[field.name] ?? ""}
+              onChange={set(field.name)}
             />
           )}
           {field.hint ? (
@@ -84,25 +110,9 @@ export function EntityForm({
           ) : null}
         </Field>
       ))}
-      <button className="button primary mt-2" type="submit" disabled={isSubmitting}>
-        {isSubmitting ? "Saving…" : submitLabel}
+      <button className="button primary mt-2" type="submit" disabled={submitting}>
+        {submitting ? "Saving…" : submitLabel}
       </button>
     </form>
-  );
-}
-
-export function FormModal({
-  title,
-  onClose,
-  children,
-}: {
-  title: string;
-  onClose: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <Modal title={title} onClose={onClose}>
-      {children}
-    </Modal>
   );
 }

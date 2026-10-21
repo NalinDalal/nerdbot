@@ -7,7 +7,7 @@
  *  so a bounded fan-out is fine). */
 import { api } from "./api";
 import type { Approval, Run, Task, Team, Teammate } from "./types";
-import { useAsync, statusTone, Button, EmptyState } from "./components";
+import { useAsync, statusTone, taskTally, Button, EmptyState } from "./components";
 
 export interface ProjectBundle {
   project: { id: string; owner: string; repository: string };
@@ -72,11 +72,10 @@ export function summarize(
   let blockedTasks = 0;
   for (const bundle of data.bundles) {
     const name = bundle.project.repository || "workspace";
-    for (const task of bundle.tasks) {
-      if (task.status === "running") runningTasks += 1;
-      else if (task.status === "blocked") blockedTasks += 1;
-      else if (task.status === "pending" || task.status === "ready") queuedTasks += 1;
-    }
+    const tally = taskTally(bundle.tasks);
+    queuedTasks += tally.queued;
+    runningTasks += tally.running;
+    blockedTasks += tally.blocked;
     for (const run of bundle.runs) {
       if (run.status === "running") {
         // One task can have one live run; mark and dedupe.
@@ -281,17 +280,10 @@ function perTeamCounts(
   bundles: ProjectBundle[],
 ): { running: number; queued: number; blocked: number } {
   const inTeam = new Set(team.projects);
-  let running = 0;
-  let queued = 0;
-  let blocked = 0;
-  for (const bundle of bundles) {
-    if (!inTeam.has(bundle.project.id)) continue;
-    for (const task of bundle.tasks) {
-      if (task.status === "running") running += 1;
-      else if (task.status === "blocked") blocked += 1;
-      else if (task.status === "pending" || task.status === "ready") queued += 1;
-    }
-  }
+  const tasks = bundles.flatMap((bundle) =>
+    inTeam.has(bundle.project.id) ? bundle.tasks : [],
+  );
+  const { running, queued, blocked } = taskTally(tasks);
   return { running, queued, blocked };
 }
 
@@ -384,10 +376,3 @@ export function ExecutionRollup({
   );
 }
 
-export function teamRollupLine(summary: WorkspaceSummary): string {
-  const bits: string[] = [];
-  if (summary.runningTasks) bits.push(`${summary.runningTasks} running`);
-  if (summary.queuedTasks) bits.push(`${summary.queuedTasks} queued`);
-  if (summary.blockedTasks) bits.push(`${summary.blockedTasks} awaiting approval`);
-  return bits.join(" · ");
-}

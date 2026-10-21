@@ -11,10 +11,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@tanstack/react-table": "^8.21.3",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
-    "react-hook-form": "^7.56.4",
     "sonner": "^2.0.8"
   },
   "devDependencies": {
