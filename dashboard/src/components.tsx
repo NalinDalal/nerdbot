@@ -123,8 +123,6 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = []): AsyncSt
   const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
   const [nonce, setNonce] = useState(0);
-  // `key` intentionally stands in for `fn`: callers pass the values that
-  // identify the request, so the effect below stays free of render-scope reads.
   const key = JSON.stringify([nonce, ...deps]);
   useEffect(() => {
     let cancelled = false;
@@ -157,6 +155,158 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = []): AsyncSt
       setNonce((n) => n + 1);
     },
   };
+}
+
+/* --- Primitive buttons --- */
+export function Button({
+  children,
+  onClick,
+  variant = "default",
+  disabled,
+  type = "button",
+  icon,
+  className,
+}: {
+  children?: ReactNode;
+  onClick?: () => void;
+  variant?: "default" | "primary" | "danger" | "ghost";
+  disabled?: boolean;
+  type?: "button" | "submit" | "reset";
+  icon?: ReactNode;
+  className?: string;
+}) {
+  return (
+    <button
+      type={type}
+      onClick={onClick}
+      disabled={disabled}
+      className={`button ${variant === "primary" ? "button.primary" : variant === "danger" ? "button.danger" : ""} ${className || ""}`}
+    >
+      {icon && <span style={{ marginRight: 6 }}>{icon}</span>}
+      {children}
+    </button>
+  );
+}
+
+/* --- Input / select --- */
+export function Input({
+  id,
+  label,
+  value,
+  onChange,
+  placeholder,
+  disabled,
+  error,
+  type = "text",
+}: {
+  id?: string;
+  label?: string;
+  value?: string;
+  onChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  placeholder?: string;
+  disabled?: boolean;
+  error?: string;
+  type?: string;
+}) {
+  return (
+    <div className="field">
+      {label && <span>{label}</span>}
+      <input
+        id={id}
+        type={type}
+        value={value ?? ""}
+        onChange={onChange}
+        placeholder={placeholder}
+        disabled={disabled}
+        className={error ? "error" : undefined}
+      />
+      {error && <div className="field-error">{error}</div>}
+    </div>
+  );
+}
+
+export function Select({
+  id,
+  label,
+  value,
+  onChange,
+  children,
+  disabled,
+  placeholder,
+}: {
+  id?: string;
+  label?: string;
+  value?: string;
+  onChange?: (e: React.ChangeEvent<HTMLSelectElement>) => void;
+  children?: ReactNode;
+  disabled?: boolean;
+  placeholder?: string;
+}) {
+  return (
+    <div className="field">
+      {label && <span>{label}</span>}
+      <select id={id} value={value} onChange={onChange} disabled={disabled}>
+        {placeholder && <option value="" disabled hidden>{placeholder}</option>}
+        {children}
+      </select>
+    </div>
+  );
+}
+
+/* --- Badge --- */
+export function Badge({
+  children,
+  variant = "neutral",
+}: {
+  children?: ReactNode;
+  variant?: "neutral" | "ok" | "bad" | "warn" | "info";
+}) {
+  const dotClass = `dot ${variant === "ok" ? "ok" : variant === "bad" ? "bad" : variant === "warn" ? "warn" : variant === "info" ? "info" : ""}`;
+  return (
+    <span className="badge pill">
+      <span className={dotClass} />
+      {children}
+    </span>
+  );
+}
+
+/* --- Card --- */
+export function Card({ children, className }: { children?: ReactNode; className?: string }) {
+  return <div className={`card ${className || ""}`}>{children}</div>;
+}
+
+/* --- Dialog (modal) --- */
+export function Dialog({
+  open,
+  onClose,
+  title,
+  children,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  children?: ReactNode;
+}) {
+  if (!open) return null;
+  return (
+    <div
+      className="modal-backdrop"
+      onClick={onClose}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onClose();
+      }}
+    >
+      <div className="modal" role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}>
+        <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
+          <strong className="modal-title">{title}</strong>
+          <button className="modal-close" onClick={onClose} aria-label="Close">
+            ×
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
 }
 
 export function ShortId({ id }: { id: string }) {
