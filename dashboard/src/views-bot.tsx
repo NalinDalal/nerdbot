@@ -603,10 +603,33 @@ export function BotsView() {
   const [selectedPerms, setSelectedPerms] = useState<string[]>([]);
   const [memoryScope, setMemoryScope] = useState("project");
 
+  // give-work draft (delegate a task to a specific bot from the fleet directory)
+  const [giveWorkMateId, setGiveWorkMateId] = useState("");
+  const [giveWorkDesc, setGiveWorkDesc] = useState("");
+  const [giveWorkCmd, setGiveWorkCmd] = useState("");
+  const [giveWorkBusy, setGiveWorkBusy] = useState(false);
+
   const providers = useAsync(
     () => (pid ? api.listProviders(pid) : Promise.resolve({ providers: [] })),
     [pid],
   );
+
+  /** Live execution status per bot so the fleet directory doubles as a
+   *  workload monitor. One query per bot is fine at personal-fleet scale. */
+  const botTasks = useAsync(async () => {
+    const matesList = (all.data as { teammates: Teammate[] })?.teammates ?? [];
+    const byBot = await Promise.all(
+      matesList.map(async (m) => {
+        try {
+          const data = await api.teammateTasks(m.id);
+          return [m.id, (data as { tasks: Task[] }).tasks] as const;
+        } catch {
+          return [m.id, [] as Task[]];
+        }
+      }),
+    );
+    return Object.fromEntries(byBot) as Record<string, Task[]>;
+  }, [all.data]);
 
   const back = () => {
     if (step === "identity") setStep("identity");
@@ -657,15 +680,21 @@ export function BotsView() {
     }
   };
 
-  if (all.loading || projects.loading || catalogue.loading) {
+  if (all.loading || projects.loading || catalogue.loading || botTasks.loading) {
     return <LoadingState lines={4} />;
   }
-  if (all.error || projects.error || catalogue.error) {
+  if (all.error || projects.error || catalogue.error || botTasks.error) {
     return (
       <div>
         <button onClick={() => (window.location.hash = "#/")}>← Home</button>
         <ErrorState
-          error={all.error ?? projects.error ?? catalogue.error ?? "Unable to load fleet"}
+          error={
+            all.error ??
+            projects.error ??
+            catalogue.error ??
+            botTasks.error ??
+            "Unable to load fleet"
+          }
           onRetry={all.reload}
         />
       </div>
@@ -679,6 +708,31 @@ export function BotsView() {
 
   const projectOf = (pid2: string) =>
     projList.find((p) => p.id === pid2)?.repository || pid2.slice(0, 10);
+
+  const giveWorkSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!giveWorkMateId || !giveWorkDesc.trim()) return;
+    const mate = mates.find((m) => m.id === giveWorkMateId);
+    if (!mate) return;
+    setGiveWorkBusy(true);
+    try {
+      await api.createTask(mate.project_id, {
+        description: giveWorkDesc.trim(),
+        command: giveWorkCmd.trim() || undefined,
+        owner_teammate_id: giveWorkMateId,
+      });
+      setGiveWorkMateId("");
+      setGiveWorkDesc("");
+      setGiveWorkCmd("");
+      all.reload();
+      botTasks.reload();
+      // close modal handled by parent state via giveWorkMateId empty
+    } catch (err) {
+      notifyError(err);
+    } finally {
+      setGiveWorkBusy(false);
+    }
+  };
 
   return (
     <div>
@@ -959,7 +1013,7 @@ export function BotsView() {
               <th>Status</th>
               <th>Model</th>
               <th>Permissions</th>
-              <th>Tasks</th>
+              <th>Current task</th>
               <th></th>
             </tr>
           </thead>
@@ -986,17 +1040,55 @@ export function BotsView() {
                     ? (mate.permissions ?? []).join(", ")
                     : "—"}
                 </td>
-                <td className="muted">—</td>
                 <td>
-                  <button
-                    className="primary"
-                    onClick={() => {
-                      window.location.hash = `#/bot/${mate.id}`;
-                    }}
-                    style={{ padding: "4px 10px", fontSize: 12 }}
-                  >
-                    Open
-                  </button>
+                  {(() => {
+                    const tasks = (botTasks.data as Record<string, Task[]> | undefined)?.[mate.id] ?? [];
+                    const active = tasks.filter(
+                      (t) => t.status === "pending" || t.status === "running" || t.status === "blocked",
+                    );
+                    const latest = tasks[0];
+                    if (!latest) return <span className="muted">—</span>;
+                    const busy = active.length > 0;
+                    return (
+                      <div>
+                        <div className={`muted mono ${busy ? "text-soft" : ""}`} style={{ fontSize: 11 }}>
+                          {latest.description || "Untitled task"}
+                        </div>
+                        <div className="row" style={{ marginTop: 2 }}>
+                          <StatusBadge status={latest.status} />
+                          {busy ? (
+                            <span className="muted" style={{ fontSize: 10, marginLeft: 6 }}>
+                              active
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </td>
+                <td>
+                  <div className="row" style={{ gap: 6 }}>
+                    <button
+                      className="primary"
+                      onClick={() => {
+                        window.location.hash = `#/bot/${mate.id}`;
+                      }}
+                      style={{ padding: "4px 10px", fontSize: 12 }}
+                    >
+                      Open
+                    </button>
+                    <button
+                      className="button"
+                      onClick={() => {
+                        setGiveWorkMateId(mate.id);
+                      }}
+                      disabled={mate.status !== "active"}
+                      style={{ padding: "4px 10px", fontSize: 12, opacity: mate.status !== "active" ? 0.5 : 1 }}
+                      title={mate.status !== "active" ? "Only active bots can be given work" : "Give this bot a task"}
+                    >
+                      Give work
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
@@ -1013,6 +1105,41 @@ export function BotsView() {
           hint="Bots are persistent AI teammates. Give one a persona, attach a model, and assign it tasks. It will run work in an isolated workspace and keep its own memory."
         />
       )}
+
+      {giveWorkMateId ? (
+        <Modal
+          title={`Give work to ${mates.find((m) => m.id === giveWorkMateId)?.persona || "bot"}`}
+          onClose={() => setGiveWorkMateId("")}
+        >
+          <form onSubmit={giveWorkSubmit} className="row" style={{ flexDirection: "column", gap: 10 }}>
+            <Field label="Work to do">
+              <textarea
+                value={giveWorkDesc}
+                onChange={(e) => setGiveWorkDesc(e.target.value)}
+                placeholder="e.g. review the login flow and add tests"
+                rows={3}
+                style={{ width: 460 }}
+              />
+            </Field>
+            <Field label="Command (optional)">
+              <input
+                value={giveWorkCmd}
+                onChange={(e) => setGiveWorkCmd(e.target.value)}
+                placeholder="e.g. npm test"
+                style={{ width: 460 }}
+              />
+            </Field>
+            <div className="row" style={{ gap: 8 }}>
+              <button className="primary" type="submit" disabled={giveWorkBusy || !giveWorkDesc.trim()}>
+                {giveWorkBusy ? "Creating…" : "Create task"}
+              </button>
+              <button type="button" onClick={() => setGiveWorkMateId("")} style={{ padding: "7px 14px" }}>
+                Cancel
+              </button>
+            </div>
+          </form>
+        </Modal>
+      ) : null}
     </div>
   );
 }
