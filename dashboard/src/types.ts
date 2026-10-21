@@ -5,6 +5,19 @@ export interface Project {
   config: Record<string, unknown>;
 }
 
+/** What a workspace holds. Sent alongside the project list so a workspace
+ *  can be described without opening it. */
+export interface ProjectCounts {
+  bots: number;
+  tasks: number;
+  running: number;
+  blocked: number;
+  done: number;
+  boards: number;
+  runs: number;
+  approvals: number;
+}
+
 export interface Teammate {
   id: string;
   project_id: string;
@@ -185,6 +198,12 @@ export interface Team {
   name: string;
   description: string;
   created_at: string;
+}
+
+/** How many bots and workspaces a team holds. */
+export interface TeamCounts {
+  bots: number;
+  workspaces: number;
 }
 
 export interface TeamMember {

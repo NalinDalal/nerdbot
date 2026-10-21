@@ -10,7 +10,6 @@ import {
   LoadingState,
   Modal,
   Button,
-  Badge,
   Field,
   StatusBadge,
   StatusDot,
@@ -102,7 +101,7 @@ export function ConversationView({
           <h1 className="text-[var(--step-1)] font-semibold tracking-tight">
             {isHome ? "Home" : "Project conversation"}
           </h1>
-          <p className="text-[var(--step-minus-1)] text-[var(--muted)]">
+          <p className="mt-0.5 text-[var(--step-0)] text-[var(--muted)]">
             {isHome
               ? "Your default personal conversation. Projects are optional."
               : "Scoped to this workspace — files, tasks, and teammates stay with it."}
@@ -131,7 +130,7 @@ export function ConversationView({
 
       {/* Body: thread rail + active pane */}
       <div className="flex min-h-0 flex-1">
-        <aside className="hidden w-[280px] shrink-0 flex-col border-r border-[var(--border-dim)] md:flex">
+        <aside className="hidden w-[var(--width-conversation-sidebar)] shrink-0 flex-col border-r border-[var(--border-dim)] xl:flex">
           <div className="px-3 pt-3">
             <input
               value={search}
@@ -1175,12 +1174,14 @@ function CommandCenter({
 
   return (
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-[680px] flex-col gap-8 px-4 py-10 md:px-6">
+      <div className="mx-auto flex w-full max-w-[860px] flex-col gap-6 px-4 py-8 md:px-6">
         {/* The workspace banner renders once above this pane (ConversationView). */}
 
         {/* Landing composer */}
         <div className="scroll-mt-6">
-          <h1 className="text-[var(--step-3)] font-semibold tracking-tight">Command Center</h1>
+          <h1 className="text-[var(--step-1)] font-semibold tracking-tight text-[var(--text)]">
+            Command Center
+          </h1>
           <p className="mt-1 text-[var(--step-0)] text-[var(--muted)]">
             Your AI fleet. One place to get work done.
           </p>
@@ -1235,14 +1236,14 @@ function CommandCenter({
             )}
           </form>
           {!hasProvider && (
-            <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2">
-              <Badge variant="bad">No model configured</Badge>
-              <Button onClick={() => setShowConfigure((v) => !v)}>
-                Configure model
-              </Button>
-              <span className="text-[var(--step-minus-1)] text-[var(--muted)]">
-                The mock provider answers canned output for zero-setup verification; add a real connection to chat with your model.
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-lg border border-[var(--warn)] bg-[var(--warn-dim)] px-4 py-2.5">
+              <span className="text-[var(--step-minus-1)] text-[var(--text)]">
+                No model connected. A bot cannot think until this workspace has one with a
+                working key.
               </span>
+              <Button variant="primary" onClick={() => setShowConfigure((v) => !v)}>
+                Connect a model
+              </Button>
             </div>
           )}
           {showConfigure && (
@@ -1321,30 +1322,40 @@ function CommandCenter({
           )}
         </div>
 
-        {/* Quick entry points */}
-        <div className="grid gap-2 sm:grid-cols-3">
+        {/* Quick entry points. These are links, not destinations in their own
+            right, so they read as a row rather than three cards. */}
+        <nav aria-label="Go to" className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
           <button
             onClick={onNewChat}
-            className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-left transition-colors hover:border-[var(--faint)] hover:bg-[var(--surface-2)]"
+            className="text-[var(--step-minus-1)] text-[var(--text-soft)] underline-offset-4 transition-colors hover:text-[var(--text)] hover:underline"
           >
-            <div className="text-[var(--step-minus-1)] font-medium text-[var(--text)]">New conversation</div>
-            <div className="mono mt-0.5 text-[var(--step-minus-2)] text-[var(--faint)]">→ Home context</div>
+            New conversation
           </button>
           <button
             onClick={() => { window.location.hash = "#/bots"; }}
-            className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-left transition-colors hover:border-[var(--faint)] hover:bg-[var(--surface-2)]"
+            className="text-[var(--step-minus-1)] text-[var(--text-soft)] underline-offset-4 transition-colors hover:text-[var(--text)] hover:underline"
           >
-            <div className="text-[var(--step-minus-1)] font-medium text-[var(--text)]">AI fleet</div>
-            <div className="mono mt-0.5 text-[var(--step-minus-2)] text-[var(--faint)]">→ Agents &amp; teams</div>
+            AI fleet
           </button>
           <button
             onClick={() => { window.location.hash = "#/projects"; }}
-            className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-left transition-colors hover:border-[var(--faint)] hover:bg-[var(--surface-2)]"
+            className="text-[var(--step-minus-1)] text-[var(--text-soft)] underline-offset-4 transition-colors hover:text-[var(--text)] hover:underline"
           >
-            <div className="text-[var(--step-minus-1)] font-medium text-[var(--text)]">Workspaces</div>
-            <div className="mono mt-0.5 text-[var(--step-minus-2)] text-[var(--faint)]">→ Projects</div>
+            Workspaces
           </button>
-        </div>
+          <button
+            onClick={() => { window.location.hash = "#/boards"; }}
+            className="text-[var(--step-minus-1)] text-[var(--text-soft)] underline-offset-4 transition-colors hover:text-[var(--text)] hover:underline"
+          >
+            Boards
+          </button>
+          <button
+            onClick={() => { window.location.hash = "#/teams"; }}
+            className="text-[var(--step-minus-1)] text-[var(--text-soft)] underline-offset-4 transition-colors hover:text-[var(--text)] hover:underline"
+          >
+            Teams
+          </button>
+        </nav>
 
         {/* Team-level execution rollup */}
         <section>
@@ -1368,7 +1379,7 @@ function CommandCenter({
             panel lists only the current workspace's conversations. */}
         <section>
           <div className="mb-2 flex items-center justify-between gap-3">
-            <div className="flex items-baseline gap-2">
+            <div className="flex flex-wrap items-baseline gap-2">
               <SectionLabel>Recent conversations</SectionLabel>
               <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
                 across all workspaces

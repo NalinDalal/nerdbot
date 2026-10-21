@@ -16,6 +16,7 @@ import sqlite3
 from typing import Any
 
 from . import orchestrator, store
+from . import providers as providers_mod
 from .models import TaskStatus, Teammate, TeammateStatus
 
 DEFAULT_INTERVAL_S = 10.0
@@ -38,8 +39,13 @@ def _available_bot(
     conn: sqlite3.Connection,
     project_id: str,
     busy: set[str],
-    ) -> Teammate | None:
-    """An active teammate with a provider, in the project, not busy."""
+) -> Teammate | None:
+    """An active teammate with a provider that can serve, in the project, not busy.
+
+    A provider with no working key cannot serve, so a bot holding one is not
+    available: claiming work for it would run the task straight into a
+    block. The task stays pending until the key is configured.
+    """
     for mate in store.list_all_teammates(conn):
         if mate.project_id != project_id:
             continue
@@ -47,9 +53,31 @@ def _available_bot(
             continue
         if mate.provider_id is None:
             continue
+        provider = store.get_provider(conn, mate.provider_id)
+        if providers_mod.provider_block_reason(provider) is not None:
+            continue
         if mate.id in busy:
             continue
         return mate
+    return None
+
+
+def _provider_block_reason(conn: sqlite3.Connection, project_id: str) -> str | None:
+    """The reason the project cannot be worked on, when a provider is the blocker.
+
+    A sweep that skips a task because the model key is missing has to say so.
+    Otherwise the task simply stays pending and the owner sees nothing.
+    """
+    for mate in store.list_all_teammates(conn):
+        if mate.project_id != project_id:
+            continue
+        if mate.status != TeammateStatus.ACTIVE:
+            continue
+        if mate.provider_id is None:
+            continue
+        reason = providers_mod.provider_block_reason(store.get_provider(conn, mate.provider_id))
+        if reason is not None:
+            return reason
     return None
 
 
@@ -117,6 +145,18 @@ def sweep(
             continue  # not yet executable; stays pending for a later sweep
         bot = _available_bot(conn, task.project_id, busy | claimed_this_sweep)
         if bot is None:
+            # Say why the task was skipped when the blocker is a missing or
+            # unusable model key. The task stays pending, not blocked.
+            reason = _provider_block_reason(conn, task.project_id)
+            if reason is not None:
+                results.append(
+                    {
+                        "task_id": task.id,
+                        "bot_id": None,
+                        "status": "skipped",
+                        "reason": reason,
+                    }
+                )
             continue
         try:
             store.claim_task(conn, task.id, bot.id)

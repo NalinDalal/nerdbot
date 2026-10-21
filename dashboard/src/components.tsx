@@ -164,7 +164,7 @@ export function PageHeader({
   back?: { label: string; onClick: () => void };
 }) {
   return (
-    <div className="mb-6">
+    <div className="mb-8">
       {back ? (
         <button
           onClick={back.onClick}
@@ -173,24 +173,123 @@ export function PageHeader({
           <span aria-hidden>←</span> {back.label}
         </button>
       ) : null}
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
+      {/* The title block grows but shrinks, so the actions stay on the right
+          instead of wrapping under the description on a wide window. */}
+      <div className="flex flex-wrap items-start justify-between gap-x-8 gap-y-3">
+        <div className="min-w-[14rem] flex-1">
           {eyebrow ? (
-            <div className="text-[var(--step-minus-2)] uppercase tracking-[0.16em] text-[var(--faint)] mb-1">
+            <div className="mb-1 text-[var(--step-minus-2)] uppercase tracking-[0.16em] text-[var(--faint)]">
               {eyebrow}
             </div>
           ) : null}
-          <h1 className="text-[var(--step-2)] font-semibold tracking-tight text-[var(--text)]">
+          <h1 className="text-[var(--step-1)] font-semibold tracking-tight text-[var(--text)]">
             {title}
           </h1>
           {description ? (
-            <p className="mt-1 max-w-[72ch] text-[var(--step-0)] text-[var(--muted)] leading-relaxed">
+            <p className="mt-1 max-w-[68ch] text-[var(--step-0)] text-[var(--muted)] leading-relaxed">
               {description}
             </p>
           ) : null}
         </div>
-        {actions ? <div className="flex items-center gap-2 shrink-0">{actions}</div> : null}
+        {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
       </div>
+    </div>
+  );
+}
+
+/** A titled block inside a page. One level below the page header, so every
+ *  page can group content without inventing its own heading. */
+export function PageSection({
+  title,
+  description,
+  actions,
+  children,
+  className = "",
+}: {
+  title: string;
+  description?: string;
+  actions?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <section className={`mb-10 last:mb-0 ${className}`}>
+      <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
+        <div className="min-w-0">
+          <h2 className="text-[var(--step-0)] font-semibold tracking-tight text-[var(--text)]">
+            {title}
+          </h2>
+          {description ? (
+            <p className="mt-0.5 max-w-[68ch] text-[var(--step-minus-1)] text-[var(--muted)]">
+              {description}
+            </p>
+          ) : null}
+        </div>
+        {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/** A row of numbers. The fleet and workspace pages use this instead of
+ *  paragraphs of counts, so a summary can be scanned in one pass. */
+export function StatStrip({
+  items,
+  className = "",
+}: {
+  items: Array<{ label: string; value: number | string; tone?: "ok" | "warn" | "bad" | "info" }>;
+  className?: string;
+}) {
+  return (
+    <dl className={`flex flex-wrap items-baseline gap-x-6 gap-y-2 ${className}`}>
+      {items.map((item) => (
+        <div key={item.label} className="flex items-baseline gap-1.5">
+          <dt className="sr-only">{item.label}</dt>
+          <dd
+            className={`text-[var(--step-0)] font-semibold tabular-nums ${
+              item.tone === "bad"
+                ? "text-[var(--danger)]"
+                : item.tone === "warn"
+                  ? "text-[var(--warn)]"
+                  : item.tone === "info"
+                    ? "text-[var(--info)]"
+                    : item.tone === "ok"
+                      ? "text-[var(--accent)]"
+                      : "text-[var(--text)]"
+            }`}
+          >
+            {item.value}
+          </dd>
+          <span className="text-[var(--step-minus-1)] text-[var(--muted)]">{item.label}</span>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/** A command or config value the owner may want to copy. */
+export function CodeBlock({ children }: { children: string }) {
+  return (
+    <pre className="mono overflow-x-auto rounded-lg border border-[var(--border-dim)] bg-[var(--surface-2)] px-3 py-2 text-[var(--step-minus-1)] leading-relaxed text-[var(--text-soft)]">
+      {children}
+    </pre>
+  );
+}
+
+/** A label and its value, side by side. Settings uses this for facts that
+ *  are not prose. */
+export function KeyValue({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex flex-wrap items-baseline gap-x-4 gap-y-0.5 py-1.5">
+      <dt className="w-44 shrink-0 text-[var(--step-minus-1)] text-[var(--muted)]">{label}</dt>
+      <dd className="min-w-0 flex-1 text-[var(--step-minus-1)] text-[var(--text)]">{children}</dd>
     </div>
   );
 }

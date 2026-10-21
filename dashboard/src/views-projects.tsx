@@ -2,13 +2,13 @@ import { useState } from "react";
 import { api } from "./api";
 import { notifyError } from "./app";
 import type { Project } from "./types";
-import { EmptyState, ErrorState, LoadingState, Modal, Button, SectionLabel, Page, PageHeader, Badge, ShortId, useAsync } from "./components";
+import { EmptyState, ErrorState, LoadingState, Modal, Button, Page, PageHeader, Badge, useAsync, TABLE_SHELL, TABLE_TD, TABLE_TH } from "./components";
 import { EntityForm } from "./forms";
 
 export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
   const list = useAsync(() => api.listProjects(), []);
   const [projectId, setProjectId] = useState("");
-  const [showCreate, setShowCreate] = useState(false);
+  const [showCreate, setShowCreate] = useState("");
 
   const open = (e: React.FormEvent) => {
     e.preventDefault();
@@ -18,19 +18,22 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
 
   const create = async (values: Record<string, string>) => {
     const project = await api.createProject(values.repository || "repo");
-    setShowCreate(false);
+    setShowCreate("");
     onOpen(project.id);
   };
+
+  const projects = list.data?.projects ?? [];
+  const counts = list.data?.counts ?? {};
 
   return (
     <Page>
       <PageHeader
         eyebrow="Workspace"
         title="Workspaces"
-        description="Every workspace on this server: its bots, tasks, boards, memory, and approvals. Open one to manage the fleet inside it."
+        description="Every workspace on this server. A workspace holds its bots, tasks, boards, memory and approvals. Open one to work inside it."
         actions={
           <>
-            <Button variant="primary" onClick={() => setShowCreate(true)}>
+            <Button variant="primary" onClick={() => setShowCreate("create")}>
               New workspace
             </Button>
             <Button onClick={list.reload}>Refresh</Button>
@@ -42,49 +45,107 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
         <LoadingState />
       ) : list.error ? (
         <ErrorState error={list.error} onRetry={list.reload} />
-      ) : list.data && list.data.projects.length > 0 ? (
-        <div className="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(300px,1fr))]">
-          {list.data.projects.map((project) => (
-            <button
-              key={project.id}
-              onClick={() => onOpen(project.id)}
-              className="group rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5 text-left shadow-sm transition-colors hover:border-[var(--faint)] hover:bg-[var(--surface-2)]"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="mono truncate font-medium text-[var(--text)]">
-                  {project.repository || "workspace"}
-                </span>
-                <span className="text-[var(--faint)] transition-transform group-hover:translate-x-0.5" aria-hidden>
-                  →
-                </span>
-              </div>
-              <div className="mt-1.5 flex items-center justify-between gap-2">
-                <span className="text-[var(--step-minus-1)] text-[var(--muted)]">owner {project.owner}</span>
-                <ShortId id={project.id} />
-              </div>
-            </button>
-          ))}
+      ) : projects.length > 0 ? (
+        <div className={TABLE_SHELL}>
+          <table className="w-full min-w-[720px] table-fixed">
+            <thead>
+              <tr>
+                <th className={`${TABLE_TH} w-[24%]`}>Workspace</th>
+                <th className={`${TABLE_TH} w-[5rem]`}>Bots</th>
+                <th className={`${TABLE_TH} w-[6rem]`}>Tasks</th>
+                <th className={`${TABLE_TH} w-[5rem]`}>Boards</th>
+                <th className={`${TABLE_TH} w-[10rem]`}>Needs you</th>
+                <th className={`${TABLE_TH} w-[10rem]`}>Id</th>
+                <th className={`${TABLE_TH} w-[7rem]`}><span className="sr-only">Open</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {projects.map((project) => {
+                const count = counts[project.id];
+                const needsYou = (count?.approvals ?? 0) + (count?.blocked ?? 0);
+                return (
+                  <tr
+                    key={project.id}
+                    className="transition-colors hover:bg-[var(--surface-2)]"
+                  >
+                    <td className={TABLE_TD}>
+                      <button
+                        onClick={() => onOpen(project.id)}
+                        className="text-left font-medium text-[var(--text)] hover:underline"
+                      >
+                        {project.repository || "Untitled workspace"}
+                      </button>
+                      <div className="truncate text-[var(--step-minus-2)] text-[var(--faint)]">
+                        owner {project.owner}
+                      </div>
+                    </td>
+                    <td className={TABLE_TD}>{count?.bots ?? 0}</td>
+                    <td className={TABLE_TD}>
+                      {count?.tasks ?? 0}
+                      {count?.running ? (
+                        <span className="ml-1.5 text-[var(--step-minus-2)] text-[var(--info)]">
+                          {count.running} running
+                        </span>
+                      ) : null}
+                    </td>
+                    <td className={TABLE_TD}>{count?.boards ?? 0}</td>
+                    <td className={TABLE_TD}>
+                      {needsYou > 0 ? (
+                        <span className="text-[var(--warn)]">
+                          {count?.approvals ? `${count.approvals} approval` : ""}
+                          {count?.approvals && count?.blocked ? " and " : ""}
+                          {count?.blocked ? `${count?.blocked} blocked` : ""}
+                        </span>
+                      ) : (
+                        <span className="text-[var(--faint)]">nothing</span>
+                      )}
+                    </td>
+                    <td className={TABLE_TD}>
+                      <span className="mono block truncate text-[var(--step-minus-2)] text-[var(--faint)]">
+                        {project.id}
+                      </span>
+                    </td>
+                    <td className={`${TABLE_TD} whitespace-nowrap`}>
+                      <Button variant="ghost" onClick={() => onOpen(project.id)}>
+                        Open →
+                      </Button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       ) : (
         <EmptyState
           title="No workspaces yet"
-          hint="Create one to start: a workspace owns its bots, tasks, boards, memory, and approvals."
+          hint="Create one to start: a workspace owns its bots, tasks, boards, memory and approvals."
           action={
-            <Button variant="primary" onClick={() => setShowCreate(true)}>
+            <Button variant="primary" onClick={() => setShowCreate("create")}>
               Create your first workspace
             </Button>
           }
         />
       )}
 
-      <form onSubmit={open} className="mt-8 flex items-center gap-2 border-t border-[var(--border-dim)] pt-6">
-        <SectionLabel className="mr-2 shrink-0">Open by ID</SectionLabel>
+      {/* Opening a workspace by its id stays available for scripts and for
+          ids copied from elsewhere, without sitting in the page's way. */}
+      <form
+        onSubmit={open}
+        className="mt-8 flex flex-wrap items-center gap-2 border-t border-[var(--border-dim)] pt-4"
+      >
+        <label
+          htmlFor="open-by-id"
+          className="text-[var(--step-minus-1)] text-[var(--muted)]"
+        >
+          Open by id
+        </label>
         <input
+          id="open-by-id"
           value={projectId}
           onChange={(e) => setProjectId(e.target.value)}
           placeholder="prj_…"
-          aria-label="Project ID"
-          className="w-72 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-minus-1)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
+          className="mono w-56 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-[var(--step-minus-1)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
         />
         <Button type="submit" disabled={!projectId.trim()}>
           Open
@@ -92,11 +153,11 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
       </form>
 
       {showCreate ? (
-        <Modal title="New workspace" onClose={() => setShowCreate(false)}>
+        <Modal title="New workspace" onClose={() => setShowCreate("")}>
           <EntityForm
             submitLabel="Create workspace"
             fields={[
-              { name: "repository", label: "Repository", required: true, placeholder: "demo-repo" },
+              { name: "repository", label: "Name", required: true, placeholder: "demo-repo" },
               { name: "owner_note", label: "Note (owner is always your token identity)" },
             ]}
             onSubmit={create}

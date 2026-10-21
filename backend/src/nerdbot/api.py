@@ -54,6 +54,7 @@ from .models import (
     ProviderKind,
     ProviderStatus,
     ReviewVerdict,
+    TaskStatus,
     Teammate,
     TeammateStatus,
 )
@@ -150,6 +151,42 @@ def _enforce_memory_scope(
             status_code=403,
             detail=f"teammate may not access memory scope {scope!r}",
         )
+
+
+def _project_counts(conn: sqlite3.Connection, project_id: str) -> dict[str, int]:
+    """What a workspace holds, in one pass.
+
+    Counts the fleet, the work in flight and the decisions waiting, so a
+    workspace can be described without opening it.
+    """
+    tasks = store.list_tasks_for_project(conn, project_id)
+    runs = store.list_runs_for_project(conn, project_id)
+    approvals = store.list_approvals_for_project(conn, project_id)
+    teammates = store.list_teammates(conn, project_id)
+    boards = store.list_boards(conn, project_id)
+    return {
+        "bots": len(teammates),
+        "tasks": len(tasks),
+        "running": sum(1 for t in tasks if t.status == TaskStatus.RUNNING),
+        "blocked": sum(1 for t in tasks if t.status == TaskStatus.BLOCKED),
+        "done": sum(1 for t in tasks if t.status == TaskStatus.DONE),
+        "boards": len(boards),
+        "runs": len(runs),
+        "approvals": sum(1 for a in approvals if store.approval_is_pending(a)),
+    }
+
+
+def _team_counts(conn: sqlite3.Connection, team_id: str) -> dict[str, int]:
+    """How many bots and workspaces a team holds.
+
+    A team member row is a (team, workspace) pair. When it carries a
+    teammate id it is a bot in the team, otherwise it is the workspace
+    itself attached to the team.
+    """
+    members = store.list_team_members(conn, team_id)
+    bots = sum(1 for m in members if m.teammate_id)
+    workspaces = sum(1 for m in members if not m.teammate_id)
+    return {"bots": bots, "workspaces": workspaces}
 
 
 def create_app() -> FastAPI:
@@ -429,7 +466,10 @@ def create_app() -> FastAPI:
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
         teams = [t.model_dump(mode="json") for t in store.list_teams(conn, principal)]
-        return {"teams": teams}
+        # Membership counts travel beside the list so a team can be described
+        # without opening it.
+        counts = {team["id"]: _team_counts(conn, team["id"]) for team in teams}
+        return {"teams": teams, "counts": counts}
 
     @app.get("/teams/{team_id}")
     def get_team(
@@ -2644,7 +2684,13 @@ def create_app() -> FastAPI:
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
         projects = [p.model_dump(mode="json") for p in store.list_projects(conn, principal)]
-        return {"projects": projects}
+        # Per-project counts travel beside the list, not inside each project
+        # object, so the project shape stays exactly what it was. The Workspaces
+        # page needs to show what a workspace actually holds, not just its id.
+        counts = {
+            project["id"]: _project_counts(conn, project["id"]) for project in projects
+        }
+        return {"projects": projects, "counts": counts}
 
     @app.get("/projects/{project_id}/tasks")
     def list_project_tasks(
@@ -2698,6 +2744,53 @@ def create_app() -> FastAPI:
                 # pending would offer a decision guaranteed to fail.
                 approvals = [a for a in approvals if store.approval_is_pending(a)]
         return {"approvals": [a.model_dump(mode="json") for a in approvals]}
+
+    @app.get("/projects/{project_id}/workspace/files")
+    def list_project_workspace_files(
+        project_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """The files across every task checkout in this workspace.
+
+        A workspace is the unit the owner thinks in: its bots, its tasks and
+        the files those tasks produced. The per-task endpoints show one
+        checkout; this shows the whole workspace in one place.
+        """
+        require_project_owner(conn, project_id, principal)
+        data_dir = _data_dir()
+        checkouts: list[dict[str, Any]] = []
+        total_files = 0
+        for task in store.list_tasks_for_project(conn, project_id):
+            root = workspace_mgr.workspace_path_for_task(data_dir, task.id)
+            if not root.is_dir():
+                continue
+            files: list[dict[str, Any]] = []
+            for path in sorted(root.rglob("*")):
+                if ".git" in path.parts:
+                    continue
+                if path.is_file():
+                    stat = path.stat()
+                    files.append(
+                        {
+                            "path": str(path.relative_to(root)),
+                            "size": stat.st_size,
+                            "modified": stat.st_mtime,
+                        }
+                    )
+            if not files:
+                continue
+            total_files += len(files)
+            checkouts.append(
+                {
+                    "task_id": task.id,
+                    "task_description": task.description,
+                    "branch": task.branch,
+                    "root": str(root),
+                    "files": files,
+                }
+            )
+        return {"checkouts": checkouts, "file_count": total_files}
 
     @app.get("/tasks/{task_id}/workspace/files")
     def list_task_workspace_files(

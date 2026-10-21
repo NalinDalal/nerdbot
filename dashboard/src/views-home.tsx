@@ -128,8 +128,8 @@ export function useWorkspaceSummary(): ReturnType<typeof useAsync<WorkspaceLoadR
         return fallback;
       });
     const [projectsRes, teamsRes, botsRes] = await Promise.all([
-      soft(api.listProjects(), { projects: [] } as Awaited<ReturnType<typeof api.listProjects>>),
-      soft(api.listTeams(), { teams: [] } as Awaited<ReturnType<typeof api.listTeams>>),
+      soft(api.listProjects(), { projects: [], counts: {} } as Awaited<ReturnType<typeof api.listProjects>>),
+      soft(api.listTeams(), { teams: [], counts: {} } as Awaited<ReturnType<typeof api.listTeams>>),
       soft(api.listAllTeammates(), { teammates: [] } as Awaited<ReturnType<typeof api.listAllTeammates>>),
     ]);
     const projectList = projectsRes.projects ?? [];
@@ -244,21 +244,21 @@ export function AttentionBanner({
           {pendingApprovals.map(({ approval, projectName }) => (
             <div
               key={approval.id}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-[var(--surface-2)] px-3 py-2 text-[var(--step-minus-1)]"
+              className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-3 py-1.5 text-[var(--step-minus-1)]"
             >
-              <div className="min-w-0">
+              <div className="flex min-w-0 flex-wrap items-baseline gap-x-2">
                 <span className="text-[var(--text)]">{approval.action}</span>
-                <span className="mono ml-2 text-[var(--faint)]">{projectName}</span>
+                <span className="text-[var(--faint)]">{projectName}</span>
                 {approval.task_id && approval.project_id ? (
                   <button
-                    className="ml-2 text-[var(--accent)] hover:underline"
+                    className="text-[var(--accent)] hover:underline"
                     onClick={() => onOpenTask(approval.project_id as string, approval.task_id as string)}
                   >
                     open task →
                   </button>
                 ) : null}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5">
                 <Button variant="primary" disabled={busy} onClick={() => onDecide(approval.id, "approved")}>
                   Approve once
                 </Button>

@@ -16,6 +16,9 @@ import {
   useAsync,
   taskStatusLabel,
   taskTally,
+  TABLE_SHELL,
+  TABLE_TD,
+  TABLE_TH,
 } from "./components";
 import { EntityForm } from "./forms";
 
@@ -71,30 +74,56 @@ export function TeamsView() {
       ) : list.error ? (
         <ErrorState error={list.error} onRetry={list.reload} />
       ) : list.data && list.data.teams.length > 0 ? (
-        <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
-          {list.data.teams.map((team, index) => (
-            <button
-              key={team.id}
-              onClick={() => {
-                window.location.hash = `#/team/${team.id}`;
-              }}
-              className={`group flex w-full flex-wrap items-center justify-between gap-3 px-4 py-3.5 text-left transition-colors hover:bg-[var(--surface-2)] ${
-                index > 0 ? "border-t border-[var(--border-dim)]" : ""
-              }`}
-            >
-              <div className="min-w-0">
-                <div className="font-medium text-[var(--text)]">{team.name || "Unnamed team"}</div>
-                {team.description ? (
-                  <div className="mt-0.5 truncate text-[var(--step-minus-1)] text-[var(--muted)]">
-                    {team.description}
-                  </div>
-                ) : null}
-              </div>
-              <span className="text-[var(--faint)] transition-transform group-hover:translate-x-0.5" aria-hidden>
-                →
-              </span>
-            </button>
-          ))}
+        <div className={TABLE_SHELL}>
+          <table className="w-full min-w-[560px] table-fixed">
+            <thead>
+              <tr>
+                <th className={`${TABLE_TH} w-[46%]`}>Team</th>
+                <th className={`${TABLE_TH} w-[8rem]`}>Bots</th>
+                <th className={`${TABLE_TH} w-[10rem]`}>Workspaces</th>
+                <th className={`${TABLE_TH} w-[6rem]`}><span className="sr-only">Open</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.data.teams.map((team) => {
+                const count = (list.data?.counts ?? {})[team.id];
+                return (
+                  <tr
+                    key={team.id}
+                    className="transition-colors hover:bg-[var(--surface-2)]"
+                  >
+                    <td className={TABLE_TD}>
+                      <button
+                        onClick={() => {
+                          window.location.hash = `#/team/${team.id}`;
+                        }}
+                        className="text-left font-medium text-[var(--text)] hover:underline"
+                      >
+                        {team.name || "Unnamed team"}
+                      </button>
+                      {team.description ? (
+                        <div className="text-[var(--step-minus-1)] text-[var(--muted)]">
+                          {team.description}
+                        </div>
+                      ) : null}
+                    </td>
+                    <td className={TABLE_TD}>{count?.bots ?? 0}</td>
+                    <td className={TABLE_TD}>{count?.workspaces ?? 0}</td>
+                    <td className={TABLE_TD}>
+                      <Button
+                        variant="ghost"
+                        onClick={() => {
+                          window.location.hash = `#/team/${team.id}`;
+                        }}
+                      >
+                        Open →
+                      </Button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       ) : (
         <EmptyState

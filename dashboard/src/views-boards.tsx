@@ -2,12 +2,19 @@ import { useState } from "react";
 import { ApiError, api } from "./api";
 import { notifyError } from "./app";
 import type { Plan } from "./types";
-import { EmptyState, ErrorState, LoadingState, Modal, ShortId, StatusBadge, TABLE_SHELL, TABLE_TD as TD, TABLE_TH as TH, FORM_INPUT, Button, SectionLabel, Page, PageHeader, useAsync } from "./components";
+import { EmptyState, ErrorState, LoadingState, Modal, StatusBadge, TABLE_SHELL, TABLE_TD as TD, TABLE_TH as TH, FORM_INPUT, Button, SectionLabel, Page, PageHeader, useAsync } from "./components";
 import { EntityForm } from "./forms";
 
 export function BoardsView() {
   const list = useAsync(() => api.listBoards(), []);
   const [showCreate, setShowCreate] = useState(false);
+  /* Names, so a board shows where it lives instead of a raw id. */
+  const projects = useAsync(() => api.listProjects(), []);
+  const teams = useAsync(() => api.listTeams(), []);
+  const projectName = (id: string) =>
+    (projects.data?.projects ?? []).find((p) => p.id === id)?.repository || id;
+  const teamName = (id: string) =>
+    (teams.data?.teams ?? []).find((t) => t.id === id)?.name || id;
 
   return (
     <Page>
@@ -47,33 +54,57 @@ export function BoardsView() {
       ) : list.error ? (
         <ErrorState error={list.error} onRetry={list.reload} />
       ) : list.data && list.data.boards.length > 0 ? (
-        <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
-          {list.data.boards.map((board, index) => (
-            <div
-              key={board.id}
-              className={`flex flex-wrap items-center justify-between gap-3 px-4 py-3.5 transition-colors hover:bg-[var(--surface-2)] ${
-                index > 0 ? "border-t border-[var(--border-dim)]" : ""
-              }`}
-            >
-              <div className="min-w-0">
-                <a
-                  href={`#/board/${board.id}`}
-                  className="font-medium text-[var(--text)] hover:underline"
+        <div className={TABLE_SHELL}>
+          <table className="w-full min-w-[640px] table-fixed">
+            <thead>
+              <tr>
+                <th className={`${TH} w-[30%]`}>Board</th>
+                <th className={`${TH} w-[18%]`}>Workspace</th>
+                <th className={`${TH} w-[16%]`}>Team</th>
+                <th className={`${TH} w-[8rem]`}>Status</th>
+                <th className={`${TH} w-[7rem]`}><span className="sr-only">Open</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.data.boards.map((board) => (
+                <tr
+                  key={board.id}
+                  className="align-top transition-colors hover:bg-[var(--surface-2)]"
                 >
-                  {board.name || "Unnamed board"}
-                </a>
-                <div className="mono mt-0.5 text-[var(--step-minus-2)] text-[var(--faint)]">
-                  <ShortId id={board.id} />
-                </div>
-                {board.description ? (
-                  <div className="mt-1 truncate text-[var(--step-minus-1)] text-[var(--muted)]">
-                    {board.description}
-                  </div>
-                ) : null}
-              </div>
-              <StatusBadge status={board.status} />
-            </div>
-          ))}
+                  <td className={TD}>
+                    <a
+                      href={`#/board/${board.id}`}
+                      className="font-medium text-[var(--text)] hover:underline"
+                    >
+                      {board.name || "Unnamed board"}
+                    </a>
+                    {board.description ? (
+                      <div className="max-w-[46ch] truncate text-[var(--step-minus-1)] text-[var(--muted)]">
+                        {board.description}
+                      </div>
+                    ) : null}
+                    <div className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
+                      {board.id}
+                    </div>
+                  </td>
+                  <td className={TD}>{projectName(board.project_id)}</td>
+                  <td className={TD}>
+                    {board.team_id ? teamName(board.team_id) : (
+                      <span className="text-[var(--faint)]">none</span>
+                    )}
+                  </td>
+                  <td className={TD}>
+                    <StatusBadge status={board.status} />
+                  </td>
+                  <td className={TD}>
+                    <Button variant="ghost" onClick={() => { window.location.hash = `#/board/${board.id}`; }}>
+                      Open →
+                    </Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       ) : (
         <EmptyState

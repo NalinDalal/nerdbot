@@ -71,8 +71,8 @@
   --space-24: 80px;
 
   /* Content widths */
-  --width-sidebar: 260px;
-  --width-conversation-sidebar: 320px;
+  --width-sidebar: 240px;
+  --width-conversation-sidebar: 288px;
   --max-width-read: 68ch;
   --max-width-narrow: 48ch;
   --max-width-wide: 960px;

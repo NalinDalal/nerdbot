@@ -456,6 +456,34 @@ describe("views", () => {
     expect(setHash("#/nope")).toEqual({ name: "home" });
     vi.unstubAllGlobals();
   });
+
+  it("a workspace route carries the tab to open", async () => {
+    vi.stubGlobal("window", { location: { hash: "" } });
+    const { parseHash } = await import("./app");
+    const setHash = (hash: string) => {
+      (window.location as { hash: string }).hash = hash;
+      return parseHash();
+    };
+    // A recovery link must land on the exact tab, not just the workspace.
+    expect(setHash("#/p/prj_1?tab=Providers")).toEqual({
+      name: "project",
+      projectId: "prj_1",
+      tab: "Providers",
+    });
+    // No query means no tab, and the id is never polluted by the query.
+    expect(setHash("#/p/prj_1")).toEqual({
+      name: "project",
+      projectId: "prj_1",
+      tab: undefined,
+    });
+    // A task route still wins over the query.
+    expect(setHash("#/p/prj_1/t/tsk_2")).toEqual({
+      name: "task",
+      projectId: "prj_1",
+      taskId: "tsk_2",
+    });
+    vi.unstubAllGlobals();
+  });
 });
 
 describe("BYOK client surface (S1)", () => {

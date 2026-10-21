@@ -23,14 +23,18 @@ export type Route =
   | { name: "board"; boardId: string }
   | { name: "projects" }
   | { name: "settings" }
-  | { name: "project"; projectId: string }
+  | { name: "project"; projectId: string; tab?: string }
   | { name: "task"; projectId: string; taskId: string }
   | { name: "capabilities" }
   | { name: "bots" };
 
 export function parseHash(): Route {
   const hash = window.location.hash.replace(/^#\/?/, "");
-  const parts = hash.split("/").filter(Boolean);
+  /* A query carries the tab to open, so a recovery link can land on the
+     exact screen the owner needs: #/p/<id>?tab=Providers */
+  const [path, query] = hash.split("?");
+  const params = new URLSearchParams(query ?? "");
+  const parts = path.split("/").filter(Boolean);
   if (parts.length === 0) return { name: "home" };
   if (parts[0] === "chat") {
     return parts[1] ? { name: "chat", projectId: parts[1] } : { name: "chat" };
@@ -46,7 +50,7 @@ export function parseHash(): Route {
     return { name: "task", projectId: parts[1], taskId: parts[3] };
   }
   if (parts[0] === "p" && parts[1]) {
-    return { name: "project", projectId: parts[1] };
+    return { name: "project", projectId: parts[1], tab: params.get("tab") ?? undefined };
   }
   if (parts[0] === "capabilities") return { name: "capabilities" };
   if (parts[0] === "bots") return { name: "bots" };
@@ -72,12 +76,20 @@ function NavItem({
     <button
       onClick={onClick}
       aria-current={active ? "page" : undefined}
-      className={`flex w-full items-center rounded-md px-2.5 py-2 text-left text-[var(--step-minus-1)] font-medium transition-colors ${
+      className={`relative flex w-full items-center rounded-md py-1.5 pl-3 pr-2.5 text-left text-[var(--step-minus-1)] transition-colors ${
         active
-          ? "bg-[var(--accent-dim)] text-[var(--text)]"
-          : "text-[var(--text-soft)] hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
+          ? "bg-[var(--surface-2)] text-[var(--text)]"
+          : "text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text-soft)]"
       }`}
     >
+      {/* The active item is marked by a rule in the margin, not by weight, so
+          the navigation never competes with the page content. */}
+      <span
+        aria-hidden
+        className={`absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full ${
+          active ? "bg-[var(--accent)]" : "bg-transparent"
+        }`}
+      />
       {label}
     </button>
   );
@@ -109,13 +121,13 @@ function Sidebar({
 }) {
   return (
     <aside
-      className={`fixed inset-y-0 left-0 z-50 flex w-64 shrink-0 flex-col overflow-hidden border-r border-[var(--border)] bg-[var(--surface)] transition-transform duration-200 ease-out md:static md:translate-x-0 ${
+      className={`fixed inset-y-0 left-0 z-50 flex w-[var(--width-sidebar)] shrink-0 flex-col overflow-hidden border-r border-[var(--border-dim)] bg-[var(--bg)] transition-transform duration-200 ease-out md:static md:translate-x-0 ${
         drawerOpen ? "translate-x-0" : "-translate-x-full"
       }`}
     >
-      <div className="flex h-full flex-col overflow-y-auto p-4">
-        <div className="mb-1 flex items-center justify-between">
-          <strong className="text-base font-semibold tracking-tight text-[var(--text)]">
+      <div className="flex h-full flex-col overflow-y-auto px-3 py-4">
+        <div className="mb-0.5 flex items-center justify-between px-2">
+          <strong className="text-[var(--step-0)] font-semibold tracking-tight text-[var(--text)]">
             NerdBot
           </strong>
           <button
@@ -126,7 +138,7 @@ function Sidebar({
             ×
           </button>
         </div>
-        <div className="mb-4 text-[var(--step-minus-2)] uppercase tracking-[0.2em] text-[var(--faint)]">
+        <div className="mb-4 px-2 text-[var(--step-minus-2)] uppercase tracking-[0.18em] text-[var(--faint)]">
           assistant
         </div>
 
@@ -141,14 +153,14 @@ function Sidebar({
           ))}
         </nav>
 
-        <div className="mt-auto flex flex-col gap-3 border-t border-[var(--border-dim)] pt-4">
+        <div className="mt-auto flex flex-col gap-1 border-t border-[var(--border-dim)] pt-3">
           <button
             onClick={onDisconnect}
-            className="flex w-full items-center rounded-md px-2.5 py-2 text-left text-[var(--step-minus-1)] font-medium text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
+            className="flex w-full items-center rounded-md px-3 py-1.5 text-left text-[var(--step-minus-1)] text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text-soft)]"
           >
             Disconnect
           </button>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 px-3 py-1.5">
             <span className="text-[var(--step-minus-2)] text-[var(--faint)]">Theme</span>
             <ThemeButton onThemeChange={onThemeChange} />
           </div>
@@ -225,6 +237,7 @@ export default function App() {
       content = (
         <ProjectDetailView
           projectId={route.projectId}
+          initialTab={route.tab}
           onOpenTask={(taskId) => navigate(`#/p/${route.projectId}/t/${taskId}`)}
         />
       );

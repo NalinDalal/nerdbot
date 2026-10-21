@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ApiError, api } from "./api";
 import { describeError, notifyError } from "./app";
-import type { Board, BoardMember, MemoryEntry, Provider, Run, Task, Teammate } from "./types";
+import type { Board, BoardMember, MemoryEntry, Project, Provider, Run, Task, Teammate } from "./types";
 import {
   EmptyState,
   ErrorState,
@@ -21,6 +21,9 @@ import {
   ERROR_BOX,
   FORM_INPUT,
   Field,
+  TABLE_SHELL,
+  TABLE_TD,
+  TABLE_TH,
 } from "./components";
 
 function openBot(id: string): void {
@@ -643,6 +646,24 @@ export function BotsView() {
     return Object.fromEntries(byBot) as Record<string, Task[]>;
   }, [all.data]);
 
+  /** Provider names, so the fleet shows which model a bot thinks with
+   *  instead of a truncated provider id. */
+  const providerNames = useAsync(async () => {
+    const projectsList = (projects.data as { projects: Project[] } | null)?.projects ?? [];
+    const byProject = await Promise.all(
+      projectsList.map(async (p) => {
+        try {
+          const data = await api.listProviders(p.id);
+          return data.providers.map((prov) => [prov.id, prov] as const);
+        } catch {
+          return [] as Array<readonly [string, Provider]>;
+        }
+      }),
+    );
+    const all2 = byProject.flat();
+    return Object.fromEntries(all2) as Record<string, Provider>;
+  }, [projects.data]);
+
   const back = () => {
     if (step === "identity") setStep("identity");
     else if (step === "model") setStep("identity");
@@ -978,76 +999,117 @@ export function BotsView() {
       ) : null}
 
       {mates.length > 0 ? (
-        <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
-          {mates.map((mate, index) => {
-            const tasks = (botTasks.data as Record<string, Task[]> | undefined)?.[mate.id] ?? [];
-            const active = tasks.filter(
-              (t) => t.status === "pending" || t.status === "running" || t.status === "blocked",
-            );
-            const latest = tasks[0];
-            const busy = active.length > 0;
-            const liveStatus = busy
-              ? "running"
-              : tasks.some((t) => t.status === "ready")
-                ? "ready"
-                : mate.status;
-            return (
-              <div
-                key={mate.id}
-                className={`flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 ${
-                  index > 0 ? "border-t border-[var(--border-dim)]" : ""
-                }`}
-              >
-                <div className="w-44 min-w-0">
-                  <BotChip persona={mate.persona || "Unnamed bot"} id={mate.id} status={liveStatus} />
-                  <div className="mt-0.5 pl-8 text-[var(--step-minus-2)] text-[var(--faint)]">
-                    {projectOf(mate.project_id)}
-                  </div>
-                </div>
-                <StatusDot
-                  status={liveStatus}
-                  label={liveStatus === "running" ? "working now" : liveStatus}
-                  pulse={liveStatus === "running"}
-                />
-                <span className="mono hidden max-w-[90px] truncate text-[var(--step-minus-2)] text-[var(--faint)] lg:inline">
-                  {mate.provider_id ? mate.provider_id.slice(0, 10) + "…" : "no model"}
-                </span>
-                <span className="flex-1 min-w-0">
-                  {latest ? (
-                    <>
-                      <button
-                        className="block w-full truncate text-left text-[var(--step-minus-1)] text-[var(--text-soft)] hover:underline"
-                        title={latest.description}
-                        onClick={() => openTask(latest.project_id, latest.id)}
-                      >
-                        {latest.description || "Untitled task"}
-                      </button>
-                      <div className="mt-0.5 flex items-center gap-2">
-                        <StatusBadge status={latest.status} />
-                        {busy ? <span className="text-[var(--step-minus-2)] text-[var(--info)]">+{active.length - 1} more</span> : null}
-                      </div>
-                    </>
-                  ) : (
-                    <span className="text-[var(--step-minus-1)] text-[var(--faint)]">—</span>
-                  )}
-                </span>
-                <div className="flex items-center gap-1.5">
-                  <Button
-                    onClick={() => {
-                      setGiveWorkMateId(mate.id);
-                    }}
-                    disabled={mate.status !== "active"}
-                    title={mate.status !== "active" ? "Only active bots can be given work" : "Give this bot a task"}
+        <div className={TABLE_SHELL}>
+          <table className="w-full min-w-[720px] table-fixed">
+            <thead>
+              <tr>
+                <th className={`${TABLE_TH} w-[22%]`}>Agent</th>
+                <th className={`${TABLE_TH} w-[6rem]`}>State</th>
+                <th className={`${TABLE_TH} w-[8rem]`}>Model</th>
+                <th className={TABLE_TH}>Work</th>
+                <th className={`${TABLE_TH} w-[12rem]`}><span className="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {mates.map((mate) => {
+                const tasks = (botTasks.data as Record<string, Task[]> | undefined)?.[mate.id] ?? [];
+                const active = tasks.filter(
+                  (t) => t.status === "pending" || t.status === "running" || t.status === "blocked",
+                );
+                const latest = tasks[0];
+                const busy = active.length > 0;
+                const liveStatus = busy
+                  ? "running"
+                  : tasks.some((t) => t.status === "ready")
+                    ? "ready"
+                    : mate.status;
+                const provider = mate.provider_id
+                  ? (providerNames.data as Record<string, Provider> | undefined)?.[mate.provider_id]
+                  : undefined;
+                const blocked = latest?.status === "blocked" ? latest : null;
+                return (
+                  <tr
+                    key={mate.id}
+                    className="align-top transition-colors hover:bg-[var(--surface-2)]"
                   >
-                    Give work
-                  </Button>
-                  <Button variant="ghost" onClick={() => openBot(mate.id)}>
-                    Open →
-                  </Button>
-                </div>
-              </div>
-            );
-          })}
+                    <td className={TABLE_TD}>
+                      <BotChip persona={mate.persona || "Unnamed bot"} id={mate.id} status={liveStatus} />
+                      <div className="mt-0.5 truncate pl-8 text-[var(--step-minus-2)] text-[var(--faint)]">
+                        {projectOf(mate.project_id)} · {tasks.length} task{tasks.length === 1 ? "" : "s"}
+                      </div>
+                    </td>
+                    <td className={`${TABLE_TD} whitespace-nowrap`}>
+                      <StatusDot
+                        status={liveStatus}
+                        label={liveStatus === "running" ? "working" : liveStatus}
+                        pulse={liveStatus === "running"}
+                      />
+                    </td>
+                    <td className={`${TABLE_TD} whitespace-nowrap`}>
+                      {provider ? (
+                        <span
+                          className="block truncate text-[var(--step-minus-1)] text-[var(--text-soft)]"
+                          title={provider.name}
+                        >
+                          {provider.name}
+                        </span>
+                      ) : (
+                        <span className="text-[var(--step-minus-1)] text-[var(--warn)]">
+                          no model
+                        </span>
+                      )}
+                    </td>
+                    <td className={TABLE_TD}>
+                      {latest ? (
+                        <>
+                          <button
+                            className="block w-full truncate text-left text-[var(--step-minus-1)] text-[var(--text)] hover:underline"
+                            title={latest.description}
+                            onClick={() => openTask(latest.project_id, latest.id)}
+                          >
+                            {latest.description || "Untitled task"}
+                          </button>
+                          <div className="mt-1 flex flex-wrap items-center gap-2">
+                            <StatusBadge status={latest.status} />
+                            {busy ? (
+                              <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
+                                +{active.length - 1} more
+                              </span>
+                            ) : null}
+                          </div>
+                          {blocked?.blocked_reason ? (
+                            <div className="mt-1 truncate text-[var(--step-minus-2)] text-[var(--warn)]" title={blocked.blocked_reason}>
+                              {blocked.blocked_reason}
+                            </div>
+                          ) : null}
+                        </>
+                      ) : (
+                        <span className="text-[var(--step-minus-1)] text-[var(--faint)]">
+                          no work assigned
+                        </span>
+                      )}
+                    </td>
+                    <td className={`${TABLE_TD} whitespace-nowrap`}>
+                      <div className="flex items-center gap-1.5">
+                        <Button
+                          onClick={() => {
+                            setGiveWorkMateId(mate.id);
+                          }}
+                          disabled={mate.status !== "active"}
+                          title={mate.status !== "active" ? "Only active bots can be given work" : "Give this bot a task"}
+                        >
+                          Give work
+                        </Button>
+                        <Button variant="ghost" onClick={() => openBot(mate.id)}>
+                          Open →
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       ) : (
         <EmptyState

@@ -11,6 +11,7 @@ import { ApprovalsTab } from "./approvals";
 import { MessagesTab } from "./messages";
 import { NotificationsTab } from "./notifications";
 import { MemoryTab } from "./memory";
+import { FilesTab } from "./files";
 import { BackupTab } from "./backup";
 import { MetricsTab } from "./metrics";
 import { EventsTab } from "./events";
@@ -27,6 +28,7 @@ const TABS = [
   "Messages",
   "Notifications",
   "Memory",
+  "Files",
   "Backup",
   "Metrics",
   "Events",
@@ -34,12 +36,19 @@ const TABS = [
 
 export function ProjectDetailView({
   projectId,
+  initialTab,
   onOpenTask,
 }: {
   projectId: string;
+  /** Open straight onto a tab, so a recovery link lands where it must. */
+  initialTab?: string;
   onOpenTask: (taskId: string) => void;
 }) {
-  const [tab, setTab] = useState<(typeof TABS)[number]>("Tasks");
+  const [tab, setTab] = useState<(typeof TABS)[number]>(
+    (TABS as readonly string[]).includes(initialTab ?? "")
+      ? (initialTab as (typeof TABS)[number])
+      : "Tasks",
+  );
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="mx-auto w-full max-w-[var(--max-width-wide)] px-6 py-6 md:px-8 md:py-8">
@@ -93,6 +102,7 @@ export function ProjectDetailView({
           {tab === "Messages" && <MessagesTab projectId={projectId} />}
           {tab === "Notifications" && <NotificationsTab projectId={projectId} />}
           {tab === "Memory" && <MemoryTab projectId={projectId} />}
+          {tab === "Files" && <FilesTab projectId={projectId} />}
           {tab === "Backup" && <BackupTab projectId={projectId} />}
           {tab === "Metrics" && <MetricsTab projectId={projectId} />}
           {tab === "Events" && <EventsTab projectId={projectId} />}

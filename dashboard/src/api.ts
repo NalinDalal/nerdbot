@@ -19,6 +19,7 @@ import type {
   Permission,
   PRPackage,
   Project,
+  ProjectCounts,
   ProjectMessage,
   Provider,
   Review,
@@ -27,6 +28,7 @@ import type {
   Task,
   TaskView,
   Team,
+  TeamCounts,
   TeamMember,
   Teammate,
   ThreadView,
@@ -181,7 +183,8 @@ export const api = {
   getHome: () => req<Project>("/home"),
 
   // -- Workspace (projects = workspaces) -------------------------------------
-  listProjects: () => req<{ projects: Project[] }>("/projects"),
+  listProjects: () =>
+    req<{ projects: Project[]; counts: Record<string, ProjectCounts> }>("/projects"),
   projectTasks: (projectId: string) =>
     req<{ tasks: Task[] }>(`/projects/${projectId}/tasks`),
   projectMessages: (projectId: string, toTeammateId?: string) =>
@@ -209,7 +212,7 @@ export const api = {
   patchTeammate: (id: string, body: Record<string, unknown>) => patch<Teammate>(`/teammates/${id}`, body),
 
   createTeam: (body: Record<string, unknown>) => post<Team>("/teams", body),
-  listTeams: () => req<{ teams: Team[] }>("/teams"),
+  listTeams: () => req<{ teams: Team[]; counts: Record<string, TeamCounts> }>("/teams"),
   getTeam: (teamId: string) =>
     req<{ team: Team; projects: Project[]; teammates: Teammate[]; members: TeamMember[] }>(
       `/teams/${teamId}`,
@@ -303,6 +306,18 @@ export const api = {
   deleteWorkspace: (taskId: string) =>
     req<{ removed: boolean }>(`/tasks/${taskId}/workspace`, { method: "DELETE" }),
   ensureWorkspace: (taskId: string) => post<{ path: string; branch: string }>(`/tasks/${taskId}/workspace`, {}),
+  /** The files across every task checkout in a workspace. */
+  projectWorkspaceFiles: (projectId: string) =>
+    req<{
+      checkouts: Array<{
+        task_id: string;
+        task_description: string;
+        branch: string;
+        root: string;
+        files: WorkspaceFile[];
+      }>;
+      file_count: number;
+    }>(`/projects/${projectId}/workspace/files`),
   workspaceFiles: (taskId: string) =>
     req<{ files: WorkspaceFile[]; root: string }>(`/tasks/${taskId}/workspace/files`),
   workspaceFile: (taskId: string, path: string) =>

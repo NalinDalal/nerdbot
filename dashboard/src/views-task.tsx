@@ -228,7 +228,14 @@ export function TaskDetailView({
           </span>
           {task.blocked_reason.includes("provider") ? (
             <span className="text-[var(--step-minus-1)] text-[var(--muted)]">
-              Connect a working model key in Settings → Providers, then run it again.
+              Connect a working model key in{" "}
+              <a
+                className="text-[var(--accent)] hover:underline"
+                href={`#/p/${task.project_id}?tab=Providers`}
+              >
+                this workspace&rsquo;s Providers tab
+              </a>
+              , then run it again.
             </span>
           ) : null}
         </div>
@@ -761,8 +768,13 @@ function WorkspacePanel({ taskId }: { taskId: string }) {
 
   return (
     <section className="mb-6">
-      <div className="mb-2 flex items-center justify-between">
-        <SectionLabel>Workspace</SectionLabel>
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <div className="flex items-baseline gap-2">
+          <SectionLabel>Task checkout</SectionLabel>
+          <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
+            this task&apos;s isolated working copy
+          </span>
+        </div>
         <div className="flex items-center gap-2">
           <Button
             onClick={() => {

@@ -468,6 +468,28 @@ def list_upstream_models(
     return sorted(ids)
 
 
+def provider_block_reason(provider: Provider | None) -> str | None:
+    """Why this provider cannot serve a run, or None when it can.
+
+    A provider with no working key cannot serve, so a run against it blocks
+    instead of executing. The executor asks this before claiming work, so a
+    task is never handed to a provider that cannot run it.
+    """
+    if provider is None:
+        return None
+    if provider.status != ProviderStatus.ACTIVE:
+        return f"provider is {provider.status.value}"
+    if provider.kind == ProviderKind.OPENAI_COMPATIBLE:
+        base_url = provider.config.get("base_url", "")
+        if (
+            not isinstance(base_url, str)
+            or not base_url.strip()
+            or not resolve_api_key(provider.config)
+        ):
+            return "openai-compatible provider not configured"
+    return None
+
+
 def resolve_run_provider(
     conn: sqlite3.Connection, task_owner_provider_id: str | None, project_id: str
 ) -> tuple[Provider | None, RuntimeAdapter, str | None]:
@@ -479,14 +501,7 @@ def resolve_run_provider(
     provider = store.get_provider(conn, task_owner_provider_id) if task_owner_provider_id else None
     if provider is not None and provider.project_id != project_id:
         return provider, LocalRuntimeAdapter(), "provider belongs to another project"
-    if provider is not None and provider.status != ProviderStatus.ACTIVE:
-        return provider, LocalRuntimeAdapter(), f"provider is {provider.status.value}"
-    if provider is not None and provider.kind == ProviderKind.OPENAI_COMPATIBLE:
-        base_url = provider.config.get("base_url", "")
-        if (
-            not isinstance(base_url, str)
-            or not base_url.strip()
-            or not resolve_api_key(provider.config)
-        ):
-            return provider, LocalRuntimeAdapter(), "openai-compatible provider not configured"
+    reason = provider_block_reason(provider)
+    if reason is not None:
+        return provider, LocalRuntimeAdapter(), reason
     return provider, adapter_for_provider(provider), None
