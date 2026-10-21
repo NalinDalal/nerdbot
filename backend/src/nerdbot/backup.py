@@ -281,6 +281,7 @@ _IMPORT_COLUMNS: dict[str, frozenset[str]] = {
             "workspace_path",
             "board_id",
             "parent_task_id",
+            "blocked_reason",
         }
     ),
 }

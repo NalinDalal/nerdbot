@@ -84,6 +84,11 @@ export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenT
                 </td>
                 <td className={TABLE_TD}>
                   <StatusBadge status={task.status} />
+                  {task.blocked_reason ? (
+                    <span className="ml-2 text-[var(--step-minus-1)] text-[var(--muted)]">
+                      {task.blocked_reason}
+                    </span>
+                  ) : null}
                 </td>
                 <td className="text-[var(--muted)]">{ownerName(task.owner_teammate_id)}</td>
                 <td className={TABLE_TD}>

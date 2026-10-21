@@ -32,6 +32,8 @@ export interface Task {
   board_id: string;
   /** Set when this task was created by a parent's delegate_task tool. */
   parent_task_id: string;
+  /** Why the task is blocked, in plain words. Empty when not blocked. */
+  blocked_reason: string;
 }
 
 export interface Run {

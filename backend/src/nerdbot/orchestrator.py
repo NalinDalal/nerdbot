@@ -84,9 +84,10 @@ def schedule_run(
             run = store.create_run(
                 conn, task_id, runtime=(adapter or LocalRuntimeAdapter()).name, session=task.id
             )
-            store.set_task_status(conn, task_id, TaskStatus.BLOCKED)
+            owner_reason = f"owner teammate is {owner.status.value}"
+            store.set_task_status(conn, task_id, TaskStatus.BLOCKED, owner_reason)
             store.finish_run(
-                conn, run.id, RunStatus.BLOCKED, None, f"owner teammate is {owner.status.value}"
+                conn, run.id, RunStatus.BLOCKED, None, owner_reason
             )
             run.status = RunStatus.BLOCKED
             return run, None, None
@@ -105,7 +106,7 @@ def schedule_run(
             run = store.create_run(
                 conn, task_id, runtime=adapter.name, session=task.id, provider_id=provider_id
             )
-            store.set_task_status(conn, task_id, TaskStatus.BLOCKED)
+            store.set_task_status(conn, task_id, TaskStatus.BLOCKED, block_reason)
             store.finish_run(conn, run.id, RunStatus.BLOCKED, None, block_reason)
             run.status = RunStatus.BLOCKED
             run.output_excerpt = block_reason
@@ -136,7 +137,7 @@ def schedule_run(
         store.finish_run(conn, run.id, RunStatus.BLOCKED, None, "dependencies not satisfied")
         run.status = RunStatus.BLOCKED
         run.output_excerpt = "dependencies not satisfied"
-        store.set_task_status(conn, task_id, TaskStatus.BLOCKED)
+        store.set_task_status(conn, task_id, TaskStatus.BLOCKED, "dependencies not satisfied")
         return run, None, None
 
     ws = workspace.create_isolated_workspace(data_dir, task_id)
@@ -162,7 +163,7 @@ def schedule_run(
         store.finish_run(conn, run.id, RunStatus.BLOCKED, None, f"blocked: {exc.reason}")
         run.status = RunStatus.BLOCKED
         run.output_excerpt = f"blocked: {exc.reason}"
-        store.set_task_status(conn, task_id, TaskStatus.BLOCKED)
+        store.set_task_status(conn, task_id, TaskStatus.BLOCKED, str(exc.reason))
         _finalize_child_delegation(conn, task, run, f"blocked: {exc.reason}", failed=True)
         return run, None, None
     except ExecutionError as exc:

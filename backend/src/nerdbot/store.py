@@ -307,6 +307,12 @@ class ApprovalDecidedError(ValueError):
     """An approval was decided more than once (approvals are one-use)."""
 
 
+# How long a writer waits for the database lock before giving up. The API,
+# the CLI sweeps and the dashboard can all write at once; without this the
+# second writer fails immediately with "database is locked".
+BUSY_TIMEOUT_MS = 5000
+
+
 def connect(db_path: str | Path) -> sqlite3.Connection:
     """Open the SQLite database, creating parent dirs and schema.
 
@@ -320,6 +326,10 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
         path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    # The API, the CLI sweeps and the dashboard can all write at once. Without
+    # a busy timeout the second writer fails immediately with "database is
+    # locked"; with it, the writer waits for the lock instead of erroring.
+    conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
     conn.executescript(SCHEMA)
     _migrate(conn)
     return conn
@@ -443,6 +453,13 @@ _PHASE16_COLUMNS: dict[str, list[tuple[str, str]]] = {
 }
 
 
+_PHASE17_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    # A blocked task carries the reason it is blocked, so the UI can say
+    # "provider not configured" instead of a bare "blocked".
+    "tasks": [("blocked_reason", "TEXT NOT NULL DEFAULT ''")],
+}
+
+
 def _migrate(conn: sqlite3.Connection) -> None:
     """Idempotent migrations for databases created by older schemas."""
     # Per-table concat (a plain ** merge would let a later phase's list
@@ -451,7 +468,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     for phase in (_PHASE2_COLUMNS, _PHASE3_COLUMNS, _PHASE4_COLUMNS, _PHASE5_COLUMNS,
                   _PHASE6_COLUMNS, _PHASE7_COLUMNS, _PHASE8_COLUMNS, _PHASE9_COLUMNS,
                   _PHASE10_COLUMNS, _PHASE11_COLUMNS, _PHASE12_COLUMNS, _PHASE13_COLUMNS,
-                  _PHASE14_COLUMNS, _PHASE15_COLUMNS, _PHASE16_COLUMNS):
+                  _PHASE14_COLUMNS, _PHASE15_COLUMNS, _PHASE16_COLUMNS, _PHASE17_COLUMNS):
         for table, columns in phase.items():
             phases.setdefault(table, []).extend(columns)
     for table, columns in phases.items():
@@ -460,7 +477,31 @@ def _migrate(conn: sqlite3.Connection) -> None:
             if name not in existing:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
     conn.commit()
+    _backfill_blocked_reasons(conn)
     _encrypt_legacy_provider_secrets(conn)
+
+
+def _backfill_blocked_reasons(conn: sqlite3.Connection) -> None:
+    """Give tasks that were already blocked a reason.
+
+    The reason was always recorded — on the run that blocked them — but the
+    task itself did not carry it. Copy it across so an existing database
+    explains itself the same way a new one does.
+    """
+    rows = conn.execute(
+        "SELECT tasks.id, runs.output_excerpt FROM tasks"
+        " JOIN runs ON runs.task_id = tasks.id"
+        " WHERE tasks.status = 'blocked' AND tasks.blocked_reason = ''"
+        " AND runs.output_excerpt <> ''"
+        " ORDER BY runs.rowid"
+    ).fetchall()
+    for row in rows:
+        conn.execute(
+            "UPDATE tasks SET blocked_reason = ? WHERE id = ?",
+            (row["output_excerpt"], row["id"]),
+        )
+    if rows:
+        conn.commit()
 
 
 def _encrypt_legacy_provider_secrets(conn: sqlite3.Connection) -> None:
@@ -1022,6 +1063,7 @@ def _task_from_row(row: sqlite3.Row) -> Task:
         else "",
         board_id=row["board_id"] if "board_id" in keys else "",
         parent_task_id=row["parent_task_id"] if "parent_task_id" in keys and row["parent_task_id"] else "",
+        blocked_reason=row["blocked_reason"] if "blocked_reason" in keys and row["blocked_reason"] else "",
     )
 
 
@@ -1105,13 +1147,23 @@ def set_task_workspace(
     return task
 
 
-def set_task_status(conn: sqlite3.Connection, task_id: str, status: TaskStatus) -> None:
+def set_task_status(
+    conn: sqlite3.Connection, task_id: str, status: TaskStatus, reason: str = ""
+) -> None:
+    """Move a task to a new status, recording why it was blocked.
+
+    ``reason`` is kept only while the task is blocked and is cleared when it
+    leaves that state, so a stale reason never lingers on a running task.
+    """
     task = get_task(conn, task_id)
     if task is None:
         raise KeyError(f"unknown task {task_id}")
     if status != task.status and status not in TASK_TRANSITIONS[task.status]:
         raise InvalidTransitionError(f"task {task_id}: {task.status.value} -> {status.value}")
-    conn.execute("UPDATE tasks SET status = ? WHERE id = ?", (status.value, task_id))
+    conn.execute(
+        "UPDATE tasks SET status = ?, blocked_reason = ? WHERE id = ?",
+        (status.value, reason if status == TaskStatus.BLOCKED else "", task_id),
+    )
     conn.commit()
     if status != task.status:
         record_event(conn, task.project_id, "task", task_id, f"task.status.{status.value}")
@@ -1624,7 +1676,10 @@ def cancel_task(
                 reason=reason or f"task {task_id} cancelled",
             )
     if task.status in (TaskStatus.PENDING, TaskStatus.READY, TaskStatus.RUNNING):
-        set_task_status(conn, task_id, TaskStatus.BLOCKED)
+        set_task_status(
+            conn, task_id, TaskStatus.BLOCKED,
+            f"delegation {delegation.id} was {reason or 'cancelled'}",
+        )
     refreshed = get_task(conn, task_id)
     assert refreshed is not None
     return refreshed

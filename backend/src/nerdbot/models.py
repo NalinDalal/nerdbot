@@ -103,6 +103,11 @@ class Task(BaseModel):
     workspace_path: str = ""
     board_id: str = ""
     parent_task_id: str = ""
+    # Why the task is blocked, in plain words ("openai-compatible provider
+    # not configured"). Set when the task enters the blocked state and
+    # cleared when it leaves it, so a blocked task can always explain
+    # itself instead of showing a bare status.
+    blocked_reason: str = ""
 
 
 class BoardStatus(StrEnum):

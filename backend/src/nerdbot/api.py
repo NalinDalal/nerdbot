@@ -29,7 +29,7 @@ from . import gates as gates_mod
 from . import knowledge as knowledge_mod
 from . import metrics as metrics_mod
 from . import notify as notify_mod
-from . import orchestrator, store
+from . import orchestrator, schemas, store
 from . import permissions as permissions_mod
 from . import providers as providers_impl
 from . import runtime as runtime_mod
@@ -262,22 +262,22 @@ def create_app() -> FastAPI:
 
     @app.post("/projects")
     def create_project(
-        body: dict[str, Any],
+        body: schemas.ProjectCreate,
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
         project = store.create_project(
             conn,
             owner=principal,
-            repository=str(body.get("repository", "")),
-            config=dict(body.get("config", {})),
+            repository=body.repository or "",
+            config=dict(body.config or {}),
         )
         return project.model_dump(mode="json")
 
     @app.post("/projects/{project_id}/teammates")
     def create_teammate(
         project_id: str,
-        body: dict[str, Any],
+        body: schemas.TeammateCreate,
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
         acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
@@ -286,12 +286,12 @@ def create_app() -> FastAPI:
         mate = fleet_mod.create_teammate_service(
             conn,
             project_id,
-            persona=str(body.get("persona", "")),
-            instructions=str(body.get("instructions", "")),
-            capabilities=list(body.get("capabilities", [])),
-            memory_scope=str(body.get("memory_scope", "project")),
-            permissions=list(body.get("permissions", [])),
-            provider_id=body.get("provider_id") or None,
+            persona=body.persona or "",
+            instructions=body.instructions or "",
+            capabilities=list(body.capabilities or []),
+            memory_scope=body.memory_scope or "project",
+            permissions=list(body.permissions or []),
+            provider_id=body.provider_id or None,
             acting=acting,
         )
         return mate.model_dump(mode="json")
@@ -919,7 +919,7 @@ def create_app() -> FastAPI:
     @app.post("/projects/{project_id}/tasks")
     def create_task(
         project_id: str,
-        body: dict[str, Any],
+        body: schemas.TaskCreate,
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
@@ -928,11 +928,11 @@ def create_app() -> FastAPI:
             task = store.create_task(
                 conn,
                 project_id,
-                description=str(body.get("description", "")),
-                owner_teammate_id=body.get("owner_teammate_id") or None,
-                dependencies=list(body.get("dependencies", [])),
-                command=str(body.get("command", "")),
-                issue_id=body.get("issue_id") or None,
+                description=body.description or "",
+                owner_teammate_id=body.owner_teammate_id or None,
+                dependencies=list(body.dependencies or []),
+                command=body.command or "",
+                issue_id=body.issue_id or None,
             )
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1836,12 +1836,12 @@ def create_app() -> FastAPI:
     @app.post("/approvals/{approval_id}/decision")
     def decide_approval(
         approval_id: str,
-        body: dict[str, Any],
+        body: schemas.ApprovalDecision,
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
         try:
-            decision = Decision(str(body.get("decision", "pending")))
+            decision = Decision(body.decision or "pending")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="invalid decision") from exc
         project_id = store.approval_project(conn, approval_id)
@@ -1928,13 +1928,13 @@ def create_app() -> FastAPI:
     @app.post("/projects/{project_id}/providers")
     def create_provider(
         project_id: str,
-        body: dict[str, Any],
+        body: schemas.ProviderCreate,
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
         require_project_owner(conn, project_id, principal)
         try:
-            kind = ProviderKind(str(body.get("kind", "local")))
+            kind = ProviderKind(body.kind or "local")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="invalid provider kind") from exc
         try:
@@ -1942,9 +1942,9 @@ def create_app() -> FastAPI:
                 conn,
                 project_id,
                 kind=kind,
-                name=str(body.get("name", "")),
-                config=dict(body.get("config", {})),
-                capabilities=list(body.get("capabilities", [])),
+                name=body.name or "",
+                config=dict(body.config or {}),
+                capabilities=list(body.capabilities or []),
             )
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2433,15 +2433,14 @@ def create_app() -> FastAPI:
     @app.post("/projects/{project_id}/threads")
     def create_thread(
         project_id: str,
-        body: dict[str, Any],
+        body: schemas.ThreadCreate,
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
         require_project_owner(conn, project_id, principal)
         try:
             thread = store.create_thread(
-                conn, project_id, title=str(body.get("title", "")),
-                provider_id=body.get("provider_id"),
+                conn, project_id, title=body.title or "", provider_id=body.provider_id,
             )
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2476,7 +2475,7 @@ def create_app() -> FastAPI:
     @app.patch("/threads/{thread_id}")
     def update_thread(
         thread_id: str,
-        body: dict[str, Any],
+        body: schemas.ThreadUpdate,
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
@@ -2484,14 +2483,15 @@ def create_app() -> FastAPI:
         thread = store.get_thread(conn, thread_id)
         if thread is None:  # pragma: no cover - raced deletion
             raise HTTPException(status_code=404, detail="thread not found")
-        if "provider_id" in body:
+        # Only the fields the caller actually sent are applied.
+        if "provider_id" in body.model_fields_set:
             try:
-                thread = store.set_thread_provider(conn, thread_id, body.get("provider_id"))
+                thread = store.set_thread_provider(conn, thread_id, body.provider_id)
             except (KeyError, ValueError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if "title" in body:
+        if "title" in body.model_fields_set:
             conn.execute("UPDATE chat_threads SET title = ? WHERE id = ?",
-                         (str(body.get("title", "")), thread_id))
+                         (body.title or "", thread_id))
             conn.commit()
             refreshed = store.get_thread(conn, thread_id)
             if refreshed is not None:

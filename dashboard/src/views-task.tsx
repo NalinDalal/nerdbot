@@ -206,9 +206,33 @@ export function TaskDetailView({
               {task.id.slice(0, 10)}…
             </span>
             <StatusBadge status={task.status} />
+            {task.blocked_reason ? (
+              <span className="text-[var(--step-minus-1)] text-[var(--muted)]">
+                {task.blocked_reason}
+              </span>
+            ) : null}
           </>
         }
       />
+
+      {task.blocked_reason ? (
+        <div
+          className="mb-6 flex flex-wrap items-center gap-3 rounded-xl border border-[var(--warn)] bg-[var(--warn-dim)] px-4 py-3"
+          role="status"
+        >
+          <strong className="text-[var(--step-minus-1)] text-[var(--warn)]">
+            This task is blocked
+          </strong>
+          <span className="text-[var(--step-minus-1)] text-[var(--text)]">
+            {task.blocked_reason}
+          </span>
+          {task.blocked_reason.includes("provider") ? (
+            <span className="text-[var(--step-minus-1)] text-[var(--muted)]">
+              Connect a working model key in Settings → Providers, then run it again.
+            </span>
+          ) : null}
+        </div>
+      ) : null}
 
       {issue ? (
         <div className="mb-6 flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
