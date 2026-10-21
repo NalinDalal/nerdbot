@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { Toaster, toast } from "sonner";
 import { ApiError, api, describeError as apiDescribeError, getSession, setSession } from "./api";
 import { ConversationView } from "./views-chat";
@@ -10,12 +11,7 @@ import { SettingsView } from "./views-settings";
 import { TeamsView, TeamDetailView } from "./views-teams";
 import { BotDetailView, BotsView } from "./views-bot";
 import { BoardsView, BoardDetailView } from "./views-boards";
-import {
-  EmptyState,
-  Button,
-  useTheme,
-  ThemeButton,
-} from "./components";
+import { EmptyState, useTheme, ThemeButton } from "./components";
 
 export type Route =
   | { name: "home" }
@@ -61,6 +57,107 @@ export function navigate(route: string): void {
   window.location.hash = route;
 }
 
+/* --- Sidebar --- */
+
+function NavItem({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      aria-current={active ? "page" : undefined}
+      className={`flex w-full items-center rounded-md px-2.5 py-2 text-left text-[var(--step-minus-1)] font-medium transition-colors ${
+        active
+          ? "bg-[var(--accent-dim)] text-[var(--text)]"
+          : "text-[var(--text-soft)] hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
+const NAV_ITEMS: Array<{ label: string; routes: Array<Route["name"]>; href: string }> = [
+  { label: "Home", routes: ["home"], href: "#/" },
+  { label: "Workspaces", routes: ["projects", "project", "task"], href: "#/projects" },
+  { label: "AI fleet", routes: ["bots", "bot"], href: "#/bots" },
+  { label: "Boards", routes: ["boards", "board"], href: "#/boards" },
+  { label: "Teams", routes: ["teams", "team"], href: "#/teams" },
+  { label: "Settings", routes: ["settings"], href: "#/settings" },
+];
+
+function Sidebar({
+  route,
+  drawerOpen,
+  onNavigate,
+  onDisconnect,
+  onThemeChange,
+  onClose,
+}: {
+  route: Route;
+  drawerOpen: boolean;
+  onNavigate: (href: string) => void;
+  onDisconnect: () => void;
+  onThemeChange: (theme: "light" | "dark" | "system") => void;
+  onClose: () => void;
+}) {
+  return (
+    <aside
+      className={`fixed inset-y-0 left-0 z-50 flex w-64 shrink-0 flex-col overflow-hidden border-r border-[var(--border)] bg-[var(--surface)] transition-transform duration-200 ease-out md:static md:translate-x-0 ${
+        drawerOpen ? "translate-x-0" : "-translate-x-full"
+      }`}
+    >
+      <div className="flex h-full flex-col overflow-y-auto p-4">
+        <div className="mb-1 flex items-center justify-between">
+          <strong className="text-base font-semibold tracking-tight text-[var(--text)]">
+            NerdBot
+          </strong>
+          <button
+            className="rounded-sm p-1.5 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)] md:hidden"
+            onClick={onClose}
+            aria-label="Close navigation"
+          >
+            ×
+          </button>
+        </div>
+        <div className="mb-4 text-[var(--step-minus-2)] uppercase tracking-[0.2em] text-[var(--faint)]">
+          assistant
+        </div>
+
+        <nav className="flex flex-col gap-0.5">
+          {NAV_ITEMS.map((item) => (
+            <NavItem
+              key={item.label}
+              label={item.label}
+              active={item.routes.includes(route.name)}
+              onClick={() => onNavigate(item.href)}
+            />
+          ))}
+        </nav>
+
+        <div className="mt-auto flex flex-col gap-3 border-t border-[var(--border-dim)] pt-4">
+          <button
+            onClick={onDisconnect}
+            className="flex w-full items-center rounded-md px-2.5 py-2 text-left text-[var(--step-minus-1)] font-medium text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
+          >
+            Disconnect
+          </button>
+          <div className="flex items-center gap-2">
+            <span className="text-[var(--step-minus-2)] text-[var(--faint)]">Theme</span>
+            <ThemeButton onThemeChange={onThemeChange} />
+          </div>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
 export default function App() {
   const [route, setRoute] = useState<Route>(parseHash);
   const [connected, setConnected] = useState(() => getSession() !== null);
@@ -72,11 +169,11 @@ export default function App() {
     const onHash = () => setRoute(parseHash());
     window.addEventListener("hashchange", onHash);
     const mq = window.matchMedia("(max-width: 760px)");
-    const onResize = () => setDrawerOpen(false);
-    mq.addEventListener("change", onResize);
+    const onBreakpoint = () => setDrawerOpen(false);
+    mq.addEventListener("change", onBreakpoint);
     return () => {
       window.removeEventListener("hashchange", onHash);
-      mq.removeEventListener("change", onResize);
+      mq.removeEventListener("change", onBreakpoint);
     };
   }, []);
 
@@ -84,169 +181,111 @@ export default function App() {
     navigate(`#/chat/${id}`);
   };
 
-  const openHome = () => navigate("#/");
-
   if (!connected) {
     return <ConnectScreen onConnected={() => setConnected(true)} />;
   }
 
-  const isChatRoute = route.name === "home" || route.name === "chat";
+  /* Route → view. ConversationView is the home surface (Command Center
+   * landing); every other route renders a full-page view that owns its
+   * own scroll container. */
+  let content: ReactNode;
+  switch (route.name) {
+    case "home":
+    case "chat":
+      content = (
+        <ConversationView
+          projectId={route.name === "chat" ? route.projectId : undefined}
+          initialThreadId={activeThreadId}
+          onSetActiveThread={setActiveThread}
+        />
+      );
+      break;
+    case "teams":
+      content = <TeamsView />;
+      break;
+    case "team":
+      content = <TeamDetailView teamId={route.teamId} onOpenProject={openProject} />;
+      break;
+    case "bot":
+      content = <BotDetailView teammateId={route.teammateId} />;
+      break;
+    case "boards":
+      content = <BoardsView />;
+      break;
+    case "board":
+      content = <BoardDetailView boardId={route.boardId} />;
+      break;
+    case "projects":
+      content = <ProjectsView onOpen={openProject} />;
+      break;
+    case "settings":
+      content = <SettingsView />;
+      break;
+    case "project":
+      content = (
+        <ProjectDetailView
+          projectId={route.projectId}
+          onOpenTask={(taskId) => navigate(`#/p/${route.projectId}/t/${taskId}`)}
+        />
+      );
+      break;
+    case "task":
+      content = (
+        <TaskDetailView
+          projectId={route.projectId}
+          taskId={route.taskId}
+          onBack={() => navigate(`#/p/${route.projectId}`)}
+        />
+      );
+      break;
+    case "capabilities":
+      content = <CapabilitiesView />;
+      break;
+    case "bots":
+      content = <BotsView />;
+      break;
+    default:
+      content = <EmptyState title="Workspace" hint="Select a workspace area from the sidebar." />;
+  }
 
   return (
-    <div className="layout h-full overflow-hidden bg-[var(--bg)] text-[var(--text)]">
-      <button
-        className="mobile-menu fixed top-4 left-4 z-70 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] hover:border-[var(--faint)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-1"
-        aria-label="Open navigation"
-        onClick={() => setDrawerOpen((d) => !d)}
-      >
-        ☰
-      </button>
+    <div className="flex h-full overflow-hidden bg-[var(--bg)] text-[var(--text)]">
+      {/* Mobile drawer scrim */}
+      {drawerOpen ? (
+        <div
+          className="fixed inset-0 z-40 bg-black/40 md:hidden"
+          onClick={() => setDrawerOpen(false)}
+          aria-hidden
+        />
+      ) : null}
 
-      <aside className={`sidebar border-r border-[var(--border)] bg-[var(--surface)] flex flex-col overflow-hidden ${drawerOpen ? "translate-x-0" : "-translate-x-full"} transition-transform duration-200 ease-[var(--ease-out)]`}>
-        <div className="p-4 overflow-y-auto">
-          <div className="flex items-center justify-between mb-4">
-            <div className="brand">
-              <strong className="text-base font-semibold tracking-tight">NerdBot</strong>
-              <div className="text-[var(--step-minus-1)] text-[var(--muted)] mt-0.5 uppercase tracking-widest">assistant</div>
-            </div>
-            {drawerOpen && (
-              <button
-                className="rounded-sm p-1.5 text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--surface-2)] transition-colors"
-                onClick={() => setDrawerOpen(false)}
-                aria-label="Close navigation"
-              >
-                ×
-              </button>
-            )}
-          </div>
+      <Sidebar
+        route={route}
+        drawerOpen={drawerOpen}
+        onNavigate={(href) => {
+          setDrawerOpen(false);
+          navigate(href);
+        }}
+        onDisconnect={() => {
+          setSession(null);
+          setConnected(false);
+          navigate("#/");
+        }}
+        onThemeChange={setTheme}
+        onClose={() => setDrawerOpen(false)}
+      />
 
-          <div className="mt-6">
-            <Button
-              variant="primary"
-              className="w-full"
-              onClick={openHome}
-              aria-label="Start a new conversation"
-            >
-              New chat
-            </Button>
-          </div>
-
-          <div className="mt-8">
-            <div className="text-[var(--step-minus-2)] text-[var(--faint)] uppercase tracking-widest mb-2">Workspace</div>
-            <nav className="space-y-0.5">
-              <Button
-                variant={route.name === "home" ? "primary" : "default"}
-                className={`w-full text-left justify-start border-transparent bg-transparent hover:bg-[var(--surface-2)] ${route.name === "home" ? "bg-[var(--accent-dim)] border-[var(--accent)] text-[var(--text)]" : "text-[var(--text-soft)]"}`}
-                onClick={openHome}
-              >
-                Home
-              </Button>
-              <Button
-                variant={route.name === "projects" || route.name === "project" ? "primary" : "default"}
-                className={`w-full text-left justify-start border-transparent bg-transparent hover:bg-[var(--surface-2)] ${(route.name === "projects" || route.name === "project") ? "bg-[var(--accent-dim)] border-[var(--accent)] text-[var(--text)]" : "text-[var(--text-soft)]"}`}
-                onClick={() => navigate("#/projects")}
-              >
-                Workspaces
-              </Button>
-              <Button
-                variant={route.name === "bots" || route.name === "bot" ? "primary" : "default"}
-                className={`w-full text-left justify-start border-transparent bg-transparent hover:bg-[var(--surface-2)] ${(route.name === "bots" || route.name === "bot") ? "bg-[var(--accent-dim)] border-[var(--accent)] text-[var(--text)]" : "text-[var(--text-soft)]"}`}
-                onClick={() => navigate("#/bots")}
-              >
-                AI fleet
-              </Button>
-              <Button
-                variant={route.name === "boards" || route.name === "board" ? "primary" : "default"}
-                className={`w-full text-left justify-start border-transparent bg-transparent hover:bg-[var(--surface-2)] ${(route.name === "boards" || route.name === "board") ? "bg-[var(--accent-dim)] border-[var(--accent)] text-[var(--text)]" : "text-[var(--text-soft)]"}`}
-                onClick={() => navigate("#/boards")}
-              >
-                Boards
-              </Button>
-              <Button
-                variant={route.name === "teams" || route.name === "team" ? "primary" : "default"}
-                className={`w-full text-left justify-start border-transparent bg-transparent hover:bg-[var(--surface-2)] ${(route.name === "teams" || route.name === "team") ? "bg-[var(--accent-dim)] border-[var(--accent)] text-[var(--text)]" : "text-[var(--text-soft)]"}`}
-                onClick={() => navigate("#/teams")}
-              >
-                Teams
-              </Button>
-              <Button
-                variant={route.name === "settings" ? "primary" : "default"}
-                className={`w-full text-left justify-start border-transparent bg-transparent hover:bg-[var(--surface-2)] ${route.name === "settings" ? "bg-[var(--accent-dim)] border-[var(--accent)] text-[var(--text)]" : "text-[var(--text-soft)]"}`}
-                onClick={() => navigate("#/settings")}
-              >
-                Settings
-              </Button>
-            </nav>
-          </div>
-
-          <div className="mt-auto pt-6 border-t border-[var(--border-dim)]">
-            <Button
-              variant="default"
-              className="w-full text-left"
-              onClick={() => {
-                setSession(null);
-                setConnected(false);
-                navigate("#/");
-              }}
-            >
-              Disconnect
-            </Button>
-            <div className="mt-3 flex items-center gap-2">
-              <span className="text-[var(--step-minus-2)] text-[var(--faint)]">Theme</span>
-              <ThemeButton onThemeChange={setTheme} />
-            </div>
-          </div>
-        </div>
-      </aside>
-
-      <div className="main flex flex-col h-full overflow-hidden relative">
-        {isChatRoute && (
-          <ConversationView
-            projectId={route.name === "chat" ? route.projectId : undefined}
-            initialThreadId={activeThreadId}
-            onSetActiveThread={setActiveThread}
-          />
-        )}
-        {route.name === "teams" && <TeamsView />}
-        {route.name === "team" && (
-          <TeamDetailView teamId={route.teamId} onOpenProject={openProject} />
-        )}
-        {route.name === "bot" && <BotDetailView teammateId={route.teammateId} />}
-        {route.name === "boards" && <BoardsView />}
-        {route.name === "board" && <BoardDetailView boardId={route.boardId} />}
-        {route.name === "projects" && <ProjectsView onOpen={openProject} />}
-        {route.name === "settings" && <SettingsView />}
-        {route.name === "project" && (
-          <ProjectDetailView
-            projectId={route.projectId}
-            onOpenTask={(taskId) => navigate(`#/p/${route.projectId}/t/${taskId}`)}
-          />
-        )}
-        {route.name === "task" && (
-          <TaskDetailView
-            projectId={route.projectId}
-            taskId={route.taskId}
-            onBack={() => navigate(`#/p/${route.projectId}/t/${route.taskId}`)}
-          />
-        )}
-        {route.name === "capabilities" && <CapabilitiesView />}
-        {route.name === "bots" && <BotsView />}
-        {!isChatRoute &&
-          route.name !== "teams" &&
-          route.name !== "team" &&
-          route.name !== "bot" &&
-          route.name !== "boards" &&
-          route.name !== "board" &&
-          route.name !== "projects" &&
-          route.name !== "settings" &&
-          route.name !== "project" &&
-          route.name !== "task" &&
-          route.name !== "capabilities" &&
-          route.name !== "bots" && (
-          <EmptyState title="Workspace" hint="Select a workspace area from the sidebar." />
-        )}
+      <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+        <button
+          className="fixed left-3 top-3 z-40 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] transition-colors hover:border-[var(--faint)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-1 md:hidden"
+          aria-label="Open navigation"
+          onClick={() => setDrawerOpen(true)}
+        >
+          ☰
+        </button>
+        {content}
         <Toaster position="bottom-right" richColors closeButton />
-      </div>
+      </main>
     </div>
   );
 }
@@ -287,38 +326,51 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }) {
   };
 
   return (
-    <div className="layout h-full bg-[var(--bg)] text-[var(--text)]">
-      <main className="flex flex-col items-center justify-center h-full px-6">
+    <div className="flex h-full bg-[var(--bg)] text-[var(--text)]">
+      <main className="flex h-full flex-1 flex-col items-center justify-center px-6">
         <div className="w-full max-w-[460px]">
-          <h1 className="text-[var(--step-4)] font-semibold tracking-tight mb-2">NerdBot</h1>
-          <p className="text-[var(--step-0)] text-[var(--muted)] mb-6">Connect to a running NerdBot API server.</p>
+          <h1 className="mb-2 text-[var(--step-4)] font-semibold tracking-tight">NerdBot</h1>
+          <p className="mb-6 text-[var(--step-0)] text-[var(--muted)]">
+            Connect to a running NerdBot API server.
+          </p>
           {error ? (
-            <div className="rounded-lg border border-[var(--danger)] bg-[var(--danger-dim)] px-4 py-3 text-[var(--step-0)] mb-4" role="alert">
+            <div
+              className="mb-4 rounded-lg border border-[var(--danger)] bg-[var(--danger-dim)] px-4 py-3 text-[var(--step-0)]"
+              role="alert"
+            >
               {error}
             </div>
           ) : null}
           <form onSubmit={connect} className="space-y-4">
-            <div className="mb-4">
-              <span className="block text-[var(--step-minus-1)] font-medium text-[var(--muted)] mb-1.5 uppercase tracking-wide">API base URL</span>
+            <div>
+              <span className="mb-1.5 block text-[var(--step-minus-1)] font-medium uppercase tracking-wide text-[var(--muted)]">
+                API base URL
+              </span>
               <input
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
                 required
-                className="rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-0)] text-[var(--text)] w-full focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)] outline-none"
+                className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-0)] text-[var(--text)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
               />
             </div>
-            <div className="mb-4">
-              <span className="block text-[var(--step-minus-1)] font-medium text-[var(--muted)] mb-1.5 uppercase tracking-wide">API token (kept in this browser's local storage only)</span>
+            <div>
+              <span className="mb-1.5 block text-[var(--step-minus-1)] font-medium uppercase tracking-wide text-[var(--muted)]">
+                API token (kept in this browser's local storage only)
+              </span>
               <input
                 type="password"
                 value={token}
                 onChange={(e) => setToken(e.target.value)}
                 required
                 autoComplete="off"
-                className="rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-0)] text-[var(--text)] w-full focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)] outline-none"
+                className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-0)] text-[var(--text)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
               />
             </div>
-            <button className="button primary w-full" type="submit" disabled={busy}>
+            <button
+              className="mt-2 inline-flex w-full items-center justify-center rounded-md border border-[var(--accent)] bg-[var(--accent)] px-3 py-2 text-[var(--step-minus-1)] font-semibold text-[var(--text-inverse)] transition-colors hover:border-[var(--accent-hover)] hover:bg-[var(--accent-hover)] disabled:pointer-events-none disabled:opacity-50"
+              type="submit"
+              disabled={busy}
+            >
               {busy ? "Connecting…" : "Connect"}
             </button>
           </form>
