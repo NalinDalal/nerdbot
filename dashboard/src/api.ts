@@ -1,9 +1,14 @@
 import type {
   Approval,
   Artifact,
+  Board,
+  BoardMember,
+  BoardMessage,
   Capability,
   ChatMessage,
   ChatThread,
+  Delegation,
+  DecomposeResult,
   Event,
   Health,
   Issue,
@@ -11,15 +16,21 @@ import type {
   MemoryEntry,
   MemoryProvenance,
   Notification,
+  Permission,
   PRPackage,
   Project,
+  ProjectMessage,
   Provider,
   Review,
   Run,
   Schedule,
+  Task,
   TaskView,
+  Team,
+  TeamMember,
   Teammate,
   ThreadView,
+  WorkspaceFile,
 } from "./types";
 
 export interface Session {
@@ -73,13 +84,29 @@ export function getSession(): Session | null {
 export class ApiError extends Error {
   status: number;
   detail: string;
+  /** Attached when the server answers 409 with a pending gate approval
+   *  ({detail: {message, approval}}) so callers can show the approve flow. */
+  approval: unknown;
 
-  constructor(status: number, detail: string) {
+  constructor(status: number, detail: string, approval?: unknown) {
     super(detail || `Request failed (${status})`);
     this.name = "ApiError";
     this.status = status;
     this.detail = detail || `Request failed (${status})`;
+    this.approval = approval;
   }
+}
+
+/** Human-readable form for any thrown error. Gated bot actions (409) carry a
+ *  pending approval object — say where to approve it instead of dumping JSON. */
+export function describeError(err: unknown): string {
+  if (err instanceof ApiError) {
+    const base = `Error ${err.status}: ${err.detail}`;
+    return err.approval !== undefined
+      ? `${base} — approve it in the project's Approvals tab, then retry the same action.`
+      : base;
+  }
+  return String(err);
 }
 
 function joinUrl(base: string, path: string): string {
@@ -111,11 +138,22 @@ async function req<T>(path: string, options: { method?: string; body?: unknown }
     data = {};
   }
   if (!res.ok) {
-    const detail =
-      typeof data === "object" && data !== null && "detail" in data
-        ? String((data as { detail: unknown }).detail)
-        : `Request failed (${res.status})`;
-    throw new ApiError(res.status, detail);
+    // Server errors carry either a plain string detail or, for gated bot
+    // actions, {detail: {message, approval}} — keep both readable.
+    let detail = `Request failed (${res.status})`;
+    let approval: unknown;
+    const raw =
+      typeof data === "object" && data !== null
+        ? (data as { detail?: unknown }).detail
+        : undefined;
+    if (typeof raw === "string") {
+      detail = raw;
+    } else if (raw && typeof raw === "object") {
+      const obj = raw as { message?: unknown; approval?: unknown };
+      if (typeof obj.message === "string") detail = obj.message;
+      approval = obj.approval;
+    }
+    throw new ApiError(res.status, detail, approval);
   }
   return data as T;
 }
@@ -129,6 +167,35 @@ const patch = <T>(path: string, body: unknown = {}): Promise<T> =>
 export const api = {
   health: () => req<Health>("/health"),
   capabilities: () => req<{ capabilities: Capability[] }>("/capabilities"),
+  /** Canonical permission catalogue — the UI never hard-codes permission names. */
+  permissions: () =>
+    req<{
+      permissions: Permission[];
+      admin_permissions: string[];
+      agent_permissions: string[];
+    }>("/permissions"),
+
+  // -- Home context -----------------------------------------------------------
+  /** Resolve (or create on first access) the default Home project used for
+   *  project-free conversation. The backend keeps ownership enforcement. */
+  getHome: () => req<Project>("/home"),
+
+  // -- Workspace (projects = workspaces) -------------------------------------
+  listProjects: () => req<{ projects: Project[] }>("/projects"),
+  projectTasks: (projectId: string) =>
+    req<{ tasks: Task[] }>(`/projects/${projectId}/tasks`),
+  projectMessages: (projectId: string, toTeammateId?: string) =>
+    req<{ messages: ProjectMessage[] }>(
+      `/projects/${projectId}/messages${
+        toTeammateId ? `?to_teammate_id=${encodeURIComponent(toTeammateId)}` : ""
+      }`,
+    ),
+  projectApprovals: (projectId: string, decision?: string) =>
+    req<{ approvals: Approval[] }>(
+      `/projects/${projectId}/approvals${
+        decision ? `?decision=${encodeURIComponent(decision)}` : ""
+      }`,
+    ),
 
   createProject: (repository: string, config: Record<string, unknown> = {}) =>
     post<Project>("/projects", { repository, config }),
@@ -140,6 +207,83 @@ export const api = {
   disableTeammate: (id: string) => post<Teammate>(`/teammates/${id}/disable`),
   archiveTeammate: (id: string) => post<Teammate>(`/teammates/${id}/archive`),
   patchTeammate: (id: string, body: Record<string, unknown>) => patch<Teammate>(`/teammates/${id}`, body),
+
+  createTeam: (body: Record<string, unknown>) => post<Team>("/teams", body),
+  listTeams: () => req<{ teams: Team[] }>("/teams"),
+  getTeam: (teamId: string) =>
+    req<{ team: Team; projects: Project[]; teammates: Teammate[]; members: TeamMember[] }>(
+      `/teams/${teamId}`,
+    ),
+  addTeamProject: (teamId: string, projectId: string) =>
+    post<TeamMember>(`/teams/${teamId}/projects`, { project_id: projectId }),
+  removeTeamProject: (teamId: string, projectId: string) =>
+    req<{ removed: boolean }>(`/teams/${teamId}/projects/${projectId}`, { method: "DELETE" }),
+  addTeamTeammate: (teamId: string, teammateId: string) =>
+    post<TeamMember>(`/teams/${teamId}/teammates`, { teammate_id: teammateId }),
+  removeTeamTeammate: (teamId: string, teammateId: string) =>
+    req<{ removed: boolean }>(`/teams/${teamId}/teammates/${teammateId}`, { method: "DELETE" }),
+
+  delegateTask: (taskId: string, body: Record<string, unknown>) =>
+    post<Delegation>(`/tasks/${taskId}/delegate`, body),
+  listTaskDelegations: (taskId: string) =>
+    req<{ delegations: Delegation[] }>(`/tasks/${taskId}/delegations`),
+  decideDelegation: (delegationId: string, decision: string) =>
+    post<Delegation>(`/delegations/${delegationId}/decide`, { decision }),
+  cancelDelegation: (delegationId: string, reason = "") =>
+    post<Delegation>(`/delegations/${delegationId}/cancel`, { reason }),
+  cancelTask: (taskId: string, reason = "") =>
+    post<Task>(`/tasks/${taskId}/cancel`, { reason }),
+
+  // -- Boards (agent part) --------------------------------------------------
+  listBoards: (projectId?: string) =>
+    req<{ boards: Board[] }>(`/boards${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""}`),
+  createBoard: (body: Record<string, unknown>) => post<Board>("/boards", body),
+  getBoard: (boardId: string) =>
+    req<{ board: Board; members: BoardMember[]; messages: BoardMessage[]; inbox: BoardMessage[] }>(
+      `/boards/${boardId}`
+    ),
+  updateBoard: (boardId: string, body: Record<string, unknown>) =>
+    patch<Board>(`/boards/${boardId}`, body),
+  deleteBoard: (boardId: string) =>
+    req<Board>(`/boards/${boardId}`, { method: "DELETE" }),
+  addBoardMember: (boardId: string, body: Record<string, unknown>) =>
+    post<BoardMember>(`/boards/${boardId}/members`, body),
+  removeBoardMember: (boardId: string, teammateId: string) =>
+    req<{ removed: boolean }>(`/boards/${boardId}/members/${teammateId}`, { method: "DELETE" }),
+  listBoardMembers: (boardId: string) =>
+    req<{ members: BoardMember[] }>(`/boards/${boardId}/members`),
+  createBoardMessage: (boardId: string, body: Record<string, unknown>) =>
+    post<BoardMessage>(`/boards/${boardId}/messages`, body),
+  listBoardMessages: (boardId: string) =>
+    req<{ messages: BoardMessage[] }>(`/boards/${boardId}/messages`),
+  listBoardInbox: (boardId: string) =>
+    req<{ inbox: BoardMessage[] }>(`/boards/${boardId}/inbox`),
+  requestBoardApproval: (boardId: string, body: Record<string, unknown>) =>
+    post<Approval>(`/boards/${boardId}/approval-request`, body),
+  /** Plan-review flow: `{preview: true}` returns a side-effect-free plan;
+   *  posting back `{objective, plan}` materializes exactly that plan. */
+  decomposeBoard: (boardId: string, body: Record<string, unknown>) =>
+    post<DecomposeResult>(`/boards/${boardId}/decompose`, body),
+
+  claimTask: (taskId: string, teammateId: string) =>
+    post<TaskView["task"]>(`/tasks/${taskId}/claim`, { teammate_id: teammateId }),
+
+  listAllTeammates: () => req<{ teammates: Teammate[] }>("/teammates"),
+  teammateTasks: (teammateId: string) =>
+    req<{ tasks: Task[] }>(`/teammates/${teammateId}/tasks`),
+  teammateRuns: (teammateId: string) =>
+    req<{ runs: Run[] }>(`/teammates/${teammateId}/runs`),
+  teammateMemory: (teammateId: string) =>
+    req<{ entries: MemoryEntry[] }>(
+      `/memory?scope=${encodeURIComponent(`teammate:${teammateId}`)}`
+    ),
+  writeTeammateMemory: (teammateId: string, body: Record<string, unknown>) =>
+    post<MemoryEntry>("/memory", { ...body, scope: `teammate:${teammateId}` }),
+
+  executorSweep: () =>
+    post<{ processed: number; results: Array<Record<string, unknown>> }>(
+      "/executor/sweep"
+    ),
 
   createTask: (projectId: string, body: Record<string, unknown>) =>
     post<TaskView["task"]>(`/projects/${projectId}/tasks`, body),
@@ -157,6 +301,14 @@ export const api = {
   deleteWorkspace: (taskId: string) =>
     req<{ removed: boolean }>(`/tasks/${taskId}/workspace`, { method: "DELETE" }),
   ensureWorkspace: (taskId: string) => post<{ path: string; branch: string }>(`/tasks/${taskId}/workspace`, {}),
+  workspaceFiles: (taskId: string) =>
+    req<{ files: WorkspaceFile[]; root: string }>(`/tasks/${taskId}/workspace/files`),
+  workspaceFile: (taskId: string, path: string) =>
+    req<{ path: string; content: string }>(
+      `/tasks/${taskId}/workspace/file?path=${encodeURIComponent(path)}`,
+    ),
+  workspaceDiff: (taskId: string) =>
+    req<{ diff: string; exists: boolean }>(`/tasks/${taskId}/workspace/diff`),
 
   submitReview: (taskId: string, body: Record<string, unknown>) =>
     post<{ review: Review; artifact_id: string }>(`/tasks/${taskId}/reviews`, body),
@@ -173,7 +325,7 @@ export const api = {
     post<Approval>(`/runs/${runId}/approvals`, ttl ? { action, ttl_s: ttl } : { action }),
   listRunApprovals: (runId: string) =>
     req<{ approvals: Approval[] }>(`/runs/${runId}/approvals`),
-  decideApproval: (id: string, decision: "approved" | "denied") =>
+  decideApproval: (id: string, decision: "approved" | "approved_forever" | "denied") =>
     post<Approval>(`/approvals/${id}/decision`, { decision }),
   purgeApprovals: (projectId: string) =>
     post<{ purged: number }>(`/projects/${projectId}/approvals/purge`),
