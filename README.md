@@ -137,7 +137,7 @@ curl -H "Authorization: Bearer $NERDBOT_TOKEN" \
 
 ## First-use walkthrough
 
-1. **Open Home.** Start the server, open `http://localhost:8080`, sign in with your bearer token. You land in Home, your default personal conversation context. No project is required.
+1. **Open Home / Command Center.** Start the server, open `http://localhost:8080`, sign in with your bearer token. You land in the Command Center: an attention banner across the whole workspace (runs in flight, failed runs, approvals waiting for one-tap decisions) plus a team-level execution rollup, above the chat composer. No project is required.
 2. **Start a chat.** Click **New chat** (or pick a recent conversation) and send a message. The assistant answers using your configured provider, or the mock provider if none is set.
 3. **Create a project.** From the sidebar, open **Workspace > Projects**, then create a project (a repository plus shared knowledge, memory, tasks, bots, boards, and approvals). Projects are optional organizational contexts; they add files, instructions, history, and scoped work to your chats.
 4. **Configure a teammate.** In the project (or the global Fleet page), create a bot: give it a persona, instructions, memory scope, permissions, and attach a model provider. Bots are persistent teammates with their own task history.
