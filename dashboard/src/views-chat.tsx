@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { toast } from "sonner";
-import { api } from "./api";
+import { api, ApiError } from "./api";
 import { notifyError, describeError } from "./app";
 import type { ChatMessage, ChatThread, Teammate } from "./types";
 import {
@@ -176,8 +176,16 @@ export function ConversationView({
             />
           ) : isHome ? (
             <CommandCenter
+              projectId={resolvedProjectId}
+              threads={threads.data?.threads ?? []}
               providers={providers.data?.providers ?? []}
               onNewChat={() => setShowNew(true)}
+              onThreadCreated={(threadId) => {
+                setActiveId(threadId);
+                onSetActiveThread?.(threadId);
+              }}
+              refreshProviders={() => providers.reload()}
+              refreshThreads={() => threads.reload()}
             />
           ) : (
             <EmptyState
@@ -875,59 +883,247 @@ function ContextPanel({
 }
 
 function CommandCenter({
+  projectId,
+  threads,
   providers,
   onNewChat,
+  onThreadCreated,
+  refreshProviders,
+  refreshThreads,
 }: {
+  projectId: string;
+  threads: ChatThread[];
   providers: { id: string; name: string; kind: string }[];
   onNewChat: () => void;
+  onThreadCreated: (threadId: string) => void;
+  refreshProviders?: () => void;
+  refreshThreads?: () => void;
 }) {
   const hasProvider = providers.length > 0;
-  const defaultProvider = providers.find((p) => p.kind === "mock");
+  const [draft, setDraft] = useState("");
+  const [selectedProviderId, setSelectedProviderId] = useState<"__default__" | string>("__default__");
+  const [busy, setBusy] = useState(false);
+  const [streaming, setStreaming] = useState("");
+  const abortRef = useRef<AbortController | null>(null);
+  const [showConfigure, setShowConfigure] = useState(false);
+  const [provName, setProvName] = useState("");
+  const [provBaseUrl, setProvBaseUrl] = useState("");
+  const [provModel, setProvModel] = useState("");
+  const [provApiKey, setProvApiKey] = useState("");
+  const [provBusy, setProvBusy] = useState(false);
+
+  const send = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const content = draft.trim();
+    if (!content || busy) return;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setBusy(true);
+    setStreaming("");
+    try {
+      const thread = await api.createThread(projectId, { title: content.slice(0, 60) });
+      onThreadCreated(thread.id);
+      await api.sendChatStream(thread.id, content, (chunk) => {
+        setStreaming((prev) => prev + chunk);
+      }, { signal: controller.signal });
+      setDraft("");
+      refreshThreads?.();
+    } catch (err) {
+      if (err instanceof ApiError && err.detail === "Stream stopped") {
+        setStreaming((prev) => (prev ? `${prev}\n[stopped]` : ""));
+      } else {
+        notifyError(err);
+      }
+    } finally {
+      abortRef.current = null;
+      setBusy(false);
+      setStreaming("");
+    }
+  };
+
+  const stop = () => {
+    const controller = abortRef.current;
+    if (!controller) return;
+    controller.abort();
+    setStreaming((prev) => `${prev}\n[stopped]`);
+  };
+
+  const sorted = [...threads].sort(
+    (a, b) =>
+      new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+  );
 
   return (
     <div className="command-center">
       <div className="command-center-inner">
         <div>
-          <h1 style={{ fontSize: "var(--step-4)", marginBottom: 4 }}>NerdBot</h1>
-          <p className="command-center-sub">
-            Chat with your AI, delegate work to specialists, or pick up where you left off.
+          <h1 style={{ fontSize: "var(--step-4)", marginBottom: 2 }}>NerdBot</h1>
+          <p className="command-center-sub lead">
+            Your AI fleet. One place to get work done.
           </p>
-          <div className="command-center-hint">
+          <div className="command-center-hint caption">
             Projects are optional — start in Home. Your conversation context stays with you.
           </div>
         </div>
 
-        <div className="command-center-primary">
-          <Button variant="primary" onClick={onNewChat} className="new-chat-btn">
-            New chat
-          </Button>
-        </div>
-
-        <div className="command-center-section">
-          <div className="command-center-section-label">Model provider</div>
-          {hasProvider ? (
-            <div className="command-center-provider">
-              <Badge variant="ok">{providers.length}</Badge>
-              <span>
-                {providers.length === 1 ? providers[0].name : `${providers.length} providers`}
-              </span>
-              {defaultProvider && (
-                <span className="command-center-provider-note">
-                  · Mock provider available for zero-setup verification
-                </span>
-              )}
-            </div>
-          ) : (
+        <form onSubmit={send} className="command-center-composer">
+          <label className="field" style={{ marginBottom: "var(--space-3)" }}>
+            <span style={{ fontSize: "var(--step-minus-1)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--muted)" }}>
+              What are we working on?
+            </span>
+          </label>
+          <div className="composer-row">
+            <input
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder={hasProvider ? "Ask anything, delegate work, or continue a task…" : "No model configured — add a provider in a project&rsquo;s Providers tab first."}
+              disabled={busy || !hasProvider}
+              spellCheck
+              autoComplete="off"
+              className="composer-input"
+            />
+            <select
+              value={selectedProviderId}
+              onChange={(e) => setSelectedProviderId(e.target.value as "__default__" | string)}
+              disabled={busy || !hasProvider}
+              aria-label="Model provider"
+              className="composer-provider-select"
+            >
+              <option value="__default__">Default model</option>
+              {providers.map((provider) => (
+                <option key={provider.id} value={provider.id}>
+                  {provider.name} ({provider.kind})
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={stop}
+              className="button"
+              disabled={!streaming}
+              style={{ padding: "10px 14px", fontSize: 12 }}
+              title="Stop streaming"
+            >
+              Stop
+            </button>
+            <button
+              type="submit"
+              className="button primary"
+              disabled={busy || !draft.trim() || !hasProvider}
+            >
+              {busy ? (streaming ? "Stopping…" : "Sending…") : "Send"}
+            </button>
+          </div>
+          {!hasProvider && (
             <div className="command-center-provider empty">
               <Badge variant="bad">No model configured</Badge>
               <span>
-                Add a provider in a project's Providers tab to chat with a real model.
+                The mock provider answers with canned output for zero-setup verification. Add a
+                real model connection to chat with your own model.
               </span>
             </div>
           )}
-        </div>
+          {showConfigure && (
+            <div className="card" style={{ marginTop: "var(--space-6)" }}>
+              <div className="command-center-section-label" style={{ marginBottom: "var(--space-4)" }}>
+                Configure model connection
+              </div>
+              <form
+                onSubmit={async (e: React.FormEvent) => {
+                  e.preventDefault();
+                  setProvBusy(true);
+                  try {
+                    await api.createProvider(projectId, {
+                      kind: "openai-compatible",
+                      name: provName.trim() || "model",
+                      config: {
+                        base_url: provBaseUrl.trim(),
+                        model: provModel.trim() || undefined,
+                        ...(provApiKey.trim() ? { api_key: provApiKey.trim() } : {}),
+                      },
+                    });
+                    setShowConfigure(false);
+                    setProvName("");
+                    setProvBaseUrl("");
+                    setProvModel("");
+                    setProvApiKey("");
+                    refreshProviders?.();
+                  } catch (err) {
+                    notifyError(err);
+                  } finally {
+                    setProvBusy(false);
+                  }
+                }}
+                className="row"
+                style={{ gap: "var(--space-4)", flexWrap: "wrap", alignItems: "end" }}
+              >
+                <input
+                  value={provName}
+                  onChange={(e) => setProvName(e.target.value)}
+                  placeholder="Name (e.g. groq)"
+                  aria-label="Provider name"
+                  style={{ minWidth: 160 }}
+                />
+                <input
+                  value={provBaseUrl}
+                  onChange={(e) => setProvBaseUrl(e.target.value)}
+                  placeholder="Base URL (e.g. https://api.groq.com/openai/v1)"
+                  aria-label="Base URL"
+                  className="mono"
+                  style={{ flex: 1, minWidth: 260 }}
+                />
+                <input
+                  value={provModel}
+                  onChange={(e) => setProvModel(e.target.value)}
+                  placeholder="Model (optional)"
+                  aria-label="Model"
+                  style={{ minWidth: 150 }}
+                />
+                <input
+                  type="password"
+                  value={provApiKey}
+                  onChange={(e) => setProvApiKey(e.target.value)}
+                  placeholder="API key"
+                  aria-label="API key"
+                  autoComplete="off"
+                  style={{ minWidth: 180 }}
+                />
+                <button
+                  className="button primary"
+                  type="submit"
+                  disabled={provBusy || !provBaseUrl.trim()}
+                >
+                  {provBusy ? "Connecting…" : "Connect"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowConfigure(false)}
+                  style={{ padding: "7px 14px" }}
+                >
+                  Cancel
+                </button>
+              </form>
+            </div>
+          )}
+          {!hasProvider && !showConfigure && (
+            <div className="command-center-hint caption" style={{ marginTop: "var(--space-3)" }}>
+              <button
+                type="button"
+                onClick={() => setShowConfigure(true)}
+                className="button"
+                style={{ padding: "6px 12px", fontSize: 12, marginLeft: 8 }}
+              >
+                Configure model
+              </button>
+              <span className="text-soft">
+                · Keys are stored Fernet-encrypted at rest when the server has
+                NERDBOT_SECRET_KEY set.
+              </span>
+            </div>
+          )}
+        </form>
 
-        <div className="command-center-section">
+        <div className="command-center-section" style={{ marginTop: "var(--space-12)" }}>
           <div className="command-center-section-label">Start with</div>
           <div className="command-center-suggestions">
             <button
@@ -936,7 +1132,7 @@ function CommandCenter({
               title="Start a new conversation"
             >
               <span>New conversation</span>
-              <span className="mono muted" style={{ fontSize: 11, marginLeft: 6 }}>→ Home</span>
+              <span className="mono muted text-soft" style={{ fontSize: 11, marginLeft: 6 }}>→ Home</span>
             </button>
             <button
               className="suggestion-btn"
@@ -946,7 +1142,7 @@ function CommandCenter({
               title="Browse the AI fleet"
             >
               <span>AI fleet</span>
-              <span className="mono muted" style={{ fontSize: 11, marginLeft: 6 }}>→ Agents &amp; teams</span>
+              <span className="mono muted text-soft" style={{ fontSize: 11, marginLeft: 6 }}>→ Agents &amp; teams</span>
             </button>
             <button
               className="suggestion-btn"
@@ -956,16 +1152,49 @@ function CommandCenter({
               title="Open a workspace"
             >
               <span>Workspaces</span>
-              <span className="mono muted" style={{ fontSize: 11, marginLeft: 6 }}>→ Projects</span>
+              <span className="mono muted text-soft" style={{ fontSize: 11, marginLeft: 6 }}>→ Projects</span>
             </button>
           </div>
         </div>
 
         <div className="command-center-recent">
-          <div className="command-center-section-label">Recent conversations</div>
-          <div className="command-center-recent-empty">
-            No recent conversations yet. Start one above.
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline", marginBottom: "var(--space-4)" }}>
+            <div className="command-center-section-label">Recent conversations</div>
+            {sorted.length > 0 && refreshThreads && (
+              <button
+                type="button"
+                onClick={() => void refreshThreads()}
+                className="button"
+                style={{ padding: "5px 10px", fontSize: 11 }}
+              >
+                Refresh
+              </button>
+            )}
           </div>
+          {sorted.length === 0 ? (
+            <div className="command-center-recent-empty caption">
+              No recent conversations yet. Start one above.
+            </div>
+          ) : (
+            <div className="thread-list">
+              {sorted.slice(0, 8).map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  className="thread-row"
+                  onClick={() => onThreadCreated(t.id)}
+                  aria-label={`Resume: ${t.title || "Untitled"}`}
+                >
+                  <div className="thread-title" title={t.title}>
+                    {t.title || "Untitled"}
+                  </div>
+                  <div className="thread-meta caption">
+                    {new Date(t.created_at).toLocaleString()}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>

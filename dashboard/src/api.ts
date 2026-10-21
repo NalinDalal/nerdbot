@@ -433,13 +433,16 @@ export const api = {
     threadId: string,
     content: string,
     onChunk: (text: string) => void,
-  ): Promise<string> => streamChat(threadId, content, onChunk),
+    opts?: { signal?: AbortSignal },
+  ): Promise<string> =>
+    streamChat(threadId, content, onChunk, opts),
 };
 
 async function streamChat(
   threadId: string,
   content: string,
   onChunk: (text: string) => void,
+  opts?: { signal?: AbortSignal },
 ): Promise<string> {
   const current = getSession();
   if (!current) throw new ApiError(0, "Not connected. Enter your API token first.");
@@ -452,8 +455,16 @@ async function streamChat(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ content }),
+      signal: opts?.signal,
     });
   } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new ApiError(0, "Stream stopped");
+    }
+    // undici (node fetch) surfaces abort as a plain Error named AbortError
+    if ((err as { name?: string })?.name === "AbortError") {
+      throw new ApiError(0, "Stream stopped");
+    }
     throw new ApiError(
       0,
       err instanceof Error ? `Network error: ${err.message}` : "Network error",
@@ -473,9 +484,22 @@ async function streamChat(
   const decoder = new TextDecoder();
   let buffer = "";
   let full = "";
+  if (opts?.signal) {
+    const onAbort = () => void reader.cancel();
+    opts.signal.addEventListener("abort", onAbort, { once: true });
+  }
   for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
+    let result: Awaited<ReturnType<typeof reader.read>>;
+    try {
+      result = await reader.read();
+    } catch (err) {
+      if ((err as { name?: string })?.name === "AbortError") {
+        throw new ApiError(0, "Stream stopped");
+      }
+      throw err;
+    }
+    if (result.done) break;
+    const value = result.value ?? new Uint8Array(0);
     buffer += decoder.decode(value, { stream: true });
     const parts = buffer.split("\n\n");
     buffer = parts.pop() ?? "";

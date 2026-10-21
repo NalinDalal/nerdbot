@@ -28,6 +28,10 @@ export function BotDetailView({
   const [memContent, setMemContent] = useState("");
   const [memSource, setMemSource] = useState("");
   const [memBusy, setMemBusy] = useState(false);
+  const [showCreateTask, setShowCreateTask] = useState(false);
+  const [taskDescription, setTaskDescription] = useState("");
+  const [taskCommand, setTaskCommand] = useState("");
+  const [createTaskBusy, setCreateTaskBusy] = useState(false);
 
   const addMemory = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -130,12 +134,66 @@ export function BotDetailView({
 
       <div className="row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
         <h2 style={{ margin: 0 }}>Tasks</h2>
-        {unclaimed && (
-          <button className="primary" onClick={() => void claim(unclaimed.id)}>
-            Claim "{unclaimed.description.slice(0, 30)}…"
-          </button>
-        )}
       </div>
+      <div className="card" style={{ marginBottom: 12 }}>
+        <form
+          onSubmit={async (e: React.FormEvent) => {
+            e.preventDefault();
+            setCreateTaskBusy(true);
+            try {
+              await api.createTask(mate.project_id, {
+                description: taskDescription.trim(),
+                command: taskCommand.trim() || undefined,
+                owner_teammate_id: teammateId,
+              });
+              setTaskDescription("");
+              setTaskCommand("");
+              setShowCreateTask(false);
+              tasks.reload();
+            } catch (err) {
+              notifyError(err);
+            } finally {
+              setCreateTaskBusy(false);
+            }
+          }}
+          className="row"
+          style={{ gap: 8, flexWrap: "wrap", alignItems: "end" }}
+        >
+          <input
+            value={taskDescription}
+            onChange={(e) => setTaskDescription(e.target.value)}
+            placeholder="Task description (e.g. review the login flow)"
+            aria-label="Task description"
+            style={{ flex: 1, minWidth: 200 }}
+          />
+          <input
+            value={taskCommand}
+            onChange={(e) => setTaskCommand(e.target.value)}
+            placeholder="Command (optional)"
+            aria-label="Task command"
+            style={{ minWidth: 180 }}
+          />
+          <button
+            className="primary"
+            type="submit"
+            disabled={createTaskBusy || !taskDescription.trim()}
+          >
+            {createTaskBusy ? "Creating…" : "Create task"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowCreateTask(!showCreateTask)}
+            style={{ padding: "7px 14px" }}
+          >
+            {showCreateTask ? "Cancel" : "New task"}
+          </button>
+        </form>
+      </div>
+      {unclaimed && (
+        <button className="primary" onClick={() => void claim(unclaimed.id)} style={{ marginBottom: 10 }}>
+          Claim "{unclaimed.description.slice(0, 30)}…"
+        </button>
+      )}
       {taskList.length > 0 ? (
         <div className="grid2">
           {taskList.map((t) => (
@@ -162,6 +220,23 @@ export function BotDetailView({
                 <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
                   owned by this bot
                 </div>
+              ) : null}
+              {t.status === "pending" && t.owner_teammate_id === teammateId ? (
+                <button
+                  className="primary"
+                  onClick={() => {
+                    void api
+                      .runTask(t.id)
+                      .then(() => {
+                        tasks.reload();
+                        runs.reload();
+                      })
+                      .catch(notifyError);
+                  }}
+                  style={{ marginTop: 8, padding: "6px 12px", fontSize: 12 }}
+                >
+                  Run task
+                </button>
               ) : null}
             </div>
           ))}
