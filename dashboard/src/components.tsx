@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { ApiError } from "./api";
+import { api, describeError } from "./api";
+import type { Permission } from "./types";
 
 const DOT_BY_STATUS: Record<string, string> = {
   done: "ok",
@@ -51,7 +52,7 @@ export function LoadingState({ lines = 3 }: { lines?: number }) {
 }
 
 export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
-  const message = error instanceof ApiError ? `Error ${error.status}: ${error.detail}` : String(error);
+  const message = describeError(error);
   return (
     <div className="error-box" role="alert">
       <div>{message}</div>
@@ -161,3 +162,53 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = []): AsyncSt
 export function ShortId({ id }: { id: string }) {
   return <span className="mono" title={id}>{id.length > 18 ? `${id.slice(0, 18)}…` : id}</span>;
 }
+
+/**
+ * The backend's canonical permission catalogue.
+ *
+ * The UI never hard-codes permission names: it renders what the server
+ * enforces, so a permission the backend knows can never be missing from the
+ * editor, and the editor can never offer a name the backend would reject.
+ * The result is cached for the session — the catalogue does not change at
+ * runtime.
+ */
+let cataloguePromise: Promise<Permission[]> | null = null;
+
+function loadCatalogue(): Promise<Permission[]> {
+  if (!cataloguePromise) {
+    cataloguePromise = api
+      .permissions()
+      .then((res) => res.permissions)
+      .catch((err) => {
+        cataloguePromise = null; // let the next mount retry
+        throw err;
+      });
+  }
+  return cataloguePromise;
+}
+
+export interface PermissionCatalogue {
+  permissions: Permission[];
+  loading: boolean;
+  error: unknown;
+  byName: Map<string, Permission>;
+  isAdmin: (name: string) => boolean;
+  /** Permissions the backend knows about but the bot does not hold. */
+  denied: (held: string[]) => Permission[];
+}
+
+export function usePermissionCatalogue(): PermissionCatalogue {
+  const state = useAsync(() => loadCatalogue(), []);
+  const permissions = state.data ?? [];
+  const byName = new Map(permissions.map((p) => [p.name, p]));
+  return {
+    permissions,
+    loading: state.loading,
+    error: state.error,
+    byName,
+    isAdmin: (name: string) => byName.get(name)?.kind === "admin",
+    denied: (held: string[]) =>
+      permissions.filter((p) => !held.includes(p.name)),
+  };
+}
+

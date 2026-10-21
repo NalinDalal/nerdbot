@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { api } from "./api";
 import { notifyError } from "./app";
-import { EmptyState, ErrorState, LoadingState, useAsync } from "./components";
+import { EmptyState, ErrorState, LoadingState, ShortId, useAsync } from "./components";
 import { EntityForm } from "./forms";
 
 export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
+  const list = useAsync(() => api.listProjects(), []);
   const [projectId, setProjectId] = useState("");
   const [showCreate, setShowCreate] = useState(false);
 
@@ -16,11 +17,53 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
 
   return (
     <div>
-      <h1>Projects</h1>
-      <p className="subtitle">
-        The API has no project listing, so open a project by ID or create a new one.
-      </p>
-      <div className="card">
+      <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
+        <div>
+          <h1>Workspaces</h1>
+          <p className="subtitle">
+            Every workspace on this server: its bots, tasks, boards, memory, and approvals.
+            Open one to manage the fleet inside it.
+          </p>
+        </div>
+        <div className="row">
+          <button className="primary" onClick={() => setShowCreate(true)}>New workspace</button>
+          <button onClick={list.reload}>Refresh</button>
+        </div>
+      </div>
+
+      {list.loading ? (
+        <LoadingState />
+      ) : list.error ? (
+        <ErrorState error={list.error} onRetry={list.reload} />
+      ) : list.data && list.data.projects.length > 0 ? (
+        <div className="grid3">
+          {list.data.projects.map((project) => (
+            <div className="card" key={project.id}>
+              <div className="row" style={{ justifyContent: "space-between" }}>
+                <a href={`#/p/${project.id}`} onClick={() => onOpen(project.id)}>
+                  <strong className="mono">{project.repository || "workspace"}</strong>
+                </a>
+                <ShortId id={project.id} />
+              </div>
+              <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                owner {project.owner}
+              </div>
+              <div className="row" style={{ marginTop: 10 }}>
+                <button className="primary" onClick={() => onOpen(project.id)}>
+                  Open
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <EmptyState
+          title="No workspaces yet"
+          hint="Create one to start: a workspace owns its bots, tasks, boards, memory, and approvals."
+        />
+      )}
+
+      <div className="card" style={{ marginTop: 16 }}>
         <form onSubmit={open} className="row">
           <input
             value={projectId}
@@ -30,16 +73,16 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
             style={{ maxWidth: 320 }}
           />
           <button className="primary" type="submit">
-            Open project
+            Open by ID
           </button>
           <button type="button" onClick={() => setShowCreate((v) => !v)}>
-            New project
+            New workspace
           </button>
         </form>
         {showCreate ? (
           <div style={{ marginTop: 16 }}>
             <EntityForm
-              submitLabel="Create project"
+              submitLabel="Create workspace"
               fields={[
                 { name: "repository", label: "Repository", placeholder: "demo-repo" },
                 { name: "owner_note", label: "Note (owner is always your token identity)" },

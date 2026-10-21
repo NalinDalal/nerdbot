@@ -76,12 +76,14 @@ export function SettingsView() {
 
       <div className="card" style={{ marginTop: 16 }}>
         <strong>Connection details</strong>
-        <pre className="log">{`API base:  http://127.0.0.1:8088
-token:     stored in ~/.nerdbot-owner-token (owner-only file)
-start:     cd ~/nerdbot && NERDBOT_TOKEN=$(cat ~/.nerdbot-owner-token) ./.venv/bin/nerdbot run`}</pre>
+        <pre className="log">{`API base:  http://127.0.0.1:8080   (dashboard served by the API)
+token:     NERDBOT_TOKEN=<your token> — single bearer token, fail-closed
+start:     NERDBOT_TOKEN=$(cat ~/.nerdbot-owner-token) uv run nerdbot run`}</pre>
         <div className="muted" style={{ marginTop: 8 }}>
-          The dev-default token is refused by design since 2026-10-17; single static token
-          rotation is a recorded non-goal.
+          Fail-closed by design: with no <code>NERDBOT_TOKEN</code> set the server
+          refuses every bearer token (HTTP 503), and the well-known dev token is
+          accepted only with <code>NERDBOT_INSECURE_DEV_TOKEN=1</code>. Single
+          static token rotation is a recorded non-goal.
         </div>
       </div>
     </div>

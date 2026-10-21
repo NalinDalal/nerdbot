@@ -1,11 +1,12 @@
-import { useState } from "react";
-import { ApiError, api } from "./api";
+import { useEffect, useState } from "react";
+import { api, describeError } from "./api";
 import { notifyError } from "./app";
 import type { Approval, Provider } from "./types";
 import type { Teammate as TeammateT } from "./types";
-import { EmptyState, ErrorState, Field, LoadingState, Modal, ShortId, StatusBadge, useAsync } from "./components";
+import { maskSecrets } from "./types";
+import { EmptyState, ErrorState, Field, LoadingState, Modal, ShortId, StatusBadge, useAsync, usePermissionCatalogue } from "./components";
 import { EntityForm } from "./forms";
-import { ChatView } from "./views-chat";
+import { ConversationView } from "./views-chat";
 
 const TABS = [
   "Tasks",
@@ -16,6 +17,7 @@ const TABS = [
   "Knowledge",
   "Schedules",
   "Approvals",
+  "Messages",
   "Notifications",
   "Memory",
   "Backup",
@@ -47,13 +49,14 @@ export function ProjectDetailView({
         ))}
       </div>
       {tab === "Tasks" && <TasksTab projectId={projectId} onOpenTask={onOpenTask} />}
-      {tab === "Chat" && <ChatView projectId={projectId} />}
+      {tab === "Chat" && <ConversationView projectId={projectId} />}
       {tab === "Teammates" && <TeammatesTab projectId={projectId} />}
       {tab === "Providers" && <ProvidersTab projectId={projectId} />}
       {tab === "Issues" && <IssuesTab projectId={projectId} />}
       {tab === "Knowledge" && <KnowledgeTab projectId={projectId} />}
       {tab === "Schedules" && <SchedulesTab projectId={projectId} />}
       {tab === "Approvals" && <ApprovalsTab projectId={projectId} />}
+      {tab === "Messages" && <MessagesTab projectId={projectId} />}
       {tab === "Notifications" && <NotificationsTab projectId={projectId} />}
       {tab === "Memory" && <MemoryTab projectId={projectId} />}
       {tab === "Backup" && <BackupTab projectId={projectId} />}
@@ -67,10 +70,87 @@ function useReloadable<T>(fn: () => Promise<T>, deps: unknown[]) {
   return useAsync(fn, deps);
 }
 
+export function MessagesTab({ projectId }: { projectId: string }) {
+  const [scope, setScope] = useState("");
+  const msgs = useAsync(() => api.projectMessages(projectId, scope || undefined), [projectId, scope]);
+  const mates = useAsync(() => api.listTeammates(projectId), [projectId]);
+  useEffect(() => {
+    // Poll the response channel while the tab is open.
+    const t = setInterval(msgs.reload, 5000);
+    return () => clearInterval(t);
+  }, [msgs.reload]);
+  const nameOf = (id: string | null): string => {
+    if (!id) return "—";
+    return mates.data?.teammates.find((m) => m.id === id)?.persona || id.slice(0, 10);
+  };
+  const rows = msgs.data?.messages ?? [];
+  return (
+    <section>
+      <div className="row" style={{ marginBottom: 12 }}>
+        <select className="select" value={scope} onChange={(e) => setScope(e.target.value)} aria-label="Filter by recipient">
+          <option value="">All recipients</option>
+          {(mates.data?.teammates ?? []).map((m) => (
+            <option key={m.id} value={m.id}>
+              To: {m.persona}
+            </option>
+          ))}
+        </select>
+        <button onClick={msgs.reload}>Refresh</button>
+      </div>
+      {msgs.loading && !msgs.data ? (
+        <LoadingState />
+      ) : msgs.error ? (
+        <ErrorState error={msgs.error} onRetry={msgs.reload} />
+      ) : rows.length === 0 ? (
+        <EmptyState title="No messages yet" hint="Bot-to-bot responses and board messages appear here." />
+      ) : (
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Kind</th>
+                <th>From</th>
+                <th>To</th>
+                <th>Board</th>
+                <th>Content</th>
+                <th>When</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((m) => (
+                <tr key={m.id}>
+                  <td>
+                    <span className="pill">{m.kind}</span>
+                  </td>
+                  <td>{nameOf(m.from_teammate_id)}</td>
+                  <td>{m.to_teammate_id ? nameOf(m.to_teammate_id) : "everyone"}</td>
+                  <td>{m.board_name || "—"}</td>
+                  <td style={{ maxWidth: 420, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{m.content}</td>
+                  <td className="muted">{new Date(m.created_at).toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenTask: (id: string) => void }) {
   const [showCreate, setShowCreate] = useState(false);
   const [created, setCreated] = useState<string[]>([]);
-  const list = useAsync(() => api.projectRuns(projectId), [projectId]);
+  const tasks = useAsync(() => api.projectTasks(projectId), [projectId]);
+  const runs = useAsync(() => api.projectRuns(projectId), [projectId]);
+  const mates = useAsync(() => api.listTeammates(projectId), [projectId]);
+  const ownerName = (id: string | null): string => {
+    if (!id) return "—";
+    return mates.data?.teammates.find((m) => m.id === id)?.persona || id.slice(0, 10);
+  };
+  const reload = () => {
+    tasks.reload();
+    runs.reload();
+  };
 
   return (
     <div>
@@ -78,7 +158,7 @@ function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenTask: (i
         <button className="primary" onClick={() => setShowCreate(true)}>
           New task
         </button>
-        <button onClick={list.reload}>Refresh</button>
+        <button onClick={reload}>Refresh</button>
       </div>
       {showCreate ? (
         <Modal title="New task" onClose={() => setShowCreate(false)}>
@@ -111,12 +191,61 @@ function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenTask: (i
           ))}
         </div>
       ) : null}
-      <h2>Runs across tasks</h2>
-      {list.loading ? (
+
+      <h2>Tasks</h2>
+      {tasks.loading ? (
         <LoadingState />
-      ) : list.error ? (
-        <ErrorState error={list.error} onRetry={list.reload} />
-      ) : list.data && list.data.runs.length > 0 ? (
+      ) : tasks.error ? (
+        <ErrorState error={tasks.error} onRetry={tasks.reload} />
+      ) : tasks.data && tasks.data.tasks.length > 0 ? (
+        <table className="data">
+          <thead>
+            <tr>
+              <th>Task</th>
+              <th>Status</th>
+              <th>Owner</th>
+              <th>Delegated from</th>
+              <th>Command</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tasks.data.tasks.map((task) => (
+              <tr key={task.id}>
+                <td>
+                  <a href={`#/p/${projectId}/t/${task.id}`} onClick={() => onOpenTask(task.id)}>
+                    {task.description || "Untitled task"}
+                  </a>
+                </td>
+                <td>
+                  <StatusBadge status={task.status} />
+                </td>
+                <td className="muted">{ownerName(task.owner_teammate_id)}</td>
+                <td>
+                  {task.parent_task_id ? (
+                    <a href={`#/p/${projectId}/t/${task.parent_task_id}`}>
+                      <ShortId id={task.parent_task_id} />
+                    </a>
+                  ) : (
+                    <span className="muted">—</span>
+                  )}
+                </td>
+                <td className="mono muted" style={{ maxWidth: 260, overflowWrap: "anywhere" }}>
+                  {task.command || "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <EmptyState title="No tasks yet" hint="Create a task above, or let a bot decompose an objective into one." />
+      )}
+
+      <h2>Runs across tasks</h2>
+      {runs.loading ? (
+        <LoadingState />
+      ) : runs.error ? (
+        <ErrorState error={runs.error} onRetry={runs.reload} />
+      ) : runs.data && runs.data.runs.length > 0 ? (
         <table className="data">
           <thead>
             <tr>
@@ -128,7 +257,7 @@ function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenTask: (i
             </tr>
           </thead>
           <tbody>
-            {list.data.runs.map((run) => (
+            {runs.data.runs.map((run) => (
               <tr key={run.id}>
                 <td>
                   <ShortId id={run.id} />
@@ -215,6 +344,8 @@ function BotCard({
   onChanged: () => void;
 }) {
   const [showAttach, setShowAttach] = useState(false);
+  const [showPerms, setShowPerms] = useState(false);
+  const catalogue = usePermissionCatalogue();
   const act = async (fn: () => Promise<unknown>) => {
     try {
       await fn();
@@ -236,11 +367,45 @@ function BotCard({
           <button onClick={() => setShowAttach(true)}>
             {attached ? "Switch model" : "Attach model"}
           </button>
+          <button onClick={() => setShowPerms(true)}>Permissions</button>
           <button onClick={() => void act(() => api.disableTeammate(mate.id))}>Disable</button>
           <button onClick={() => void act(() => api.archiveTeammate(mate.id))}>Archive</button>
         </div>
       </div>
       <div className="muted">{mate.instructions || "No instructions yet."}</div>
+      <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+        <span className="muted mono" style={{ fontSize: 12 }}>
+          memory: {mate.memory_scope}
+        </span>
+        {(mate.permissions ?? []).length === 0 ? (
+          <span className="pill" title="No permissions: every gated tool call is denied.">
+            no permissions
+          </span>
+        ) : (
+          mate.permissions.map((perm) => (
+            <span
+              className="pill"
+              key={perm}
+              title={
+                catalogue.isAdmin(perm)
+                  ? "admin (approval-gated)"
+                  : catalogue.byName.has(perm)
+                    ? "agent permission"
+                    : "unknown permission — grants nothing"
+              }
+            >
+              {perm}
+            </span>
+          ))
+        )}
+        {Object.keys(mate.tool_policy ?? {}).length > 0
+          ? Object.entries(mate.tool_policy).map(([tool, mode]) => (
+              <span className="pill" key={tool} title={`tool_policy.${tool}`}>
+                {tool}: {String(mode)}
+              </span>
+            ))
+          : null}
+      </div>
       <div className="mono muted" style={{ marginTop: 8 }}>
         brain:{" "}
         {attached ? (
@@ -290,7 +455,127 @@ function BotCard({
           )}
         </Modal>
       ) : null}
+      {showPerms ? (
+        <Modal title={`Permissions for ${mate.persona || mate.id}`} onClose={() => setShowPerms(false)}>
+          <PermissionsForm
+            mate={mate}
+            onSaved={() => {
+              setShowPerms(false);
+              onChanged();
+            }}
+          />
+        </Modal>
+      ) : null}
     </div>
+  );
+}
+
+function PermissionsForm({ mate, onSaved }: { mate: TeammateT; onSaved: () => void }) {
+  const [permissions, setPermissions] = useState<string[]>(mate.permissions ?? []);
+  const [memoryScope, setMemoryScope] = useState(mate.memory_scope || "teammate");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const catalogue = usePermissionCatalogue();
+  const toggle = (perm: string) =>
+    setPermissions((prev) => (prev.includes(perm) ? prev.filter((p) => p !== perm) : [...prev, perm]));
+
+  const adminPerms = catalogue.permissions.filter((p) => p.kind === "admin");
+  const agentPerms = catalogue.permissions.filter((p) => p.kind !== "admin");
+  // A permission the bot holds but the server does not know is dead weight:
+  // it grants nothing. Surface it instead of silently dropping it.
+  const unknownHeld = permissions.filter((p) => !catalogue.byName.has(p));
+
+  return (
+    <form
+      onSubmit={async (e: React.FormEvent) => {
+        e.preventDefault();
+        setBusy(true);
+        setError(null);
+        try {
+          await api.patchTeammate(mate.id, { permissions, memory_scope: memoryScope });
+          onSaved();
+        } catch (err) {
+          setError(describeError(err));
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <Field label="Memory scope — where this bot may read and write memory">
+        <select value={memoryScope} onChange={(e) => setMemoryScope(e.target.value)}>
+          <option value="teammate">teammate — only its own memory</option>
+          <option value="project">project — shared workspace memory</option>
+        </select>
+      </Field>
+      {catalogue.loading ? (
+        <div className="muted" style={{ margin: "8px 0" }}>
+          Loading the permission catalogue…
+        </div>
+      ) : catalogue.error ? (
+        <div className="error-box" role="alert">
+          Could not load the permission catalogue: {describeError(catalogue.error)}
+        </div>
+      ) : null}
+      <div className="muted" style={{ margin: "8px 0 4px" }}>
+        Admin permissions are deny-by-default and need a human&apos;s exact-action approval even when granted.
+      </div>
+      <fieldset style={{ border: "1px solid var(--line)", borderRadius: 6, padding: 8, marginBottom: 8 }}>
+        <legend className="muted mono" style={{ fontSize: 12 }}>
+          admin (approval-gated)
+        </legend>
+        {adminPerms.map((perm) => (
+          <label key={perm.name} style={{ display: "block" }} title={perm.summary}>
+            <input type="checkbox" checked={permissions.includes(perm.name)} onChange={() => toggle(perm.name)} />{" "}
+            {perm.name}
+            <span className="muted" style={{ fontSize: 11 }}>
+              {" "}
+              — {perm.summary}
+            </span>
+          </label>
+        ))}
+      </fieldset>
+      <fieldset style={{ border: "1px solid var(--line)", borderRadius: 6, padding: 8, marginBottom: 8 }}>
+        <legend className="muted mono" style={{ fontSize: 12 }}>
+          agent
+        </legend>
+        {agentPerms.map((perm) => (
+          <label key={perm.name} style={{ display: "block" }} title={perm.summary}>
+            <input type="checkbox" checked={permissions.includes(perm.name)} onChange={() => toggle(perm.name)} />{" "}
+            {perm.name}
+            <span className="muted" style={{ fontSize: 11 }}>
+              {" "}
+              — {perm.summary}
+            </span>
+          </label>
+        ))}
+      </fieldset>
+      {unknownHeld.length > 0 ? (
+        <div className="error-box" role="alert">
+          This bot holds permission names the server does not know: {unknownHeld.join(", ")}. They grant
+          nothing and will be rejected on save — remove them below.
+          <div className="row" style={{ gap: 6, marginTop: 6 }}>
+            {unknownHeld.map((p) => (
+              <button key={p} type="button" className="danger" onClick={() => toggle(p)}>
+                remove {p}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      <div className="muted mono" style={{ fontSize: 12 }}>
+        selected: {permissions.length ? permissions.join(", ") : "none"}
+      </div>
+      {error ? (
+        <div className="error-box" role="alert">
+          {error}
+        </div>
+      ) : null}
+      <div className="row" style={{ marginTop: 8 }}>
+        <button className="primary" type="submit" disabled={busy || catalogue.loading || unknownHeld.length > 0}>
+          {busy ? "Saving…" : "Save permissions"}
+        </button>
+      </div>
+    </form>
   );
 }
 
@@ -330,7 +615,7 @@ function BotForm({
           }
           onDone();
         } catch (err) {
-          setError(err instanceof ApiError ? `Error ${err.status}: ${err.detail}` : String(err));
+          setError(describeError(err));
         } finally {
           setBusy(false);
         }
@@ -486,7 +771,7 @@ function ProviderCard({ provider, onChanged }: { provider: Provider; onChanged: 
       <div className="mono muted" style={{ marginTop: 8 }}>
         {provider.id} · {String(provider.config.base_url ?? "")}
         {typeof provider.config.api_key === "string" && provider.config.api_key ? (
-          <> · key <code>{provider.config.api_key}</code></>
+          <> · key <code>{String(maskSecrets(provider.config).api_key)}</code></>
         ) : typeof provider.config.api_key_env === "string" && provider.config.api_key_env ? (
           <> · key env <code>{provider.config.api_key_env}</code></>
         ) : null}
@@ -567,7 +852,7 @@ function EditProviderForm({ provider, onDone }: { provider: Provider; onDone: ()
           await api.patchProvider(provider.id, body);
           onDone();
         } catch (err) {
-          setError(err instanceof ApiError ? `Error ${err.status}: ${err.detail}` : String(err));
+          setError(describeError(err));
         } finally {
           setBusy(false);
         }
@@ -630,7 +915,7 @@ export function ProviderForm({ projectId, onDone }: { projectId?: string; onDone
           await api.createProvider(target, { kind: "openai-compatible", name, config });
           onDone?.();
         } catch (err) {
-          setError(err instanceof ApiError ? `Error ${err.status}: ${err.detail}` : String(err));
+          setError(describeError(err));
         } finally {
           setBusy(false);
         }
@@ -926,19 +1211,34 @@ function SchedulesTab({ projectId }: { projectId: string }) {
 }
 
 function ApprovalsTab({ projectId }: { projectId: string }) {
+  // Merge project-wide approvals with per-run ones: legacy rows may have an
+  // empty project_id, so the project query alone can miss them.
   const inbox = useAsync(async () => {
+    const byId = new Map<string, Approval>();
+    const projectRows = (await api.projectApprovals(projectId)).approvals;
+    for (const approval of projectRows) byId.set(approval.id, approval);
     const runList = (await api.projectRuns(projectId)).runs;
-    const collected: { approval: Approval; taskId: string }[] = [];
     for (const run of runList) {
       const list = await api.listRunApprovals(run.id);
       for (const approval of list.approvals) {
-        collected.push({ approval, taskId: run.task_id });
+        if (!byId.has(approval.id)) byId.set(approval.id, approval);
       }
     }
-    return collected;
+    return [...byId.values()];
   }, [projectId]);
 
-  const decide = async (id: string, decision: "approved" | "denied") => {
+  // Poll while anything awaits a decision so bot requests show up unprompted.
+  useEffect(() => {
+    const pendingCount = (inbox.data ?? []).filter((a) => a.decision === "pending").length;
+    if (!pendingCount) return;
+    const t = setInterval(inbox.reload, 8000);
+    return () => clearInterval(t);
+  }, [inbox.data, inbox.reload]);
+
+  const decide = async (
+    id: string,
+    decision: "approved" | "approved_forever" | "denied",
+  ) => {
     try {
       await api.decideApproval(id, decision);
       inbox.reload();
@@ -948,7 +1248,8 @@ function ApprovalsTab({ projectId }: { projectId: string }) {
   };
 
   const rows = inbox.data ?? [];
-  const pending = rows.filter((row) => row.approval.decision === "pending");
+  const pending = rows.filter((approval) => approval.decision === "pending");
+  const decided = rows.filter((approval) => approval.decision !== "pending");
 
   return (
     <div>
@@ -967,26 +1268,36 @@ function ApprovalsTab({ projectId }: { projectId: string }) {
         </button>
         <button onClick={inbox.reload}>Refresh</button>
       </div>
-      {inbox.loading ? (
+      {inbox.loading && !inbox.data ? (
         <LoadingState />
       ) : inbox.error ? (
         <ErrorState error={inbox.error} onRetry={inbox.reload} />
       ) : pending.length > 0 ? (
-        pending.map(({ approval, taskId }) => (
+        pending.map((approval) => (
           <div className="card" key={approval.id}>
             <div className="row" style={{ justifyContent: "space-between" }}>
               <div>
                 <strong>{approval.action || "approval"}</strong>{" "}
                 <span className="muted mono">{approval.id}</span>{" "}
-                {taskId ? (
-                  <a href={`#/p/${projectId}/t/${taskId}`}>
-                    <ShortId id={taskId} />
+                <span className="pill">{approval.requester}</span>{" "}
+                {approval.task_id ? (
+                  <a href={`#/p/${projectId}/t/${approval.task_id}`}>
+                    task <ShortId id={approval.task_id} />
                   </a>
                 ) : null}
+                <div className="muted mono" style={{ fontSize: 12 }}>
+                  digest: {approval.digest || "—"}
+                </div>
               </div>
               <div className="row">
                 <button className="primary" onClick={() => void decide(approval.id, "approved")}>
                   Approve
+                </button>
+                <button
+                  className="primary"
+                  onClick={() => void decide(approval.id, "approved_forever")}
+                >
+                  Approve Forever
                 </button>
                 <button className="danger" onClick={() => void decide(approval.id, "denied")}>
                   Deny
@@ -998,33 +1309,39 @@ function ApprovalsTab({ projectId }: { projectId: string }) {
       ) : (
         <EmptyState title="Inbox empty" hint="No pending approvals. Decided ones stay queryable per run." />
       )}
-      {rows.some((row) => row.approval.decision !== "pending") ? (
+      {decided.length > 0 ? (
         <>
           <h2>Decided</h2>
-          <table className="data">
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Action</th>
-                <th>Decision</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows
-                .filter((row) => row.approval.decision !== "pending")
-                .map(({ approval }) => (
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Action</th>
+                  <th>Requester</th>
+                  <th>Decision</th>
+                  <th>Executed</th>
+                </tr>
+              </thead>
+              <tbody>
+                {decided.map((approval) => (
                   <tr key={approval.id}>
                     <td>
                       <ShortId id={approval.id} />
                     </td>
                     <td>{approval.action}</td>
+                    <td>{approval.requester}</td>
                     <td>
                       <StatusBadge status={approval.decision} />
                     </td>
+                    <td className="muted">
+                      {approval.executed_at ? new Date(approval.executed_at).toLocaleString() : "—"}
+                    </td>
                   </tr>
                 ))}
-            </tbody>
-          </table>
+              </tbody>
+            </table>
+          </div>
         </>
       ) : null}
     </div>

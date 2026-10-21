@@ -29,6 +29,9 @@ export interface Task {
   issue_id: string | null;
   branch: string;
   workspace_path: string;
+  board_id: string;
+  /** Set when this task was created by a parent's delegate_task tool. */
+  parent_task_id: string;
 }
 
 export interface Run {
@@ -56,19 +59,6 @@ export interface Artifact {
   location: string;
   verification_status: string;
   summary: string;
-}
-
-export interface Approval {
-  id: string;
-  run_id: string;
-  action: string;
-  requester: string;
-  decision: string;
-  decided_at: string | null;
-  expires_at: string | null;
-  consumed_at: string | null;
-  task_id: string | null;
-  digest: string | null;
 }
 
 export interface Provider {
@@ -185,10 +175,106 @@ export interface MemoryEntry {
   timestamp: string;
 }
 
+export interface Team {
+  id: string;
+  owner: string;
+  name: string;
+  description: string;
+  created_at: string;
+}
+
+export interface TeamMember {
+  id: string;
+  team_id: string;
+  project_id: string;
+  teammate_id: string;
+  created_at: string;
+}
+
+export interface Delegation {
+  id: string;
+  task_id: string;
+  from_teammate_id: string;
+  to_teammate_id: string;
+  reason: string;
+  status: string;
+  depth: number;
+  created_at: string;
+  decided_at: string | null;
+  /** Child task created for the delegatee (agent-driven delegation). */
+  child_task_id: string;
+  /** Result returned through the response channel once the child finishes. */
+  result: string;
+  result_run_id: string;
+  finished_at: string | null;
+}
+
+export interface Board {
+  id: string;
+  owner: string;
+  name: string;
+  description: string;
+  project_id: string;
+  team_id: string | null;
+  status: string;
+  created_at: string;
+}
+
+export interface BoardMember {
+  id: string;
+  board_id: string;
+  teammate_id: string;
+  role: string;
+  created_at: string;
+}
+
+export interface BoardMessage {
+  id: string;
+  board_id: string;
+  to_board_id: string | null;
+  from_teammate_id: string | null;
+  /** Targeted message (response channel); null = board-wide. */
+  to_teammate_id: string | null;
+  content: string;
+  kind: string;
+  created_at: string;
+}
+
+/** Board feed message as returned per-project (adds the board's name). */
+export interface ProjectMessage extends BoardMessage {
+  board_name: string;
+}
+
+export interface Approval {
+  id: string;
+  run_id: string;
+  board_id: string | null;
+  project_id: string | null;
+  action: string;
+  requester: string;
+  decision: string;
+  decided_at: string | null;
+  expires_at: string | null;
+  consumed_at: string | null;
+  task_id: string | null;
+  digest: string | null;
+  /** Set once the approved exact action executed (one-use binding). */
+  executed_at: string | null;
+}
+
 export interface Capability {
   id: string;
   status: string;
   description: string;
+}
+
+/** One entry of the backend's canonical permission catalogue. */
+export interface Permission {
+  name: string;
+  /** "admin" (approval-gated) or "agent" (permission-only). */
+  kind: string;
+  summary: string;
+  requires_approval: boolean;
 }
 
 export interface Health {
@@ -207,6 +293,10 @@ export interface TaskView {
   issue: Issue | null;
   reviews: Review[];
   pr_packages: PRPackage[];
+  delegations: Delegation[];
+  /** Child tasks created via delegation (nested tree, one level per view). */
+  children: Task[];
+  parent: Task | null;
 }
 
 export interface ChatThread {
@@ -254,4 +344,31 @@ export function maskSecrets(config: Record<string, unknown>): Record<string, unk
     out[key] = SECRET_KEYS.has(key.toLowerCase()) ? "••••••••" : value;
   }
   return out;
+}
+
+/** One subtask in a decomposition plan (what the human reviews). */
+export interface PlanSubTask {
+  description: string;
+  command: string;
+  depends_on: number[];
+}
+
+export interface Plan {
+  tasks: PlanSubTask[];
+}
+
+/** POST /boards/{id}/decompose response (preview or materialized). */
+export interface DecomposeResult {
+  board: Board | null;
+  tasks: Task[];
+  plan: Plan;
+  objective?: string;
+  preview?: boolean;
+}
+
+/** A file inside a task's isolated workspace. */
+export interface WorkspaceFile {
+  path: string;
+  size: number;
+  modified: number;
 }

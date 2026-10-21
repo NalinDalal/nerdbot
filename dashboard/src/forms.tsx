@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
+import { describeError } from "./api";
 import { notifyError } from "./app";
 import { Field, Modal } from "./components";
 
@@ -36,7 +37,7 @@ export function EntityForm({
       await onSubmit(values);
       toast.success("Saved");
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = describeError(err);
       setFailed(message);
       notifyError(err);
     }
