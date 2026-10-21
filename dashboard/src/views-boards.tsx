@@ -2,29 +2,37 @@ import { useState } from "react";
 import { ApiError, api } from "./api";
 import { notifyError } from "./app";
 import type { Plan } from "./types";
-import { EmptyState, ErrorState, LoadingState, Modal, ShortId, StatusBadge, useAsync } from "./components";
+import { EmptyState, ErrorState, LoadingState, Modal, ShortId, StatusBadge, Button, SectionLabel, Page, PageHeader, useAsync } from "./components";
 import { EntityForm } from "./forms";
+
+const FORM_INPUT =
+  "w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-0)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]";
+
+const TABLE_SHELL =
+  "overflow-x-auto rounded-xl border border-[var(--border)] bg-[var(--surface)]";
+const TH =
+  "border-b border-[var(--border)] px-3 py-2 text-left text-[var(--step-minus-1)] font-medium uppercase tracking-wide text-[var(--faint)]";
+const TD = "border-b border-[var(--border-dim)] px-3 py-2.5 align-top";
 
 export function BoardsView() {
   const list = useAsync(() => api.listBoards(), []);
   const [showCreate, setShowCreate] = useState(false);
 
   return (
-    <div>
-      <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
-        <div>
-          <h1>Boards</h1>
-          <p className="subtitle">
-            Boards are workspace containers where bots own tasks. A CEO bot can create and delete
-            boards, add teammate members, and exchange messages with other boards over the response
-            channel.
-          </p>
-        </div>
-        <div className="row">
-          <button className="primary" onClick={() => setShowCreate(true)}>New board</button>
-          <button onClick={list.reload}>Refresh</button>
-        </div>
-      </div>
+    <Page>
+      <PageHeader
+        eyebrow="Fleet"
+        title="Boards"
+        description="Boards are workspace containers where bots own tasks. A CEO bot can create and delete boards, add teammate members, and exchange messages with other boards over the response channel."
+        actions={
+          <>
+            <Button variant="primary" onClick={() => setShowCreate(true)}>
+              New board
+            </Button>
+            <Button onClick={list.reload}>Refresh</Button>
+          </>
+        }
+      />
       {showCreate ? (
         <Modal title="New board" onClose={() => setShowCreate(false)}>
           <EntityForm
@@ -48,28 +56,31 @@ export function BoardsView() {
       ) : list.error ? (
         <ErrorState error={list.error} onRetry={list.reload} />
       ) : list.data && list.data.boards.length > 0 ? (
-        <div>
-          {list.data.boards.map((board) => (
-            <div className="card" key={board.id} style={{ marginBottom: 12 }}>
-              <div className="row" style={{ justifyContent: "space-between" }}>
-                <div>
-                  <a href={`#/board/${board.id}`}>
-                    <strong>{board.name || "Unnamed board"}</strong>
-                  </a>
-                  <div className="muted mono" style={{ marginTop: 4 }}>
-                    <ShortId id={board.id} />
+        <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
+          {list.data.boards.map((board, index) => (
+            <div
+              key={board.id}
+              className={`flex flex-wrap items-center justify-between gap-3 px-4 py-3.5 transition-colors hover:bg-[var(--surface-2)] ${
+                index > 0 ? "border-t border-[var(--border-dim)]" : ""
+              }`}
+            >
+              <div className="min-w-0">
+                <a
+                  href={`#/board/${board.id}`}
+                  className="font-medium text-[var(--text)] hover:underline"
+                >
+                  {board.name || "Unnamed board"}
+                </a>
+                <div className="mono mt-0.5 text-[var(--step-minus-2)] text-[var(--faint)]">
+                  <ShortId id={board.id} />
+                </div>
+                {board.description ? (
+                  <div className="mt-1 truncate text-[var(--step-minus-1)] text-[var(--muted)]">
+                    {board.description}
                   </div>
-                  <span className="badge" style={{ marginTop: 4 }}>
-                    <StatusBadge status={board.status} />
-                  </span>
-                  {board.description ? (
-                    <div className="muted" style={{ marginTop: 4 }}>{board.description}</div>
-                  ) : null}
-                </div>
-                <div className="row">
-                  <button onClick={list.reload}>Refresh</button>
-                </div>
+                ) : null}
               </div>
+              <StatusBadge status={board.status} />
             </div>
           ))}
         </div>
@@ -79,7 +90,7 @@ export function BoardsView() {
           hint="Create a board to group tasks under one workspace. Bots can own tasks inside a board and message other boards."
         />
       )}
-    </div>
+    </Page>
   );
 }
 
@@ -145,65 +156,61 @@ export function BoardDetailView({
     }
   };
 
-
-
   if (detail.loading) return <LoadingState lines={4} />;
   if (detail.error || !detail.data) {
     return (
-      <div>
-        <button onClick={() => (window.location.hash = "#/boards")}>← Back to boards</button>
+      <Page>
         <ErrorState error={detail.error ?? "Board not found"} onRetry={detail.reload} />
-      </div>
+      </Page>
     );
   }
 
   const { board, members, messages, inbox } = detail.data;
 
   return (
-    <div>
-      <button onClick={() => (window.location.hash = "#/boards")}>← Back to boards</button>
-      <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
-        <div>
-          <h1>Board: {board.name || "Unnamed board"}</h1>
-          <p className="subtitle mono">{board.id}</p>
-          {board.description ? <p className="subtitle">{board.description}</p> : null}
-          <div className="muted" style={{ marginTop: 8 }}>
-            Project: <span className="mono">{board.project_id}</span>
-            {board.team_id ? (
-              <>
-                {" · Team: "}
-                <span className="mono">{board.team_id}</span>
-              </>
-            ) : null}
-          </div>
-        </div>
-        <div className="row">
-          <button onClick={() => setShowAddMember(true)}>Add member</button>
-          <button onClick={() => setShowDecompose(true)}>Decompose objective</button>
-          <button onClick={() => setShowRequestApproval(true)}>Request approval</button>
-          <button onClick={detail.reload}>Refresh</button>
-        </div>
+    <Page>
+      <PageHeader
+        eyebrow="Board"
+        title={board.name || "Unnamed board"}
+        description={board.description}
+        back={{ label: "Boards", onClick: () => (window.location.hash = "#/boards") }}
+        actions={
+          <>
+            <Button onClick={() => setShowAddMember(true)}>Add member</Button>
+            <Button onClick={() => setShowDecompose(true)}>Decompose objective</Button>
+            <Button onClick={() => setShowRequestApproval(true)}>Request approval</Button>
+            <Button onClick={detail.reload}>Refresh</Button>
+          </>
+        }
+      />
+
+      <div className="mb-4 flex flex-wrap items-center gap-2 text-[var(--step-minus-1)] text-[var(--muted)]">
+        <span className="mono">Project: {board.project_id}</span>
+        {board.team_id ? <span className="mono">· Team: {board.team_id}</span> : null}
       </div>
 
       {showAddMember ? (
         <Modal title="Add board member" onClose={() => setShowAddMember(false)}>
-          <form onSubmit={(e) => { e.preventDefault(); addMember(); }} className="row" style={{ gap: 8 }}>
+          <form onSubmit={(e) => { e.preventDefault(); addMember(); }} className="flex items-end gap-2">
             <input
               value={newMemberId}
               onChange={(e) => setNewMemberId(e.target.value)}
               placeholder="mate_…"
               aria-label="Teammate ID"
-              style={{ maxWidth: 200 }}
+              className={`${FORM_INPUT} max-w-52`}
             />
             <select
               value={newRole}
               onChange={(e) => setNewRole(e.target.value)}
-              style={{ maxWidth: 120 }}
+              aria-label="Role"
+              className={`${FORM_INPUT} max-w-32`}
             >
               <option value="member">Member</option>
               <option value="lead">Lead</option>
             </select>
-            <button className="primary" type="submit">Add</button>
+            <Button variant="primary" type="submit">
+              Add
+            </Button>
           </form>
         </Modal>
       ) : null}
@@ -220,113 +227,139 @@ export function BoardDetailView({
 
       {showRequestApproval ? (
         <Modal title="Request board approval" onClose={() => setShowRequestApproval(false)}>
-          <form onSubmit={(e) => { e.preventDefault(); requestApproval(); }} className="row" style={{ gap: 8 }}>
+          <form onSubmit={(e) => { e.preventDefault(); requestApproval(); }} className="flex items-end gap-2">
             <input
               value={approvalAction}
               onChange={(e) => setApprovalAction(e.target.value)}
               placeholder="board.mutate"
               aria-label="Action"
-              style={{ maxWidth: 220 }}
+              className={`${FORM_INPUT} max-w-60`}
             />
-            <button className="primary" type="submit">Request</button>
+            <Button variant="primary" type="submit">
+              Request
+            </Button>
           </form>
         </Modal>
       ) : null}
 
-      <h2 style={{ marginTop: 24 }}>Members</h2>
-      {members.length > 0 ? (
-        <table className="data">
-          <thead>
-            <tr>
-              <th>Teammate</th>
-              <th>Role</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {members.map((m) => (
-              <tr key={m.id}>
-                <td>
-                  <span className="mono">{m.teammate_id.slice(0, 14)}…</span>
-                </td>
-                <td>{m.role}</td>
-                <td>
-                  <button className="danger" onClick={() => removeMember(m.teammate_id)}>
-                    Remove
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      ) : (
-        <EmptyState title="No members" hint="Add teammates to this board so they can own tasks and send messages." />
-      )}
+      {/* Members */}
+      <section className="mb-8">
+        <SectionLabel className="mb-2">Members</SectionLabel>
+        {members.length > 0 ? (
+          <div className={TABLE_SHELL}>
+            <table className="w-full">
+              <thead>
+                <tr>
+                  <th className={TH}>Teammate</th>
+                  <th className={TH}>Role</th>
+                  <th className={TH}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {members.map((m) => (
+                  <tr key={m.id} className="transition-colors hover:bg-[var(--surface-2)]">
+                    <td className={`${TD} mono`}>{m.teammate_id.slice(0, 14)}…</td>
+                    <td className={TD}>{m.role}</td>
+                    <td className={TD}>
+                      <Button variant="danger" onClick={() => removeMember(m.teammate_id)}>
+                        Remove
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <EmptyState title="No members" hint="Add teammates to this board so they can own tasks and send messages." />
+        )}
+      </section>
 
-      <h2 style={{ marginTop: 32 }}>Board-to-board messages</h2>
-      <div className="row" style={{ gap: 8, marginBottom: 12 }}>
-        <input
-          value={messageContent}
-          onChange={(e) => setMessageContent(e.target.value)}
-          placeholder="Message…"
-          aria-label="Message content"
-          style={{ flex: 1 }}
-        />
-        <input
-          value={messageToBoard}
-          onChange={(e) => setMessageToBoard(e.target.value)}
-          placeholder="to board id (optional)"
-          aria-label="Target board"
-          style={{ maxWidth: 180 }}
-        />
-        <select value={messageKind} onChange={(e) => setMessageKind(e.target.value)} style={{ maxWidth: 120 }}>
-          <option value="message">Message</option>
-          <option value="handoff">Handoff</option>
-          <option value="notice">Notice</option>
-        </select>
-        <button className="primary" onClick={sendMessage}>
-          Send
-        </button>
-      </div>
+      {/* Board-to-board messages */}
+      <section className="mb-8">
+        <SectionLabel className="mb-2">Board-to-board messages</SectionLabel>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            sendMessage();
+          }}
+          className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3"
+        >
+          <input
+            value={messageContent}
+            onChange={(e) => setMessageContent(e.target.value)}
+            placeholder="Message…"
+            aria-label="Message content"
+            className={`${FORM_INPUT} min-w-52 flex-1`}
+          />
+          <input
+            value={messageToBoard}
+            onChange={(e) => setMessageToBoard(e.target.value)}
+            placeholder="to board id (optional)"
+            aria-label="Target board"
+            className={`${FORM_INPUT} w-48`}
+          />
+          <select
+            value={messageKind}
+            onChange={(e) => setMessageKind(e.target.value)}
+            aria-label="Message kind"
+            className={`${FORM_INPUT} w-36`}
+          >
+            <option value="message">Message</option>
+            <option value="handoff">Handoff</option>
+            <option value="notice">Notice</option>
+          </select>
+          <Button variant="primary" type="submit" disabled={!messageContent.trim()}>
+            Send
+          </Button>
+        </form>
 
-      <h3>Sent</h3>
-      {messages.length > 0 ? (
-        <div className="row" style={{ flexDirection: "column", gap: 8 }}>
-          {messages.map((m) => (
-            <div className="card" key={m.id} style={{ padding: 10, marginBottom: 6 }}>
-              <div className="muted mono" style={{ fontSize: 11 }}>
-                {m.kind} · {m.created_at.slice(0, 16)}
-              </div>
-              <div>{m.content}</div>
-              {m.to_board_id ? (
-                <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
-                  To board: <span className="mono">{m.to_board_id.slice(0, 14)}…</span>
+        <h3 className="mt-5 mb-2 text-[var(--step-minus-2)] uppercase tracking-[0.14em] text-[var(--faint)]">
+          Sent
+        </h3>
+        {messages.length > 0 ? (
+          <div className="flex flex-col gap-2">
+            {messages.map((m) => (
+              <div key={m.id} className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
+                <div className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
+                  {m.kind} · {m.created_at.slice(0, 16)}
                 </div>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      ) : (
-        <EmptyState title="No sent messages" hint="Compose a message above to send to another board." />
-      )}
-
-      <h3 style={{ marginTop: 24 }}>Inbox (to this board)</h3>
-      {inbox.length > 0 ? (
-        <div className="row" style={{ flexDirection: "column", gap: 8 }}>
-          {inbox.map((m) => (
-            <div className="card" key={m.id} style={{ padding: 10, marginBottom: 6, borderLeft: "3px solid var(--accent)" }}>
-              <div className="muted mono" style={{ fontSize: 11 }}>
-                {m.kind} · from {m.from_teammate_id ? m.from_teammate_id.slice(0, 14) : "system"}·{" "}
-                {m.created_at.slice(0, 16)}
+                <div className="mt-1 text-[var(--step-minus-1)] text-[var(--text-soft)]">{m.content}</div>
+                {m.to_board_id ? (
+                  <div className="mono mt-1 text-[var(--step-minus-2)] text-[var(--faint)]">
+                    To board: {m.to_board_id.slice(0, 14)}…
+                  </div>
+                ) : null}
               </div>
-              <div>{m.content}</div>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <EmptyState title="Inbox empty" hint="Messages sent to this board appear here." />
-      )}
-    </div>
+            ))}
+          </div>
+        ) : (
+          <EmptyState title="No sent messages" hint="Compose a message above to send to another board." />
+        )}
+
+        <h3 className="mt-5 mb-2 text-[var(--step-minus-2)] uppercase tracking-[0.14em] text-[var(--faint)]">
+          Inbox (to this board)
+        </h3>
+        {inbox.length > 0 ? (
+          <div className="flex flex-col gap-2">
+            {inbox.map((m) => (
+              <div
+                key={m.id}
+                className="rounded-xl border border-[var(--border)] border-l-2 border-l-[var(--accent)] bg-[var(--surface)] px-4 py-3"
+              >
+                <div className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
+                  {m.kind} · from {m.from_teammate_id ? m.from_teammate_id.slice(0, 14) : "system"} ·{" "}
+                  {m.created_at.slice(0, 16)}
+                </div>
+                <div className="mt-1 text-[var(--step-minus-1)] text-[var(--text-soft)]">{m.content}</div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <EmptyState title="Inbox empty" hint="Messages sent to this board appear here." />
+        )}
+      </section>
+    </Page>
   );
 }
 
@@ -406,29 +439,30 @@ function DecomposeModal({ boardId, onDone }: { boardId: string; onDone: () => vo
 
   return (
     <Modal title="Decompose objective — review the plan first" onClose={onDone}>
-      <label className="field">
-        <span>Objective</span>
+      <label className="mb-4 flex flex-col gap-1.5">
+        <span className="text-[var(--step-minus-1)] font-medium text-[var(--text)]">Objective</span>
         <textarea
           rows={2}
           value={objective}
           onChange={(e) => setObjective(e.target.value)}
           placeholder="Ship the login flow: implement, test, and document it"
+          className={`${FORM_INPUT} resize-y`}
         />
       </label>
-      <div className="row" style={{ marginBottom: 12 }}>
-        <button className="primary" onClick={() => void preview()} disabled={busy !== null || !objective.trim()}>
+      <div className="mb-3 flex flex-wrap items-center gap-3">
+        <Button variant="primary" onClick={() => void preview()} disabled={busy !== null || !objective.trim()}>
           {busy === "preview" ? "Planning…" : plan ? "Re-plan" : "Preview plan"}
-        </button>
-        <span className="muted" style={{ fontSize: 12 }}>
+        </Button>
+        <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
           Preview creates nothing — you review before any task exists.
         </span>
       </div>
 
       {error ? (
-        <div className="error-box" role="alert">
+        <div className="mb-3 rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-[var(--step-minus-1)] text-[var(--danger)]" role="alert">
           {error}
           {needsApproval ? (
-            <div style={{ marginTop: 6 }}>
+            <div className="mt-1.5">
               Owner approval is pending: approve it in the project&apos;s{" "}
               <strong>Approvals</strong> tab, then run this again.
             </div>
@@ -438,65 +472,68 @@ function DecomposeModal({ boardId, onDone }: { boardId: string; onDone: () => vo
 
       {plan ? (
         <div>
-          <div className="row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
-            <strong>Reviewed plan ({plan.tasks.length} step{plan.tasks.length === 1 ? "" : "s"})</strong>
-            <button
+          <div className="mb-2 flex items-center justify-between">
+            <strong className="text-[var(--text)]">
+              Reviewed plan ({plan.tasks.length} step{plan.tasks.length === 1 ? "" : "s"})
+            </strong>
+            <Button
               onClick={() =>
                 setPlan({ ...plan, tasks: [...plan.tasks, { description: "", command: "", depends_on: [] }] })
               }
             >
               Add step
-            </button>
+            </Button>
           </div>
-          {plan.tasks.map((task, idx) => (
-            <div className="card" key={idx} style={{ padding: 10, marginBottom: 8 }}>
-              <div className="row" style={{ justifyContent: "space-between" }}>
-                <span className="muted mono" style={{ fontSize: 12 }}>
-                  step {idx}
-                  {task.depends_on.length > 0 ? ` · after ${task.depends_on.join(", ")}` : ""}
-                </span>
-                <button
-                  className="danger"
-                  onClick={() => setPlan({ ...plan, tasks: plan.tasks.filter((_, i) => i !== idx) })}
-                >
-                  Remove
-                </button>
-              </div>
-              <input
-                value={task.description}
-                onChange={(e) => editTask(idx, "description", e.target.value)}
-                placeholder="What this step does"
-                aria-label={`Step ${idx} description`}
-                style={{ width: "100%", marginTop: 6 }}
-              />
-              <div className="row" style={{ gap: 8, marginTop: 6 }}>
+          <div className="flex max-h-80 flex-col gap-2 overflow-y-auto">
+            {plan.tasks.map((task, idx) => (
+              <div key={idx} className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
+                    step {idx}
+                    {task.depends_on.length > 0 ? ` · after ${task.depends_on.join(", ")}` : ""}
+                  </span>
+                  <Button
+                    variant="danger"
+                    onClick={() => setPlan({ ...plan, tasks: plan.tasks.filter((_, i) => i !== idx) })}
+                  >
+                    Remove
+                  </Button>
+                </div>
                 <input
-                  className="mono"
-                  value={task.command}
-                  onChange={(e) => editTask(idx, "command", e.target.value)}
-                  placeholder="command (empty = coordination step)"
-                  aria-label={`Step ${idx} command`}
+                  value={task.description}
+                  onChange={(e) => editTask(idx, "description", e.target.value)}
+                  placeholder="What this step does"
+                  aria-label={`Step ${idx} description`}
+                  className={`${FORM_INPUT} mt-1.5`}
                 />
-                <input
-                  className="mono"
-                  value={task.depends_on.join(", ")}
-                  onChange={(e) => editTask(idx, "depends_on", e.target.value)}
-                  placeholder="after: 0, 1"
-                  aria-label={`Step ${idx} dependencies`}
-                  style={{ maxWidth: 140 }}
-                />
+                <div className="mt-1.5 flex gap-2">
+                  <input
+                    className={`${FORM_INPUT} mono flex-1`}
+                    value={task.command}
+                    onChange={(e) => editTask(idx, "command", e.target.value)}
+                    placeholder="command (empty = coordination step)"
+                    aria-label={`Step ${idx} command`}
+                  />
+                  <input
+                    className={`${FORM_INPUT} mono w-36`}
+                    value={task.depends_on.join(", ")}
+                    onChange={(e) => editTask(idx, "depends_on", e.target.value)}
+                    placeholder="after: 0, 1"
+                    aria-label={`Step ${idx} dependencies`}
+                  />
+                </div>
               </div>
-            </div>
-          ))}
-          <div className="row" style={{ marginTop: 8 }}>
-            <button
-              className="primary"
+            ))}
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <Button
+              variant="primary"
               onClick={() => void materialize()}
               disabled={busy !== null || plan.tasks.length === 0}
             >
               {busy === "materialize" ? "Creating…" : "Approve & create tasks"}
-            </button>
-            <span className="muted" style={{ fontSize: 12 }}>
+            </Button>
+            <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
               Creates exactly these steps — no second model call.
             </span>
           </div>

@@ -15,10 +15,30 @@ import {
   Modal,
   ShortId,
   StatusBadge,
+  Button,
+  BotChip,
+  SectionLabel,
+  Page,
+  PageHeader,
+  relativeTime,
   useAsync,
   runStatusLabel,
 } from "./components";
 import { EntityForm } from "./forms";
+
+/* Shared class strings for the execution-evidence surfaces (stdout, diffs,
+ * roll-up JSON). Same treatment as the settings connection block. */
+const LOG_BLOCK =
+  "mono mt-3 overflow-x-auto whitespace-pre rounded-lg bg-[var(--surface-2)] px-3 py-2 text-[var(--step-minus-1)] leading-relaxed text-[var(--text-soft)]";
+
+const TABLE_SHELL =
+  "overflow-x-auto rounded-xl border border-[var(--border)] bg-[var(--surface)]";
+const TH =
+  "border-b border-[var(--border)] px-3 py-2 text-left text-[var(--step-minus-1)] font-medium uppercase tracking-wide text-[var(--faint)]";
+const TD = "border-b border-[var(--border-dim)] px-3 py-2.5 align-top";
+
+const FORM_INPUT =
+  "rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-minus-1)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]";
 
 const runColumnsHelper = createColumnHelper<Run>();
 
@@ -35,15 +55,15 @@ const runColumns = [
   }),
   runColumnsHelper.accessor("exit_code", {
     header: "Exit",
-    cell: (info) => <span className="mono">{info.getValue() ?? "—"}</span>,
+    cell: (info) => <span className="mono text-[var(--text-soft)]">{info.getValue() ?? "—"}</span>,
   }),
   runColumnsHelper.accessor("runtime", {
     header: "Runtime",
-    cell: (info) => <span className="muted">{info.getValue()}</span>,
+    cell: (info) => <span className="text-[var(--muted)]">{info.getValue()}</span>,
   }),
   runColumnsHelper.accessor("duration_s", {
     header: "Secs",
-    cell: (info) => <span className="mono">{Number(info.getValue() ?? 0).toFixed(1)}</span>,
+    cell: (info) => <span className="mono text-[var(--text-soft)]">{Number(info.getValue() ?? 0).toFixed(1)}</span>,
   }),
 ];
 
@@ -59,30 +79,34 @@ function RunsTable({ runs }: { runs: Run[] }) {
     return <EmptyState title="No runs yet" hint="Run the task to produce execution evidence." />;
   }
   return (
-    <table className="data">
-      <thead>
-        {table.getHeaderGroups().map((group) => (
-          <tr key={group.id}>
-            {group.headers.map((header) => (
-              <th key={header.id}>
-                {header.isPlaceholder
-                  ? null
-                  : flexRender(header.column.columnDef.header, header.getContext())}
-              </th>
-            ))}
-          </tr>
-        ))}
-      </thead>
-      <tbody>
-        {table.getRowModel().rows.map((row) => (
-          <tr key={row.id}>
-            {row.getVisibleCells().map((cell) => (
-              <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
-            ))}
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div className={TABLE_SHELL}>
+      <table className="w-full">
+        <thead>
+          {table.getHeaderGroups().map((group) => (
+            <tr key={group.id}>
+              {group.headers.map((header) => (
+                <th key={header.id} className={TH}>
+                  {header.isPlaceholder
+                    ? null
+                    : flexRender(header.column.columnDef.header, header.getContext())}
+                </th>
+              ))}
+            </tr>
+          ))}
+        </thead>
+        <tbody>
+          {table.getRowModel().rows.map((row) => (
+            <tr key={row.id} className="transition-colors hover:bg-[var(--surface-2)]">
+              {row.getVisibleCells().map((cell) => (
+                <td key={cell.id} className={TD}>
+                  {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -162,17 +186,16 @@ export function TaskDetailView({
 
   if (view.loading || teammates.loading || delegations.loading) {
     return (
-      <div>
+      <Page>
         <LoadingState lines={6} />
-      </div>
+      </Page>
     );
   }
   if (view.error || !view.data || teammates.error || delegations.error) {
     return (
-      <div>
-        <button onClick={onBack}>← Back to project</button>
+      <Page>
         <ErrorState error={view.error ?? teammates.error ?? delegations.error ?? "Task not found"} onRetry={view.reload} />
-      </div>
+      </Page>
     );
   }
 
@@ -187,46 +210,54 @@ export function TaskDetailView({
   ];
   const latestRun = runs.length > 0 ? runs[runs.length - 1] : null;
   const latestPackage = pr_packages.length > 0 ? pr_packages[pr_packages.length - 1] : null;
+  const owner = task.owner_teammate_id
+    ? teammates.data?.teammates.find((m) => m.id === task.owner_teammate_id)
+    : undefined;
 
   return (
-    <div>
-      <button onClick={onBack}>← Back to project</button>
-      <div className="row" style={{ justifyContent: "space-between", marginTop: 8 }}>
-        <h1>{task.description || "Untitled task"}</h1>
-        <StatusBadge status={task.status} />
-      </div>
-      <p className="subtitle mono">
-        {task.id}
-        {task.branch ? ` · branch ${task.branch}` : ""}
-      </p>
+    <Page>
+      <PageHeader
+        eyebrow="Task"
+        title={task.description || "Untitled task"}
+        description={task.branch ? `branch ${task.branch}` : undefined}
+        back={{ label: "Back to project", onClick: onBack }}
+        actions={
+          <>
+            <span className="mono text-[var(--step-minus-1)] text-[var(--faint)]" title={task.id}>
+              {task.id.slice(0, 10)}…
+            </span>
+            <StatusBadge status={task.status} />
+          </>
+        }
+      />
+
       {issue ? (
-        <div className="card">
-          <strong>Issue:</strong> {issue.title}
-          <div className="muted" style={{ fontSize: 12 }}>
+        <div className="mb-6 flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
+          <strong className="text-[var(--text)]">{issue.title}</strong>
+          <span className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
             {issue.source}
             {issue.external_id ? ` · ${issue.external_id}` : ""}
-          </div>
+          </span>
         </div>
       ) : null}
 
-      <h2>Owner</h2>
-      <div className="card">
-        <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-          <div>
-            {task.owner_teammate_id ? (
-              <>
-                <strong>Owner:</strong>{" "}
-                <span className="mono muted">{task.owner_teammate_id}</span>{" "}
-                {teammates.data?.teammates.find((m) => m.id === task.owner_teammate_id) ? (
-                  <span> · {teammates.data.teammates.find((m) => m.id === task.owner_teammate_id)!.persona || "bot"}</span>
-                ) : null}
-              </>
-            ) : (
-              <span>Unassigned — pick a bot to own this task.</span>
-            )}
-          </div>
-          <div className="row">
-            <select id="assign-teammate" aria-label="Assign owner teammate">
+      {/* Owner */}
+      <section className="mb-6">
+        <SectionLabel className="mb-2">Owner</SectionLabel>
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
+          {owner ? (
+            <BotChip persona={owner.persona || "bot"} id={owner.id} status={owner.status} />
+          ) : (
+            <span className="text-[var(--step-minus-1)] text-[var(--muted)]">
+              Unassigned — pick a bot to own this task.
+            </span>
+          )}
+          <div className="flex items-center gap-2">
+            <select
+              id="assign-teammate"
+              aria-label="Assign owner teammate"
+              className={`${FORM_INPUT} max-w-56`}
+            >
               <option value="">(select bot)</option>
               {teammates.data?.teammates.map((mate) => (
                 <option key={mate.id} value={mate.id}>
@@ -234,8 +265,8 @@ export function TaskDetailView({
                 </option>
               ))}
             </select>
-            <button
-              className="primary"
+            <Button
+              variant="primary"
               onClick={() => {
                 const el = document.getElementById("assign-teammate") as HTMLSelectElement | null;
                 const id = el?.value || null;
@@ -243,58 +274,63 @@ export function TaskDetailView({
               }}
             >
               Assign
-            </button>
+            </Button>
           </div>
         </div>
-      </div>
+      </section>
 
-      <h2>Actions</h2>
-      <div className="row">
-        <button className="primary" disabled={!!busy} onClick={() => void act("run", () => api.runTask(taskId))}>
-          {busy === "run" ? "Running…" : "Run"}
-        </button>
-        <button disabled={!!busy} onClick={() => void act("retry", () => api.retryTask(taskId))}>
-          {busy === "retry" ? "Retrying…" : "Retry (new run)"}
-        </button>
-        <button
-          className="danger"
-          disabled={!!busy}
-          onClick={() => void act("cancel", () => api.cancelTask(taskId, "cancelled from the task view"))}
-        >
-          {busy === "cancel" ? "Cancelling…" : "Cancel task"}
-        </button>
-        <button disabled={!!busy} onClick={() => void act("workspace", () => api.ensureWorkspace(taskId))}>
-          Ensure workspace
-        </button>
-        <button disabled={!!busy} onClick={() => setShowKnowledge(true)}>
-          Attach knowledge
-        </button>
-        <button disabled={!!busy} onClick={() => setShowReview(true)}>
-          Submit review
-        </button>
-        <button disabled={!!busy} onClick={() => setShowPackage(true)}>
-          Generate PR package
-        </button>
-        <button
-          disabled={!!busy || !latestPackage}
-          onClick={() => void act("approval", () => api.requestPackageApproval(taskId))}
-        >
-          Request package approval
-        </button>
-        <button
-          disabled={!!busy}
-          onClick={() =>
-            void act("rollup", async () => {
-              setRollup((await api.buildRollup(taskId)) as Record<string, unknown>);
-            })
-          }
-        >
-          Build roll-up
-        </button>
-        <button disabled={!!busy} onClick={() => view.reload()}>
-          Refresh
-        </button>
-      </div>
+      {/* Actions */}
+      <section className="mb-6">
+        <SectionLabel className="mb-2">Actions</SectionLabel>
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
+          <Button variant="primary" disabled={!!busy} onClick={() => void act("run", () => api.runTask(taskId))}>
+            {busy === "run" ? "Running…" : "Run"}
+          </Button>
+          <Button disabled={!!busy} onClick={() => void act("retry", () => api.retryTask(taskId))}>
+            {busy === "retry" ? "Retrying…" : "Retry (new run)"}
+          </Button>
+          <Button
+            variant="danger"
+            disabled={!!busy}
+            onClick={() => void act("cancel", () => api.cancelTask(taskId, "cancelled from the task view"))}
+          >
+            {busy === "cancel" ? "Cancelling…" : "Cancel task"}
+          </Button>
+          <span className="mx-1 h-4 w-px bg-[var(--border)]" aria-hidden />
+          <Button disabled={!!busy} onClick={() => void act("workspace", () => api.ensureWorkspace(taskId))}>
+            Ensure workspace
+          </Button>
+          <Button disabled={!!busy} onClick={() => setShowKnowledge(true)}>
+            Attach knowledge
+          </Button>
+          <span className="mx-1 h-4 w-px bg-[var(--border)]" aria-hidden />
+          <Button disabled={!!busy} onClick={() => setShowReview(true)}>
+            Submit review
+          </Button>
+          <Button disabled={!!busy} onClick={() => setShowPackage(true)}>
+            Generate PR package
+          </Button>
+          <Button
+            disabled={!!busy || !latestPackage}
+            onClick={() => void act("approval", () => api.requestPackageApproval(taskId))}
+          >
+            Request package approval
+          </Button>
+          <Button
+            disabled={!!busy}
+            onClick={() =>
+              void act("rollup", async () => {
+                setRollup((await api.buildRollup(taskId)) as Record<string, unknown>);
+              })
+            }
+          >
+            Build roll-up
+          </Button>
+          <Button disabled={!!busy} onClick={() => view.reload()}>
+            Refresh
+          </Button>
+        </div>
+      </section>
 
       {showReview ? (
         <Modal title="Submit review" onClose={() => setShowReview(false)}>
@@ -346,291 +382,347 @@ export function TaskDetailView({
         </Modal>
       ) : null}
 
-      <h2>Runs</h2>
-      <RunsTable runs={runs} />
-      {latestRun ? (
-        <div className="card" style={{ marginTop: 12 }}>
-          <strong>
-            Latest run <ShortId id={latestRun.id} />
-          </strong>{" "}
-          <StatusBadge status={latestRun.status} label={runStatusLabel(latestRun.status)} />
-          <div className="muted" style={{ fontSize: 12, margin: "4px 0" }}>
-            command: <span className="mono">{latestRun.command || "—"}</span> ·{" "}
-            {Number(latestRun.duration_s ?? 0).toFixed(1)}s
-            {latestRun.provider_id ? ` · provider ${latestRun.provider_id.slice(0, 12)}…` : ""}
-          </div>
-          {latestRun.status === "failed" && latestRun.exit_code !== null && (
-            <div className="error-box" style={{ marginTop: 8, padding: 8, fontSize: 12 }}>
-              Run failed with exit code <span className="mono">{latestRun.exit_code}</span>.
-              {latestRun.stderr ? (
-                <>
-                  <div style={{ marginTop: 4 }}>Error output:</div>
-                  <pre className="log" style={{ marginTop: 4, fontSize: 11, maxHeight: 200, overflow: "auto" }}>
-                    {latestRun.stderr.slice(0, 2000)}
-                  </pre>
-                </>
-              ) : null}
-              <button
-                className="primary"
-                style={{ marginTop: 6, padding: "4px 10px", fontSize: 12 }}
-                onClick={() => void act("retry", () => api.retryTask(taskId))}
-              >
-                Retry (new run)
-              </button>
-            </div>
-          )}
-          <div className="row">
-            <button
-              onClick={() =>
-                void act("patch", () => api.capturePatch(taskId, latestRun.id).then(() => null))
-              }
-            >
-              Capture patch
-            </button>
-            <button
-              onClick={() =>
-                void act("approval", () =>
-                  api.requestApproval(latestRun.id, "deploy").then(() => null),
-                )
-              }
-            >
-              Request run approval
-            </button>
-          </div>
-          {latestRun.output_excerpt ? (
-            <pre className="log" style={{ marginTop: 12 }}>
-              {latestRun.output_excerpt.slice(0, 2000)}
-            </pre>
+      {/* Runs */}
+      <section className="mb-6">
+        <div className="mb-2 flex items-baseline justify-between">
+          <SectionLabel>Runs</SectionLabel>
+          {latestRun ? (
+            <span className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
+              {runs.length} total · latest {relativeTime(latestRun.started_at)}
+            </span>
           ) : null}
         </div>
-      ) : null}
+        <RunsTable runs={runs} />
+        {latestRun ? (
+          <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <strong className="text-[var(--text)]">Latest run</strong>
+              <ShortId id={latestRun.id} />
+              <StatusBadge status={latestRun.status} label={runStatusLabel(latestRun.status)} />
+            </div>
+            <div className="mono mt-2 text-[var(--step-minus-2)] text-[var(--faint)]">
+              command: {latestRun.command || "—"} · {Number(latestRun.duration_s ?? 0).toFixed(1)}s
+              {latestRun.provider_id ? ` · provider ${latestRun.provider_id.slice(0, 12)}…` : ""}
+            </div>
+            {latestRun.status === "failed" && latestRun.exit_code !== null && (
+              <div className="mt-3 rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-[var(--step-minus-1)] text-[var(--danger)]">
+                <div>
+                  Run failed with exit code <span className="mono">{latestRun.exit_code}</span>.
+                </div>
+                {latestRun.stderr ? (
+                  <>
+                    <div className="mt-1">Error output:</div>
+                    <pre className={LOG_BLOCK}>{latestRun.stderr.slice(0, 2000)}</pre>
+                  </>
+                ) : null}
+                <Button
+                  variant="danger"
+                  onClick={() => void act("retry", () => api.retryTask(taskId))}
+                >
+                  Retry (new run)
+                </Button>
+              </div>
+            )}
+            <div className="mt-3 flex items-center gap-2">
+              <Button
+                onClick={() =>
+                  void act("patch", () => api.capturePatch(taskId, latestRun.id).then(() => null))
+                }
+              >
+                Capture patch
+              </Button>
+              <Button
+                onClick={() =>
+                  void act("approval", () =>
+                    api.requestApproval(latestRun.id, "deploy").then(() => null),
+                  )
+                }
+              >
+                Request run approval
+              </Button>
+            </div>
+            {latestRun.output_excerpt ? (
+              <pre className={LOG_BLOCK}>{latestRun.output_excerpt.slice(0, 2000)}</pre>
+            ) : null}
+          </div>
+        ) : null}
+      </section>
 
-      <h2>Handoffs (delegation)</h2>
-      <div className="card">
-        <div className="row" style={{ marginBottom: 12 }}>
-          <strong>Delegate to another bot</strong>
-          <span className="muted" style={{ marginLeft: 8, fontSize: 12 }}>
-            Bounded depth (max 5), cycle-checked.
-          </span>
-        </div>
-        <form onSubmit={(e) => { e.preventDefault(); delegate(); }} className="row" style={{ gap: 8, alignItems: "end" }}>
-          <select id="delegate-to" aria-label="Delegate to teammate">
-            <option value="">(select bot)</option>
-            {teammates.data?.teammates.map((mate) => (
-              <option key={mate.id} value={mate.id}>
-                {mate.persona || "Unnamed bot"} ({mate.id.slice(0, 10)}…)
-              </option>
-            ))}
-          </select>
-          <input
-            id="delegate-reason"
-            aria-label="Reason"
-            placeholder="Why hand off?"
-            style={{ minWidth: 220 }}
-          />
-          <input
-            id="delegate-depth"
-            type="number"
-            min="1"
-            max="5"
-            value="1"
-            aria-label="Depth"
-            style={{ width: 70 }}
-          />
-          <button className="primary" type="submit">Delegate</button>
-        </form>
-        {delegationRows.length > 0 ? (
-          <>
-            <table className="data" style={{ marginTop: 12 }}>
-              <thead>
-                <tr>
-                  <th>From</th>
-                  <th>To</th>
-                  <th>Depth</th>
-                  <th>Status</th>
-                  <th>Reason</th>
-                  <th>Child task</th>
-                  <th>Result</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {delegationRows.map((d) => {
-                  const pending = d.status === "pending";
-                  const open = d.status === "pending" || d.status === "accepted";
-                  const fromName = teammates.data?.teammates.find((m) => m.id === d.from_teammate_id)?.persona || d.from_teammate_id.slice(0, 10);
-                  const toName = teammates.data?.teammates.find((m) => m.id === d.to_teammate_id)?.persona || d.to_teammate_id.slice(0, 10);
-                  return (
-                    <tr key={d.id}>
-                      <td className="mono muted">{fromName}</td>
-                      <td className="mono muted">{toName}</td>
-                      <td className="mono">{d.depth}</td>
-                      <td><StatusBadge status={d.status} /></td>
-                      <td className="muted">{d.reason || "—"}</td>
-                      <td>
-                        {d.child_task_id ? (
-                          <a href={`#/p/${projectId}/t/${d.child_task_id}`}>
-                            <ShortId id={d.child_task_id} />
-                          </a>
-                        ) : (
-                          "—"
-                        )}
-                      </td>
-                      <td className="muted" style={{ maxWidth: 260 }}>
-                        {d.result ? d.result.slice(0, 200) : "—"}
-                        {d.finished_at ? (
-                          <div style={{ fontSize: 12 }}>finished {new Date(d.finished_at).toLocaleString()}</div>
-                        ) : null}
-                      </td>
-                      <td>
-                        {pending ? (
-                          <div className="row" style={{ gap: 6 }}>
-                            <button className="primary" onClick={() => void decide(d.id, "accepted")}>Accept</button>
-                            <button className="danger" onClick={() => void decide(d.id, "declined")}>Decline</button>
-                            <button onClick={() => void cancelDelegation(d.id)}>Cancel</button>
-                          </div>
-                        ) : open ? (
-                          <button onClick={() => void cancelDelegation(d.id)}>Cancel</button>
-                        ) : (
-                          <span className="muted">{d.decided_at ?? ""}</span>
-                        )}
-                      </td>
+      {/* Handoffs (delegation) */}
+      <section className="mb-6">
+        <SectionLabel className="mb-2">Handoffs (delegation)</SectionLabel>
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+          <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <strong className="text-[var(--text)]">Delegate to another bot</strong>
+            <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
+              Bounded depth (max 5), cycle-checked.
+            </span>
+          </div>
+          <form onSubmit={(e) => { e.preventDefault(); delegate(); }} className="flex flex-wrap items-end gap-2">
+            <select id="delegate-to" aria-label="Delegate to teammate" className={`${FORM_INPUT} max-w-56`}>
+              <option value="">(select bot)</option>
+              {teammates.data?.teammates.map((mate) => (
+                <option key={mate.id} value={mate.id}>
+                  {mate.persona || "Unnamed bot"} ({mate.id.slice(0, 10)}…)
+                </option>
+              ))}
+            </select>
+            <input
+              id="delegate-reason"
+              aria-label="Reason"
+              placeholder="Why hand off?"
+              className={`${FORM_INPUT} min-w-56 flex-1`}
+            />
+            <input
+              id="delegate-depth"
+              type="number"
+              min="1"
+              max="5"
+              defaultValue="1"
+              aria-label="Depth"
+              className={`${FORM_INPUT} w-20`}
+            />
+            <Button variant="primary" type="submit">
+              Delegate
+            </Button>
+          </form>
+          {delegationRows.length > 0 ? (
+            <>
+              <div className={`mt-3 ${TABLE_SHELL}`}>
+                <table className="w-full">
+                  <thead>
+                    <tr>
+                      <th className={TH}>From</th>
+                      <th className={TH}>To</th>
+                      <th className={TH}>Depth</th>
+                      <th className={TH}>Status</th>
+                      <th className={TH}>Reason</th>
+                      <th className={TH}>Child task</th>
+                      <th className={TH}>Result</th>
+                      <th className={TH}></th>
                     </tr>
+                  </thead>
+                  <tbody>
+                    {delegationRows.map((d) => {
+                      const pending = d.status === "pending";
+                      const open = d.status === "pending" || d.status === "accepted";
+                      const fromName = teammates.data?.teammates.find((m) => m.id === d.from_teammate_id)?.persona || d.from_teammate_id.slice(0, 10);
+                      const toName = teammates.data?.teammates.find((m) => m.id === d.to_teammate_id)?.persona || d.to_teammate_id.slice(0, 10);
+                      return (
+                        <tr key={d.id} className="transition-colors hover:bg-[var(--surface-2)]">
+                          <td className={`${TD} mono text-[var(--text-soft)]`}>{fromName}</td>
+                          <td className={`${TD} mono text-[var(--text-soft)]`}>{toName}</td>
+                          <td className={`${TD} mono`}>{d.depth}</td>
+                          <td className={TD}>
+                            <StatusBadge status={d.status} />
+                          </td>
+                          <td className={`${TD} text-[var(--muted)]`}>{d.reason || "—"}</td>
+                          <td className={TD}>
+                            {d.child_task_id ? (
+                              <a
+                                className="text-[var(--accent)] hover:underline"
+                                href={`#/p/${projectId}/t/${d.child_task_id}`}
+                              >
+                                <ShortId id={d.child_task_id} />
+                              </a>
+                            ) : (
+                              "—"
+                            )}
+                          </td>
+                          <td className={`${TD} max-w-[260px] text-[var(--muted)]`}>
+                            {d.result ? d.result.slice(0, 200) : "—"}
+                            {d.finished_at ? (
+                              <div className="mt-0.5 text-[var(--step-minus-2)] text-[var(--faint)]">
+                                finished {relativeTime(d.finished_at)}
+                              </div>
+                            ) : null}
+                          </td>
+                          <td className={TD}>
+                            {pending ? (
+                              <div className="flex items-center gap-1.5">
+                                <Button variant="primary" onClick={() => void decide(d.id, "accepted")}>
+                                  Accept
+                                </Button>
+                                <Button variant="danger" onClick={() => void decide(d.id, "declined")}>
+                                  Decline
+                                </Button>
+                                <Button onClick={() => void cancelDelegation(d.id)}>Cancel</Button>
+                              </div>
+                            ) : open ? (
+                              <Button onClick={() => void cancelDelegation(d.id)}>Cancel</Button>
+                            ) : (
+                              <span className="text-[var(--muted)]">{d.decided_at ?? ""}</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <p className="mt-2 text-[var(--step-minus-1)] text-[var(--muted)]">
+                Accepting a delegation makes the target bot the task owner. Child results flow back
+                through the response channel (see the project&apos;s Messages tab).
+              </p>
+            </>
+          ) : (
+            <EmptyState title="No delegations yet" hint="Hand a task from one bot to another here." />
+          )}
+        </div>
+      </section>
+
+      {/* Delegation tree */}
+      <section className="mb-6">
+        <SectionLabel className="mb-2">Delegation tree</SectionLabel>
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+          <div className="flex flex-wrap items-center gap-2 text-[var(--step-minus-1)]">
+            <span className="text-[var(--muted)]">Parent:</span>
+            {parent ? (
+              <a
+                className="text-[var(--accent)] hover:underline"
+                href={`#/p/${projectId}/t/${parent.id}`}
+              >
+                <ShortId id={parent.id} /> {parent.description || "Untitled"}
+              </a>
+            ) : (
+              <span className="text-[var(--muted)]">none — this is a root task</span>
+            )}
+          </div>
+          <div className="mt-3">
+            <span className="text-[var(--step-minus-1)] text-[var(--muted)]">
+              Children ({children.length}):
+            </span>
+            {children.length === 0 ? (
+              <div className="mt-1 text-[var(--step-minus-1)] text-[var(--faint)]">
+                No child tasks yet — bots create them when they delegate with a command.
+              </div>
+            ) : (
+              <div className="mt-1.5 flex flex-col gap-1">
+                {children.map((child) => {
+                  const link = delegationRows.find((d) => d.child_task_id === child.id);
+                  return (
+                    <div
+                      key={child.id}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg px-3 py-2 text-[var(--step-minus-1)] transition-colors hover:bg-[var(--surface-2)]"
+                    >
+                      <span className="min-w-0">
+                        <a
+                          className="text-[var(--accent)] hover:underline"
+                          href={`#/p/${projectId}/t/${child.id}`}
+                        >
+                          <ShortId id={child.id} />
+                        </a>{" "}
+                        <span className="text-[var(--text-soft)]">{child.description || "Untitled"}</span>{" "}
+                        <span className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
+                          via {link
+                            ? `${teammates.data?.teammates.find((m) => m.id === link.to_teammate_id)?.persona || link.to_teammate_id.slice(0, 10)} · ${link.status}`
+                            : "delegation"}
+                        </span>
+                      </span>
+                      <StatusBadge status={child.status} />
+                    </div>
                   );
                 })}
-              </tbody>
-            </table>
-            <div className="muted" style={{ marginTop: 8 }}>
-              Accepting a delegation makes the target bot the task owner. Child results flow back
-              through the response channel (see the project&apos;s Messages tab).
-            </div>
-          </>
-        ) : (
-          <EmptyState title="No delegations yet" hint="Hand a task from one bot to another here." />
-        )}
-      </div>
-
-      <h2>Delegation tree</h2>
-      <div className="card">
-        <div className="row" style={{ alignItems: "center", gap: 8 }}>
-          <span className="muted">Parent:</span>
-          {parent ? (
-            <a href={`#/p/${projectId}/t/${parent.id}`}>
-              <ShortId id={parent.id} /> {parent.description || "Untitled"}
-            </a>
-          ) : (
-            <span className="muted">none — this is a root task</span>
-          )}
+              </div>
+            )}
+          </div>
         </div>
-        <div style={{ marginTop: 8 }}>
-          <span className="muted">Children ({children.length}):</span>
-          {children.length === 0 ? (
-            <div className="muted" style={{ fontSize: 12 }}>
-              No child tasks yet — bots create them when they delegate with a command.
-            </div>
-          ) : (
-            children.map((child) => {
-              const link = delegationRows.find((d) => d.child_task_id === child.id);
-              return (
-                <div key={child.id} className="row" style={{ justifyContent: "space-between", padding: "6px 0" }}>
-                  <span>
-                    <a href={`#/p/${projectId}/t/${child.id}`}>
-                      <ShortId id={child.id} />
-                    </a>{" "}
-                    {child.description || "Untitled"}{" "}
-                    <span className="muted mono" style={{ fontSize: 12 }}>
-                      via {link
-                        ? `${teammates.data?.teammates.find((m) => m.id === link.to_teammate_id)?.persona || link.to_teammate_id.slice(0, 10)} · ${link.status}`
-                        : "delegation"}
-                    </span>
-                  </span>
-                  <StatusBadge status={child.status} />
-                </div>
-              );
-            })
-          )}
-        </div>
-      </div>
+      </section>
 
       <WorkspacePanel taskId={taskId} />
 
-      <h2>Artifacts</h2>
-      {artifacts.length > 0 ? (
-        <table className="data">
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Type</th>
-              <th>Verification</th>
-              <th>Summary</th>
-            </tr>
-          </thead>
-          <tbody>
-            {artifacts.map((artifact) => (
-              <tr key={artifact.id}>
-                <td>
-                  <ShortId id={artifact.id} />
-                </td>
-                <td className="mono">{artifact.type}</td>
-                <td>
-                  <StatusBadge status={artifact.verification_status} />
-                </td>
-                <td className="muted">{artifact.summary}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      ) : (
-        <EmptyState title="No artifacts" hint="Runs produce test-log and transcript artifacts." />
-      )}
+      {/* Artifacts */}
+      <section className="mb-6">
+        <SectionLabel className="mb-2">Artifacts</SectionLabel>
+        {artifacts.length > 0 ? (
+          <div className={TABLE_SHELL}>
+            <table className="w-full">
+              <thead>
+                <tr>
+                  <th className={TH}>ID</th>
+                  <th className={TH}>Type</th>
+                  <th className={TH}>Verification</th>
+                  <th className={TH}>Summary</th>
+                </tr>
+              </thead>
+              <tbody>
+                {artifacts.map((artifact) => (
+                  <tr key={artifact.id} className="transition-colors hover:bg-[var(--surface-2)]">
+                    <td className={TD}>
+                      <ShortId id={artifact.id} />
+                    </td>
+                    <td className={`${TD} mono`}>{artifact.type}</td>
+                    <td className={TD}>
+                      <StatusBadge status={artifact.verification_status} />
+                    </td>
+                    <td className={`${TD} text-[var(--muted)]`}>{artifact.summary}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <EmptyState title="No artifacts" hint="Runs produce test-log and transcript artifacts." />
+        )}
+      </section>
 
-      <h2>Reviews</h2>
-      {reviews.length > 0 ? (
-        reviews.map((review) => (
-          <div className="card" key={review.id}>
-            <div className="row" style={{ justifyContent: "space-between" }}>
-              <span className="mono muted">{review.id}</span>
-              <StatusBadge status={review.verdict} />
-            </div>
-            <div style={{ marginTop: 6 }}>{review.notes || "No notes"}</div>
-            {review.risks.length > 0 ? (
-              <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                Risks: {review.risks.join(", ")}
+      {/* Reviews */}
+      <section className="mb-6">
+        <SectionLabel className="mb-2">Reviews</SectionLabel>
+        {reviews.length > 0 ? (
+          <div className="flex flex-col gap-2">
+            {reviews.map((review) => (
+              <div key={review.id} className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="mono text-[var(--step-minus-2)] text-[var(--faint)]">{review.id}</span>
+                  <StatusBadge status={review.verdict} />
+                </div>
+                <div className="mt-1.5 text-[var(--step-minus-1)] text-[var(--text-soft)]">
+                  {review.notes || "No notes"}
+                </div>
+                {review.risks.length > 0 ? (
+                  <div className="mt-1 text-[var(--step-minus-2)] text-[var(--faint)]">
+                    Risks: {review.risks.join(", ")}
+                  </div>
+                ) : null}
               </div>
-            ) : null}
+            ))}
           </div>
-        ))
-      ) : (
-        <EmptyState title="No reviews" hint="A distinct reviewer records verdict and risks here." />
-      )}
+        ) : (
+          <EmptyState title="No reviews" hint="A distinct reviewer records verdict and risks here." />
+        )}
+      </section>
 
-      <h2>PR packages</h2>
-      {pr_packages.length > 0 ? (
-        pr_packages.map((pkg) => (
-          <div className="card" key={pkg.id}>
-            <strong>{pkg.title}</strong>
-            <div className="muted mono" style={{ fontSize: 12 }}>
-              {pkg.base_branch} ← {pkg.head_branch} · digest {pkg.digest.slice(0, 12)}…
-            </div>
-            <div className="muted" style={{ fontSize: 12 }}>
-              {pkg.patch_summary}
-            </div>
+      {/* PR packages */}
+      <section className="mb-6">
+        <SectionLabel className="mb-2">PR packages</SectionLabel>
+        {pr_packages.length > 0 ? (
+          <div className="flex flex-col gap-2">
+            {pr_packages.map((pkg) => (
+              <div key={pkg.id} className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
+                <strong className="text-[var(--text)]">{pkg.title}</strong>
+                <div className="mono mt-1 text-[var(--step-minus-2)] text-[var(--faint)]">
+                  {pkg.base_branch} ← {pkg.head_branch} · digest {pkg.digest.slice(0, 12)}…
+                </div>
+                <div className="mt-1 text-[var(--step-minus-2)] text-[var(--muted)]">{pkg.patch_summary}</div>
+              </div>
+            ))}
           </div>
-        ))
-      ) : (
-        <EmptyState title="No PR packages" hint="Generate a reviewable candidate package." />
-      )}
+        ) : (
+          <EmptyState title="No PR packages" hint="Generate a reviewable candidate package." />
+        )}
+      </section>
 
       {rollup ? (
-        <>
-          <h2>Roll-up</h2>
-          <pre className="log">{JSON.stringify(rollup, null, 2)}</pre>
-        </>
+        <section className="mb-6">
+          <SectionLabel className="mb-2">Roll-up</SectionLabel>
+          <pre className={LOG_BLOCK}>{JSON.stringify(rollup, null, 2)}</pre>
+        </section>
       ) : null}
-      <div className="muted" style={{ marginTop: 24, fontSize: 12 }}>
+      <div className="mono mt-6 text-[var(--step-minus-2)] text-[var(--faint)]">
         Project <ShortId id={projectId} />
       </div>
-    </div>
+    </Page>
   );
 }
 
@@ -656,39 +748,39 @@ function WorkspacePanel({ taskId }: { taskId: string }) {
   };
 
   return (
-    <>
-      <h2>Workspace</h2>
-      <div className="row" style={{ marginBottom: 8 }}>
-        <button
-          onClick={() => {
-            setShowDiff((v) => !v);
-            diff.reload();
-          }}
-        >
-          {showDiff ? "Hide diff" : "Show diff"}
-        </button>
-        <button
-          onClick={() => {
-            files.reload();
-            diff.reload();
-          }}
-        >
-          Refresh
-        </button>
+    <section className="mb-6">
+      <div className="mb-2 flex items-center justify-between">
+        <SectionLabel>Workspace</SectionLabel>
+        <div className="flex items-center gap-2">
+          <Button
+            onClick={() => {
+              setShowDiff((v) => !v);
+              diff.reload();
+            }}
+          >
+            {showDiff ? "Hide diff" : "Show diff"}
+          </Button>
+          <Button
+            onClick={() => {
+              files.reload();
+              diff.reload();
+            }}
+          >
+            Refresh
+          </Button>
+        </div>
       </div>
       {showDiff ? (
-        <div className="card">
-          <strong>Uncommitted changes</strong>
+        <div className="mb-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+          <strong className="text-[var(--text)]">Uncommitted changes</strong>
           {diff.loading ? (
             <LoadingState lines={3} />
           ) : diff.error ? (
             <ErrorState error={diff.error} onRetry={diff.reload} />
           ) : diff.data?.exists && diff.data.diff ? (
-            <pre className="log" style={{ marginTop: 8 }}>
-              {diff.data.diff.slice(0, 8000)}
-            </pre>
+            <pre className={LOG_BLOCK}>{diff.data.diff.slice(0, 8000)}</pre>
           ) : (
-            <div className="muted" style={{ marginTop: 8 }}>
+            <div className="mt-2 text-[var(--step-minus-1)] text-[var(--muted)]">
               No uncommitted changes (or the workspace does not exist yet — use “Ensure workspace”).
             </div>
           )}
@@ -699,35 +791,31 @@ function WorkspacePanel({ taskId }: { taskId: string }) {
       ) : files.error ? (
         <ErrorState error={files.error} onRetry={files.reload} />
       ) : files.data && files.data.files.length > 0 ? (
-        <div className="card">
-          <div className="muted mono" style={{ fontSize: 12, marginBottom: 8 }}>
-            {files.data.root}
-          </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+          <div className="mono mb-3 text-[var(--step-minus-2)] text-[var(--faint)]">{files.data.root}</div>
+          <div className="flex flex-wrap gap-1.5">
             {files.data.files.map((f) => (
-              <button
+              <Button
                 key={f.path}
-                className={openPath === f.path ? "primary" : ""}
+                variant={openPath === f.path ? "primary" : "default"}
                 onClick={() => void openFile(f.path)}
                 title={`${f.size} bytes`}
               >
                 {f.path}
-              </button>
+              </Button>
             ))}
           </div>
           {openPath ? (
-            <div style={{ marginTop: 12 }}>
-              <strong className="mono">{openPath}</strong>
+            <div className="mt-3">
+              <strong className="mono text-[var(--step-minus-1)] text-[var(--text)]">{openPath}</strong>
               {contentError ? (
-                <div className="error-box" role="alert">
+                <div className="mt-2 rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-[var(--step-minus-1)] text-[var(--danger)]" role="alert">
                   {contentError}
                 </div>
               ) : content === null ? (
                 <LoadingState lines={3} />
               ) : (
-                <pre className="log" style={{ marginTop: 8 }}>
-                  {content.slice(0, 8000)}
-                </pre>
+                <pre className={LOG_BLOCK}>{content.slice(0, 8000)}</pre>
               )}
             </div>
           ) : null}
@@ -738,6 +826,6 @@ function WorkspacePanel({ taskId }: { taskId: string }) {
           hint="Run the task or press “Ensure workspace” to materialize its isolated checkout."
         />
       )}
-    </>
+    </section>
   );
 }

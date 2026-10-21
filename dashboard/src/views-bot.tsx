@@ -8,11 +8,29 @@ import {
   LoadingState,
   Modal,
   StatusBadge,
+  StatusDot,
+  BotChip,
+  Button,
+  SectionLabel,
+  Page,
+  PageHeader,
+  relativeTime,
   useAsync,
   usePermissionCatalogue,
   Badge,
   Field,
 } from "./components";
+
+const FORM_INPUT =
+  "w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-0)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]";
+
+function openBot(id: string): void {
+  window.location.hash = `#/bot/${id}`;
+}
+
+function openTask(projectId: string, taskId: string): void {
+  window.location.hash = `#/p/${projectId}/t/${taskId}`;
+}
 
 export function BotDetailView({
   teammateId,
@@ -68,15 +86,14 @@ export function BotDetailView({
   }
   if (all.error || tasks.error || runs.error || memory.error || boards.error) {
     return (
-      <div>
-        <button onClick={() => (window.location.hash = "#/teams")}>← Back</button>
+      <Page>
         <ErrorState
           error={
             all.error ?? tasks.error ?? runs.error ?? memory.error ?? boards.error ?? "Bot not found"
           }
           onRetry={all.reload}
         />
-      </div>
+      </Page>
     );
   }
 
@@ -84,10 +101,9 @@ export function BotDetailView({
   const mate = allMates.find((m) => m.id === teammateId);
   if (!mate) {
     return (
-      <div>
-        <button onClick={() => (window.location.hash = "#/teams")}>← Back</button>
+      <Page>
         <EmptyState title="Bot not found" hint="" />
-      </div>
+      </Page>
     );
   }
 
@@ -95,229 +111,237 @@ export function BotDetailView({
   const runList = (runs.data as { runs: Run[] }).runs;
   const memList = (memory.data as { entries: MemoryEntry[] }).entries;
   const unclaimed = taskList.find((t) => t.status === "pending" && !t.owner_teammate_id);
+  const openCount = taskList.filter((t) => !["done", "failed", "cancelled"].includes(t.status)).length;
 
   return (
-    <div>
-      <button onClick={() => (window.location.hash = "#/teams")}>← Back to workstation</button>
-      <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
-        <div>
-          <h1>Bot: {mate.persona || "Unnamed bot"}</h1>
-          <p className="subtitle mono">{mate.id}</p>
-          <div className="muted" style={{ fontSize: 12 }}>
-            project {mate.project_id.slice(0, 10)}…
-          </div>
-        </div>
-        <div className="row">
-          <StatusBadge status={mate.status} />
-          {mate.provider_id ? (
-            <span className="muted mono" style={{ marginLeft: 8 }}>
-              model {mate.provider_id.slice(0, 10)}…
-            </span>
-          ) : (
-            <span style={{ color: "#b58a00", marginLeft: 8 }}>
-              no model attached
-            </span>
-          )}
-        </div>
+    <Page>
+      <PageHeader
+        eyebrow="Bot"
+        title={mate.persona || "Unnamed bot"}
+        description={mate.instructions ? undefined : "No instructions — give this bot a role via edit."}
+        back={{ label: "Fleet", onClick: () => { window.location.hash = "#/bots"; } }}
+        actions={
+          <>
+            <StatusDot status={mate.status} label={mate.status} pulse={mate.status === "running"} />
+            {mate.provider_id ? (
+              <span className="mono text-[var(--step-minus-1)] text-[var(--muted)]">
+                model {mate.provider_id.slice(0, 10)}…
+              </span>
+            ) : (
+              <Badge variant="warn">no model attached</Badge>
+            )}
+          </>
+        }
+      />
+
+      <div className="mb-4 flex flex-wrap items-center gap-2 text-[var(--step-minus-1)] text-[var(--muted)]">
+        <span className="mono">{mate.id}</span>
+        <span className="text-[var(--faint)]">·</span>
+        <span>workspace {mate.project_id.slice(0, 10)}…</span>
+        <span className="text-[var(--faint)]">·</span>
+        <span>
+          {openCount} open task{openCount === 1 ? "" : "s"} · {runList.length} runs
+        </span>
       </div>
 
       {mate.instructions ? (
-        <div className="card" style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 4 }}>
-            Instructions
-          </div>
-          <div style={{ whiteSpace: "pre-wrap", fontSize: 13 }}>{mate.instructions}</div>
-        </div>
+        <section className="mb-6 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+          <SectionLabel className="mb-2">Instructions</SectionLabel>
+          <p className="whitespace-pre-wrap text-[var(--step-0)] leading-relaxed text-[var(--text-soft)]">
+            {mate.instructions}
+          </p>
+        </section>
       ) : null}
 
-      <BotAccess mate={mate} boards={(boards.data as { boards: Board[] }).boards} />
+      <section className="mb-6">
+        <BotAccess mate={mate} boards={(boards.data as { boards: Board[] }).boards} />
+      </section>
 
-      <div className="row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
-        <h2 style={{ margin: 0 }}>Tasks</h2>
-      </div>
-      <div className="card" style={{ marginBottom: 12 }}>
-        <form
-          onSubmit={async (e: React.FormEvent) => {
-            e.preventDefault();
-            setCreateTaskBusy(true);
-            try {
-              await api.createTask(mate.project_id, {
-                description: taskDescription.trim(),
-                command: taskCommand.trim() || undefined,
-                owner_teammate_id: teammateId,
-              });
-              setTaskDescription("");
-              setTaskCommand("");
-              setShowCreateTask(false);
-              tasks.reload();
-            } catch (err) {
-              notifyError(err);
-            } finally {
-              setCreateTaskBusy(false);
-            }
-          }}
-          className="row"
-          style={{ gap: 8, flexWrap: "wrap", alignItems: "end" }}
-        >
-          <input
-            value={taskDescription}
-            onChange={(e) => setTaskDescription(e.target.value)}
-            placeholder="Task description (e.g. review the login flow)"
-            aria-label="Task description"
-            style={{ flex: 1, minWidth: 200 }}
-          />
-          <input
-            value={taskCommand}
-            onChange={(e) => setTaskCommand(e.target.value)}
-            placeholder="Command (optional)"
-            aria-label="Task command"
-            style={{ minWidth: 180 }}
-          />
-          <button
-            className="primary"
-            type="submit"
-            disabled={createTaskBusy || !taskDescription.trim()}
-          >
-            {createTaskBusy ? "Creating…" : "Create task"}
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowCreateTask(!showCreateTask)}
-            style={{ padding: "7px 14px" }}
-          >
+      {/* Tasks */}
+      <section className="mb-6">
+        <div className="mb-2 flex items-center justify-between">
+          <SectionLabel>Tasks</SectionLabel>
+          <Button onClick={() => setShowCreateTask((v) => !v)} variant="ghost">
             {showCreateTask ? "Cancel" : "New task"}
-          </button>
-        </form>
-      </div>
-      {unclaimed && (
-        <button className="primary" onClick={() => void claim(unclaimed.id)} style={{ marginBottom: 10 }}>
-          Claim "{unclaimed.description.slice(0, 30)}…"
-        </button>
-      )}
-      {taskList.length > 0 ? (
-        <div className="grid2">
-          {taskList.map((t) => (
-            <div className="card" key={t.id} style={{ minHeight: 170 }}>
-              <div className="row" style={{ justifyContent: "space-between" }}>
-                <div>
-                  <a href={`#/p/${t.project_id}/t/${t.id}`}>
-                    <strong>{t.description || "Untitled"}</strong>
-                  </a>
-                  <div className="muted mono" style={{ fontSize: 11, marginTop: 2 }}>
-                    {t.id}
-                  </div>
-                </div>
-                <div className="row">
-                  <StatusBadge status={t.status} />
-                </div>
-              </div>
-              {t.command ? (
-                <div className="muted mono" style={{ fontSize: 11, marginTop: 4 }}>
-                  {t.command}
-                </div>
-              ) : null}
-              {t.owner_teammate_id === teammateId ? (
-                <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
-                  owned by this bot
-                </div>
-              ) : null}
-              {t.status === "pending" && t.owner_teammate_id === teammateId ? (
-                <button
-                  className="primary"
-                  onClick={() => {
-                    void api
-                      .runTask(t.id)
-                      .then(() => {
-                        tasks.reload();
-                        runs.reload();
-                      })
-                      .catch(notifyError);
-                  }}
-                  style={{ marginTop: 8, padding: "6px 12px", fontSize: 12 }}
-                >
-                  Run task
-                </button>
-              ) : null}
-            </div>
-          ))}
+          </Button>
         </div>
-      ) : (
-        <EmptyState title="No tasks" hint="This bot owns no tasks yet. Create one from the workstation." />
-      )}
-
-      <h2 style={{ marginTop: 24, marginBottom: 8 }}>Runs</h2>
-      {runList.length > 0 ? (
-        <table className="data" style={{ fontSize: 12 }}>
-          <thead>
-            <tr>
-              <th>Task</th>
-              <th>Status</th>
-              <th>Exit</th>
-              <th>Secs</th>
-              <th>Started</th>
-            </tr>
-          </thead>
-          <tbody>
-            {runList.slice(0, 20).map((r) => (
-              <tr key={r.id}>
-                <td className="mono muted" style={{ maxWidth: 160 }}>
-                  {r.task_id.slice(0, 12)}…
-                </td>
-                <td>
-                  <StatusBadge status={r.status} />
-                </td>
-                <td className="mono">{r.exit_code ?? "—"}</td>
-                <td className="mono">{Number(r.duration_s ?? 0).toFixed(1)}</td>
-                <td className="mono muted">{r.started_at.slice(0, 16)}</td>
-              </tr>
+        {showCreateTask && (
+          <form
+            onSubmit={async (e: React.FormEvent) => {
+              e.preventDefault();
+              setCreateTaskBusy(true);
+              try {
+                await api.createTask(mate.project_id, {
+                  description: taskDescription.trim(),
+                  command: taskCommand.trim() || undefined,
+                  owner_teammate_id: teammateId,
+                });
+                setTaskDescription("");
+                setTaskCommand("");
+                setShowCreateTask(false);
+                tasks.reload();
+              } catch (err) {
+                notifyError(err);
+              } finally {
+                setCreateTaskBusy(false);
+              }
+            }}
+            className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3"
+          >
+            <input
+              value={taskDescription}
+              onChange={(e) => setTaskDescription(e.target.value)}
+              placeholder="Task description (e.g. review the login flow)"
+              aria-label="Task description"
+              required
+              className={`${FORM_INPUT} min-w-52 flex-1`}
+            />
+            <input
+              value={taskCommand}
+              onChange={(e) => setTaskCommand(e.target.value)}
+              placeholder="Command (optional)"
+              aria-label="Task command"
+              className={`${FORM_INPUT} w-48`}
+            />
+            <Button variant="primary" type="submit" disabled={createTaskBusy || !taskDescription.trim()}>
+              {createTaskBusy ? "Creating…" : "Create task"}
+            </Button>
+          </form>
+        )}
+        {unclaimed && (
+          <div className="mb-3 flex items-center gap-3 rounded-lg border border-[var(--warn)] bg-[var(--warn-dim)] px-3 py-2 text-[var(--step-minus-1)] text-[var(--warn)]">
+            <span className="min-w-0 flex-1 truncate">Unclaimed: {unclaimed.description}</span>
+            <Button onClick={() => void claim(unclaimed.id)}>Claim &amp; assign to me</Button>
+          </div>
+        )}
+        {taskList.length > 0 ? (
+          <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
+            {taskList.map((t, index) => (
+              <div
+                key={t.id}
+                className={`flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 ${
+                  index > 0 ? "border-t border-[var(--border-dim)]" : ""
+                }`}
+              >
+                <div className="min-w-0 flex-1">
+                  <button
+                    className="truncate text-left font-medium text-[var(--text)] hover:underline"
+                    onClick={() => openTask(t.project_id, t.id)}
+                  >
+                    {t.description || "Untitled"}
+                  </button>
+                  {t.command ? (
+                    <div className="mono truncate text-[var(--step-minus-2)] text-[var(--faint)]">{t.command}</div>
+                  ) : null}
+                </div>
+                <StatusBadge status={t.status} label={undefined} />
+                {t.status === "pending" && t.owner_teammate_id === teammateId && (
+                  <Button
+                    variant="primary"
+                    title="Run this task in the bot's isolated workspace"
+                    onClick={() => {
+                      void api
+                        .runTask(t.id)
+                        .then(() => {
+                          tasks.reload();
+                          runs.reload();
+                        })
+                        .catch(notifyError);
+                    }}
+                  >
+                    Run
+                  </Button>
+                )}
+                <Button variant="ghost" onClick={() => openTask(t.project_id, t.id)}>
+                  Open →
+                </Button>
+              </div>
             ))}
-          </tbody>
-        </table>
-      ) : (
-        <EmptyState title="No runs" hint="Runs appear here when this bot executes a task." />
-      )}
+          </div>
+        ) : (
+          <EmptyState title="No tasks" hint="This bot owns no tasks yet. Create one above." />
+        )}
+      </section>
 
-      <h2 style={{ marginTop: 24, marginBottom: 8 }}>Memory (private)</h2>
-      <p className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
-        Scoped to teammate:{" "}
-        <span className="mono muted" style={{ fontSize: 12 }}>{`teammate:${mate.id}`}</span>
-        {" — only this bot reads/writes it."}
-      </p>
-      <form onSubmit={addMemory} style={{ marginBottom: 12, display: "flex", gap: 8 }}>
-        <input
-          value={memContent}
-          onChange={(e) => setMemContent(e.target.value)}
-          placeholder="Remember this…"
-          aria-label="Memory content"
-          style={{ flex: 1 }}
-        />
-        <input
-          value={memSource}
-          onChange={(e) => setMemSource(e.target.value)}
-          placeholder="source"
-          aria-label="Memory source"
-          style={{ maxWidth: 140 }}
-        />
-        <button className="primary" type="submit" disabled={memBusy}>
-          {memBusy ? "Saving…" : "Save"}
-        </button>
-      </form>
-      {memList.length > 0 ? (
-        <div>
-          {memList.map((entry) => (
-            <div className="card" key={entry.id} style={{ marginTop: 8 }}>
-              <div style={{ whiteSpace: "pre-wrap" }}>{entry.content}</div>
-              <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
-                {entry.source} · confidence {entry.confidence} ·{" "}
-                <span className="mono">{entry.timestamp.slice(0, 16)}</span>
+      {/* Runs */}
+      <section className="mb-6">
+        <SectionLabel className="mb-2">Runs</SectionLabel>
+        {runList.length > 0 ? (
+          <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
+            {runList.slice(0, 20).map((r, index) => (
+              <div
+                key={r.id}
+                className={`flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2.5 ${
+                  index > 0 ? "border-t border-[var(--border-dim)]" : ""
+                }`}
+              >
+                <StatusDot status={r.status} pulse={r.status === "running"} label={undefined} />
+                <button
+                  className="mono min-w-0 flex-1 truncate text-left text-[var(--step-minus-1)] text-[var(--muted)] hover:text-[var(--text)]"
+                  onClick={() => openTask(mate.project_id, r.task_id)}
+                  title="Open task"
+                >
+                  {r.task_id.slice(0, 12)}…
+                </button>
+                <span className="mono text-[var(--step-minus-2)] text-[var(--faint)]">exit {r.exit_code ?? "—"}</span>
+                <span className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
+                  {Number(r.duration_s ?? 0).toFixed(1)}s
+                </span>
+                <span className="mono text-[var(--step-minus-2)] text-[var(--faint)]">{relativeTime(r.started_at)}</span>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
+        ) : (
+          <EmptyState title="No runs" hint="Runs appear here when this bot executes a task." />
+        )}
+      </section>
+
+      {/* Private memory */}
+      <section>
+        <div className="mb-2 flex items-center justify-between">
+          <SectionLabel>Private memory</SectionLabel>
+          <span className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
+            scoped to teammate:{mate.id}
+          </span>
         </div>
-      ) : (
-        <EmptyState title="No memories" hint="Save a note this bot will recall in future runs." />
-      )}
-    </div>
+        <p className="mb-3 max-w-[72ch] text-[var(--step-minus-1)] text-[var(--muted)]">
+          Only this bot reads and writes this memory. Notes here are recalled in its future runs.
+        </p>
+        <form onSubmit={addMemory} className="mb-3 flex flex-wrap items-center gap-2">
+          <input
+            value={memContent}
+            onChange={(e) => setMemContent(e.target.value)}
+            placeholder="Remember this…"
+            aria-label="Memory content"
+            className={`${FORM_INPUT} min-w-52 flex-1`}
+          />
+          <input
+            value={memSource}
+            onChange={(e) => setMemSource(e.target.value)}
+            placeholder="source"
+            aria-label="Memory source"
+            className={`${FORM_INPUT} w-36`}
+          />
+          <Button variant="primary" type="submit" disabled={memBusy || !memContent.trim()}>
+            {memBusy ? "Saving…" : "Save"}
+          </Button>
+        </form>
+        {memList.length > 0 ? (
+          <div className="flex flex-col gap-2">
+            {memList.map((entry) => (
+              <div key={entry.id} className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
+                <p className="whitespace-pre-wrap text-[var(--step-minus-1)] text-[var(--text-soft)]">{entry.content}</p>
+                <p className="mt-1 text-[var(--step-minus-2)] text-[var(--faint)]">
+                  {entry.source} · confidence {entry.confidence} · {relativeTime(entry.timestamp)}
+                </p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <EmptyState title="No memories" hint="Save a note this bot will recall in future runs." />
+        )}
+      </section>
+    </Page>
   );
 }
 
@@ -407,24 +431,24 @@ function BotAccess({ mate, boards }: { mate: Teammate; boards: Board[] }) {
   const inactive = mate.status !== "active";
 
   return (
-    <div className="card" style={{ marginBottom: 12 }}>
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <strong>Access</strong>
-        <span className="muted" style={{ fontSize: 12 }}>
+    <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <SectionLabel>Access</SectionLabel>
+        <span className="text-[var(--step-minus-1)] text-[var(--muted)]">
           permissions the server enforces for this bot
         </span>
       </div>
 
-      <div style={{ marginTop: 10 }}>
-        <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
-          Granted
+      <div className="mt-3">
+        <div className="section-label mb-1.5 text-[var(--step-minus-2)] uppercase tracking-[0.14em] text-[var(--faint)]">
+          Granted ({granted.length})
         </div>
         {granted.length > 0 ? (
-          <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
+          <div className="flex flex-wrap gap-1.5">
             {granted.map((perm) => (
               <span
-                className="pill"
                 key={perm}
+                tabIndex={0}
                 title={
                   catalogue.isAdmin(perm)
                     ? "admin permission — also needs the owner's exact-action approval"
@@ -432,6 +456,9 @@ function BotAccess({ mate, boards }: { mate: Teammate; boards: Board[] }) {
                       ? catalogue.byName.get(perm)?.summary
                       : "unknown permission — the server does not recognise it, so it grants nothing"
                 }
+                className={`inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-0.5 text-[var(--step-minus-2)] font-medium text-[var(--text-soft)] ${
+                  catalogue.isAdmin(perm) ? "border-[var(--warn)] text-[var(--warn)]" : ""
+                }`}
               >
                 {perm}
                 {catalogue.isAdmin(perm) ? " *" : ""}
@@ -439,110 +466,96 @@ function BotAccess({ mate, boards }: { mate: Teammate; boards: Board[] }) {
             ))}
           </div>
         ) : (
-          <div className="muted" style={{ fontSize: 12 }}>
+          <p className="text-[var(--step-minus-1)] text-[var(--muted)]">
             No permissions — every gated tool call for this bot is denied.
-          </div>
+          </p>
         )}
         {unknownHeld.length > 0 ? (
-          <div className="error-box" role="alert" style={{ marginTop: 8 }}>
+          <div className="mt-2 rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-[var(--step-minus-1)] text-[var(--danger)]" role="alert">
             Unknown permission name(s) held by this bot: {unknownHeld.join(", ")}. The server does not
             recognise them, so they grant nothing.
           </div>
         ) : null}
         {granted.some((p) => catalogue.isAdmin(p)) ? (
-          <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+          <p className="mt-1.5 text-[var(--step-minus-2)] text-[var(--faint)]">
             * admin permission: granted, but each use still needs the owner&apos;s exact-action approval.
-          </div>
+          </p>
         ) : null}
       </div>
 
-      <div style={{ marginTop: 10 }}>
-        <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+      <div className="mt-3">
+        <div className="mb-1.5 text-[var(--step-minus-2)] uppercase tracking-[0.14em] text-[var(--faint)]">
           Not granted ({denied.length})
         </div>
         {denied.length > 0 ? (
-          <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
+          <div className="flex flex-wrap gap-1.5">
             {denied.map((perm) => (
               <span
-                className="pill"
                 key={perm.name}
-                style={{ opacity: 0.55 }}
+                tabIndex={0}
                 title={`${perm.summary} — denied unless granted.`}
+                className="inline-flex items-center rounded-full border border-[var(--border-dim)] bg-[var(--surface-2)] px-2.5 py-0.5 text-[var(--step-minus-2)] font-medium text-[var(--muted)] opacity-60"
               >
                 {perm.name}
               </span>
             ))}
           </div>
         ) : (
-          <div className="muted" style={{ fontSize: 12 }}>
+          <p className="text-[var(--step-minus-1)] text-[var(--muted)]">
             This bot holds every permission the server defines.
-          </div>
+          </p>
         )}
       </div>
 
-      <div style={{ marginTop: 14 }}>
-        <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+      <div className="mt-4 border-t border-[var(--border-dim)] pt-3">
+        <div className="mb-2 text-[var(--step-minus-2)] uppercase tracking-[0.14em] text-[var(--faint)]">
           Board membership
         </div>
         {members.loading ? (
           <LoadingState lines={1} />
         ) : memberships.length > 0 ? (
-          <table className="data" style={{ fontSize: 12 }}>
-            <thead>
-              <tr>
-                <th>Board</th>
-                <th>Role</th>
-                <th>Co-members</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {memberships.map(({ board, role }) => {
-                const coMembers = (members.data?.[board.id] ?? []).filter(
-                  (m) => m.teammate_id !== mate.id,
-                );
-                return (
-                  <tr key={board.id}>
-                    <td>
-                      <a href={`#/board/${board.id}`}>{board.name || "Unnamed board"}</a>
-                      <div className="muted mono" style={{ fontSize: 11 }}>
-                        {board.id.slice(0, 12)}…
-                      </div>
-                    </td>
-                    <td>{role}</td>
-                    <td className="muted" style={{ fontSize: 11 }}>
+          <div className="flex flex-col gap-1.5">
+            {memberships.map(({ board, role }) => {
+              const coMembers = (members.data?.[board.id] ?? []).filter(
+                (m) => m.teammate_id !== mate.id,
+              );
+              return (
+                <div
+                  key={board.id}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-[var(--surface-2)] px-3 py-2 text-[var(--step-minus-1)]"
+                >
+                  <div className="min-w-0">
+                    <a className="font-medium text-[var(--text)] hover:underline" href={`#/board/${board.id}`}>
+                      {board.name || "Unnamed board"}
+                    </a>
+                    <span className="mono ml-2 text-[var(--faint)]">{role}</span>
+                    <div className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
                       {coMembers.length > 0
-                        ? coMembers.map((m) => m.teammate_id.slice(0, 8)).join(", ")
-                        : "—"}
-                    </td>
-                    <td>
-                      <button className="danger" onClick={() => void removeMembership(board.id)} disabled={busy}>
-                        Remove
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                        ? `${coMembers.length} co-member${coMembers.length === 1 ? "" : "s"}`
+                        : "alone on this board"}
+                    </div>
+                  </div>
+                  <Button variant="danger" onClick={() => void removeMembership(board.id)} disabled={busy}>
+                    Remove
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
         ) : (
-          <EmptyState
-            title="Not on any board"
-            hint="A bot needs board membership to read a board's messages, even with the board.read permission."
-          />
+          <p className="text-[var(--step-minus-1)] text-[var(--muted)]">
+            Not on any board. A bot needs board membership to read a board&apos;s messages, even with
+            the board.read permission.
+          </p>
         )}
 
-        {notMemberOf.length > 0 ? (
-          <form
-            onSubmit={addMembership}
-            className="row"
-            style={{ gap: 8, marginTop: 10, flexWrap: "wrap" }}
-          >
+        {notMemberOf.length > 0 && (
+          <form onSubmit={addMembership} className="mt-2.5 flex flex-wrap items-center gap-2">
             <select
               value={addBoardId}
               onChange={(e) => setAddBoardId(e.target.value)}
               aria-label="Board to join"
-              style={{ maxWidth: 280 }}
+              className="max-w-64 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-1.5 text-[var(--step-minus-1)] outline-none focus:border-[var(--border-focus)]"
             >
               <option value="">(select board)</option>
               {notMemberOf.map((b) => (
@@ -555,24 +568,24 @@ function BotAccess({ mate, boards }: { mate: Teammate; boards: Board[] }) {
               value={addRole}
               onChange={(e) => setAddRole(e.target.value)}
               aria-label="Board role"
-              style={{ maxWidth: 120 }}
+              className="rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-1.5 text-[var(--step-minus-1)] outline-none focus:border-[var(--border-focus)]"
             >
               <option value="member">Member</option>
               <option value="lead">Lead</option>
             </select>
-            <button className="primary" type="submit" disabled={busy || !addBoardId || inactive}>
+            <Button variant="primary" type="submit" disabled={busy || !addBoardId || inactive}>
               Add to board
-            </button>
+            </Button>
             {inactive ? (
-              <span className="muted" style={{ fontSize: 12 }}>
+              <span className="text-[var(--step-minus-1)] text-[var(--muted)]">
                 This bot is {mate.status} — only active bots can join a board.
               </span>
             ) : null}
           </form>
-        ) : null}
+        )}
 
         {error ? (
-          <div className="error-box" role="alert" style={{ marginTop: 8 }}>
+          <div className="mt-2 rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-[var(--step-minus-1)] text-[var(--danger)]" role="alert">
             {error}
           </div>
         ) : null}
@@ -617,7 +630,7 @@ export function BotsView() {
   /** Live execution status per bot so the fleet directory doubles as a
    *  workload monitor. One query per bot is fine at personal-fleet scale. */
   const botTasks = useAsync(async () => {
-    const matesList = (all.data as { teammates: Teammate[] })?.teammates ?? [];
+    const matesList = (all.data as { teammates: Teammate[] } | null)?.teammates ?? [];
     const byBot = await Promise.all(
       matesList.map(async (m) => {
         try {
@@ -652,10 +665,12 @@ export function BotsView() {
     }
   };
 
-  const createBot = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const createBot = async () => {
     const p = pid.trim();
-    if (!p || !persona.trim()) return notifyError("Pick a project and give the bot a persona.");
+    if (!p || !persona.trim()) {
+      notifyError("Pick a project and give the bot a persona.");
+      return;
+    }
     try {
       await api.createTeammate(p, {
         persona: persona.trim(),
@@ -680,13 +695,11 @@ export function BotsView() {
     }
   };
 
-  if (all.loading || projects.loading || catalogue.loading || botTasks.loading) {
-    return <LoadingState lines={4} />;
-  }
+  const loading = all.loading || projects.loading || catalogue.loading || botTasks.loading;
+  if (loading) return <LoadingState lines={4} />;
   if (all.error || projects.error || catalogue.error || botTasks.error) {
     return (
-      <div>
-        <button onClick={() => (window.location.hash = "#/")}>← Home</button>
+      <Page>
         <ErrorState
           error={
             all.error ??
@@ -697,7 +710,7 @@ export function BotsView() {
           }
           onRetry={all.reload}
         />
-      </div>
+      </Page>
     );
   }
 
@@ -706,8 +719,8 @@ export function BotsView() {
     (projects.data as { projects: { id: string; repository: string }[] }).projects;
   const provList: Provider[] = (providers.data as { providers: Provider[] } | null)?.providers ?? [];
 
-  const projectOf = (pid2: string) =>
-    projList.find((p) => p.id === pid2)?.repository || pid2.slice(0, 10);
+  const projectOf = (botPid: string) =>
+    projList.find((p) => p.id === botPid)?.repository || botPid.slice(0, 10);
 
   const giveWorkSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -726,7 +739,6 @@ export function BotsView() {
       setGiveWorkCmd("");
       all.reload();
       botTasks.reload();
-      // close modal handled by parent state via giveWorkMateId empty
     } catch (err) {
       notifyError(err);
     } finally {
@@ -734,27 +746,48 @@ export function BotsView() {
     }
   };
 
+  const busyBots = mates.filter((mate) => {
+    const tasks = (botTasks.data as Record<string, Task[]> | undefined)?.[mate.id] ?? [];
+    return tasks.some((t) => t.status === "running");
+  }).length;
+
+  const steps = ["identity", "model", "permissions", "memory", "review"] as const;
+  const stepIndex = steps.indexOf(step);
+
   return (
-    <div>
-      <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
-        <div>
-          <h1>AI fleet</h1>
-          <p className="subtitle">
-            Persistent AI teammates with identity, instructions, model/provider, permissions, memory,
-            and task history. Bots own tasks and run them in isolated workspaces.
-          </p>
-        </div>
-        <div className="row">
-          <button className="primary" onClick={() => setShowCreate(true)}>
-            New bot
-          </button>
-          <button onClick={all.reload}>Refresh</button>
-        </div>
+    <Page>
+      <PageHeader
+        eyebrow="Fleet"
+        title="AI fleet"
+        description="Persistent AI teammates with identity, instructions, model/provider, permissions, memory, and task history. Bots own tasks and run them in isolated workspaces."
+        actions={
+          <>
+            <Button variant="primary" onClick={() => setShowCreate(true)}>
+              New bot
+            </Button>
+            <Button onClick={all.reload}>Refresh</Button>
+          </>
+        }
+      />
+
+      <div className="mb-5 flex flex-wrap gap-1.5">
+        <Badge variant={mates.length > 0 ? "info" : "neutral"}>{mates.length} bots</Badge>
+        <Badge variant={busyBots > 0 ? "ok" : "neutral"}>{busyBots} running</Badge>
       </div>
 
       {showCreate ? (
         <Modal title={`Create bot — ${stepName(step)}`} onClose={() => setShowCreate(false)}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div className="mb-3 flex items-center gap-1.5">
+            {steps.map((s, i) => (
+              <div
+                key={s}
+                className={`h-1 flex-1 rounded-full transition-colors ${
+                  i <= stepIndex ? "bg-[var(--accent)]" : "bg-[var(--surface-3)]"
+                }`}
+              />
+            ))}
+          </div>
+          <div className="flex flex-col gap-3">
             {step === "identity" && (
               <>
                 <Field label="Project (workspace)">
@@ -762,7 +795,7 @@ export function BotsView() {
                     value={pid}
                     onChange={(e) => setPid(e.target.value)}
                     required
-                    style={{ width: 340 }}
+                    className={FORM_INPUT}
                   >
                     <option value="">(select project)</option>
                     {projList.map((p) => (
@@ -778,7 +811,7 @@ export function BotsView() {
                     onChange={(e) => setPersona(e.target.value)}
                     required
                     placeholder="engineer"
-                    style={{ width: 340 }}
+                    className={FORM_INPUT}
                   />
                 </Field>
                 <Field label="Instructions (optional)">
@@ -787,202 +820,132 @@ export function BotsView() {
                     onChange={(e) => setInstructions(e.target.value)}
                     placeholder="You are a careful engineering bot…"
                     rows={3}
-                    style={{ width: 480 }}
+                    className={`${FORM_INPUT} resize-y`}
                   />
                 </Field>
               </>
             )}
             {step === "model" && (
-              <>
-                <Field label="Model provider">
-                  {providers.loading ? (
-                    <LoadingState lines={1} />
-                  ) : providers.error ? (
-                    <div className="error-box" style={{ padding: 8 }}>
-                      {describeError(providers.error)}
-                    </div>
-                  ) : provList.length === 0 ? (
-                    <div className="muted" style={{ fontSize: 12 }}>
-                      No providers configured for this project. Add one in the project's Providers
-                      tab, then attach it here. The bot will work without a provider until one is
-                      attached.
-                    </div>
-                  ) : (
-                    <select
-                      value={providerId}
-                      onChange={(e) => setProviderId(e.target.value)}
-                      style={{ width: 340 }}
-                    >
-                      <option value="">(none — use default)</option>
-                      {provList.map((pr) => (
-                        <option key={pr.id} value={pr.id}>
-                          {pr.name} ({pr.kind})
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                  <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                    Select the model connection this bot uses to think. Leave unset to use the
-                    project's default provider.
-                  </div>
-                </Field>
-              </>
+              <Field label="Model provider">
+                {providers.loading ? (
+                  <LoadingState lines={1} />
+                ) : providers.error ? (
+                  <div className="error-box">{describeError(providers.error)}</div>
+                ) : provList.length === 0 ? (
+                  <p className="text-[var(--step-minus-1)] text-[var(--muted)]">
+                    No providers configured for this project. Add one in the project&apos;s Providers
+                    tab, then attach it here. The bot will work without a provider until one is
+                    attached.
+                  </p>
+                ) : (
+                  <select
+                    value={providerId}
+                    onChange={(e) => setProviderId(e.target.value)}
+                    className={FORM_INPUT}
+                  >
+                    <option value="">(none — use default)</option>
+                    {provList.map((pr) => (
+                      <option key={pr.id} value={pr.id}>
+                        {pr.name} ({pr.kind})
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <p className="text-[var(--step-minus-1)] text-[var(--faint)]">
+                  Select the model connection this bot uses to think. Leave unset to use the
+                  project&apos;s default provider.
+                </p>
+              </Field>
             )}
             {step === "permissions" && (
-              <>
-                <Field label="Tools &amp; permissions">
-                  <p className="muted" style={{ fontSize: 12, marginBottom: 8, maxWidth: 460 }}>
-                    Choose permissions from the server's canonical catalogue. Admin actions
-                    (marked with a shield) require your approval before the bot can use them.
-                  </p>
-                  <div
-                    style={{
-                      maxHeight: 260,
-                      overflowY: "auto" as const,
-                      border: "1px solid var(--border)",
-                      borderRadius: "var(--radius)",
-                      padding: 8,
-                      background: "var(--surface)",
-                    }}
-                  >
-                    {catalogue.permissions.length === 0 ? (
-                      <div className="muted" style={{ fontSize: 12, padding: 6 }}>
-                        No permissions available from the server.
-                      </div>
-                    ) : (
-                      catalogue.permissions.map((perm) => {
-                        const held = selectedPerms.includes(perm.name);
-                        return (
-                          <label
-                            key={perm.name}
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 8,
-                              padding: "4px 6px",
-                              borderRadius: "var(--radius-sm)",
-                              cursor: "pointer",
-                              background: held ? "var(--accent-dim)" : "transparent",
-                              border: held ? "1px solid var(--accent)" : "1px solid transparent",
-                            }}
-                            onClick={() => {
-                              if (held) {
-                                setSelectedPerms(selectedPerms.filter((x) => x !== perm.name));
-                              } else {
-                                setSelectedPerms([...selectedPerms, perm.name]);
-                              }
-                            }}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={held}
-                              readOnly
-                              style={{ width: "auto", margin: 0 }}
-                            />
-                            <div style={{ flex: 1 }}>
-                              <div style={{ fontWeight: 500 }}>{perm.name}</div>
-                              <div className="muted" style={{ fontSize: 11 }}>
-                                {perm.summary}
-                              </div>
-                            </div>
-                            {perm.requires_approval && (
-                              <span style={{ fontSize: 10, marginLeft: 6 }}>
-                                <Badge variant="warn">approval-gated</Badge>
-                              </span>
-                            )}
-                          </label>
-                        );
-                      })
-                    )}
-                  </div>
-                  <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-                    {selectedPerms.length} selected
-                  </div>
-                </Field>
-              </>
+              <Field label="Tools &amp; permissions">
+                <p className="mb-2 max-w-[46ch] text-[var(--step-minus-1)] text-[var(--muted)]">
+                  Choose permissions from the server&apos;s canonical catalogue. Admin actions
+                  (marked with a shield) require your approval before the bot can use them.
+                </p>
+                <div className="max-h-64 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2">
+                  {catalogue.permissions.length === 0 ? (
+                    <p className="p-1.5 text-[var(--step-minus-1)] text-[var(--muted)]">
+                      No permissions available from the server.
+                    </p>
+                  ) : (
+                    catalogue.permissions.map((perm) => {
+                      const held = selectedPerms.includes(perm.name);
+                      return (
+                        <label
+                          key={perm.name}
+                          className={`flex cursor-pointer items-center gap-2.5 rounded-md border px-2.5 py-2 transition-colors ${
+                            held
+                              ? "border-[var(--accent)] bg-[var(--accent-dim)]"
+                              : "border-transparent hover:bg-[var(--surface-2)]"
+                          }`}
+                          onClick={() => {
+                            if (held) {
+                              setSelectedPerms(selectedPerms.filter((x) => x !== perm.name));
+                            } else {
+                              setSelectedPerms([...selectedPerms, perm.name]);
+                            }
+                          }}
+                        >
+                          <input type="checkbox" checked={held} readOnly className="h-3.5 w-3.5" />
+                          <div className="min-w-0 flex-1">
+                            <div className="font-medium text-[var(--text)]">{perm.name}</div>
+                            <div className="text-[var(--step-minus-2)] text-[var(--muted)]">{perm.summary}</div>
+                          </div>
+                          {perm.requires_approval && <Badge variant="warn">approval-gated</Badge>}
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
+                <p className="mt-1.5 text-[var(--step-minus-1)] text-[var(--faint)]">
+                  {selectedPerms.length} selected
+                </p>
+              </Field>
             )}
             {step === "memory" && (
-              <>
-                <Field label="Memory scope">
-                  <select
-                    value={memoryScope}
-                    onChange={(e) => setMemoryScope(e.target.value)}
-                    style={{ width: 240 }}
-                  >
-                    <option value="project">Project</option>
-                    <option value="private">Private (this bot only)</option>
-                  </select>
-                  <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                    Project scope shares memory with other bots and tasks in the workspace. Private
-                    keeps it to this bot alone.
-                  </div>
-                </Field>
-              </>
+              <Field label="Memory scope">
+                <select
+                  value={memoryScope}
+                  onChange={(e) => setMemoryScope(e.target.value)}
+                  className={`${FORM_INPUT} max-w-60`}
+                >
+                  <option value="project">Project</option>
+                  <option value="private">Private (this bot only)</option>
+                </select>
+                <p className="text-[var(--step-minus-1)] text-[var(--faint)]">
+                  Project scope shares memory with other bots and tasks in the workspace. Private
+                  keeps it to this bot alone.
+                </p>
+              </Field>
             )}
             {step === "review" && (
-              <>
-                <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
-                  <div className="row">
-                    <span className="muted">Project</span>
-                    <span>{projList.find((p) => p.id === pid)?.repository || pid}</span>
+              <dl className="flex flex-col gap-1.5 text-[var(--step-minus-1)]">
+                {[
+                  ["Project", projList.find((p) => p.id === pid)?.repository || pid],
+                  ["Persona / name", persona],
+                  ["Instructions", instructions || "—"],
+                  ["Model provider", provList.find((pr) => pr.id === providerId)?.name || "(none — default)"],
+                  ["Permissions", selectedPerms.length > 0 ? selectedPerms.join(", ") : "— none —"],
+                  ["Memory scope", memoryScope],
+                ].map(([key, value]) => (
+                  <div
+                    key={key}
+                    className="flex items-baseline justify-between gap-4 border-b border-[var(--border-dim)] pb-1.5 last:border-0"
+                  >
+                    <dt className="shrink-0 text-[var(--faint)]">{key}</dt>
+                    <dd className="truncate text-right text-[var(--text-soft)]">{value}</dd>
                   </div>
-                  <div className="row">
-                    <span className="muted">Persona / name</span>
-                    <span>{persona}</span>
-                  </div>
-                  {instructions && (
-                    <div className="row">
-                      <span className="muted">Instructions</span>
-                      <span>{instructions}</span>
-                    </div>
-                  )}
-                  <div className="row">
-                    <span className="muted">Model provider</span>
-                    <span>
-                      {provList.find((pr) => pr.id === providerId)?.name || "(none — default)"}
-                    </span>
-                  </div>
-                  <div className="row">
-                    <span className="muted">Permissions</span>
-                    <span>
-                      {selectedPerms.length > 0 ? selectedPerms.join(", ") : "— none —"}
-                    </span>
-                  </div>
-                  <div className="row">
-                    <span className="muted">Memory scope</span>
-                    <span>{memoryScope}</span>
-                  </div>
-                </div>
-              </>
+                ))}
+              </dl>
             )}
 
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 16 }}>
-              {step !== "identity" && (
-                <button onClick={back} style={{ padding: "7px 14px" }}>
-                  Back
-                </button>
-              )}
-              <div style={{ display: "flex", gap: 6 }}>
-                {step === "review" ? (
-                  <button className="primary" onClick={createBot} disabled={!persona.trim()}>
-                    Create bot
-                  </button>
-                ) : (
-                  <button
-                    className="primary"
-                    onClick={next}
-                    disabled={
-                      step === "identity"
-                        ? !pid.trim() || !persona.trim()
-                        : step === "model"
-                        ? false
-                        : false
-                    }
-                  >
-                    Continue
-                  </button>
-                )}
-                <button
+            <div className="mt-2 flex items-center justify-between gap-3">
+              <Button onClick={back} disabled={step === "identity"}>
+                Back
+              </Button>
+              <div className="flex items-center gap-2">
+                <Button
                   onClick={() => {
                     setShowCreate(false);
                     setPid("");
@@ -993,114 +956,107 @@ export function BotsView() {
                     setMemoryScope("project");
                     setStep("identity");
                   }}
-                  style={{ padding: "7px 14px" }}
                 >
                   Cancel
-                </button>
+                </Button>
+                {step === "review" ? (
+                  <Button variant="primary" onClick={() => void createBot()} disabled={!persona.trim()}>
+                    Create bot
+                  </Button>
+                ) : (
+                  <Button
+                    variant="primary"
+                    onClick={next}
+                    disabled={step === "identity" ? (!pid.trim() || !persona.trim()) : false}
+                  >
+                    Continue
+                  </Button>
+                )}
               </div>
             </div>
           </div>
         </Modal>
       ) : null}
 
-      <h2 style={{ marginTop: 24 }}>Bots</h2>
       {mates.length > 0 ? (
-        <table className="data">
-          <thead>
-            <tr>
-              <th>Bot</th>
-              <th>Workspace</th>
-              <th>Status</th>
-              <th>Model</th>
-              <th>Permissions</th>
-              <th>Current task</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {mates.map((mate) => (
-              <tr key={mate.id}>
-                <td>
-                  <div>
-                    <a href={`#/bot/${mate.id}`}>
-                      <strong>{mate.persona || "Unnamed bot"}</strong>
-                    </a>
-                    <div className="muted mono">{mate.id.slice(0, 12)}…</div>
+        <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
+          {mates.map((mate, index) => {
+            const tasks = (botTasks.data as Record<string, Task[]> | undefined)?.[mate.id] ?? [];
+            const active = tasks.filter(
+              (t) => t.status === "pending" || t.status === "running" || t.status === "blocked",
+            );
+            const latest = tasks[0];
+            const busy = active.length > 0;
+            const liveStatus = busy
+              ? "running"
+              : tasks.some((t) => t.status === "ready")
+                ? "ready"
+                : mate.status;
+            return (
+              <div
+                key={mate.id}
+                className={`flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 ${
+                  index > 0 ? "border-t border-[var(--border-dim)]" : ""
+                }`}
+              >
+                <div className="w-44 min-w-0">
+                  <BotChip persona={mate.persona || "Unnamed bot"} id={mate.id} status={liveStatus} />
+                  <div className="mt-0.5 pl-8 text-[var(--step-minus-2)] text-[var(--faint)]">
+                    {projectOf(mate.project_id)}
                   </div>
-                </td>
-                <td className="muted">{projectOf(mate.project_id)}</td>
-                <td>
-                  <StatusBadge status={mate.status} />
-                </td>
-                <td className="muted mono">
-                  {mate.provider_id ? mate.provider_id.slice(0, 10) + "…" : "—"}
-                </td>
-                <td className="muted" style={{ fontSize: 11 }}>
-                  {(mate.permissions ?? []).length > 0
-                    ? (mate.permissions ?? []).join(", ")
-                    : "—"}
-                </td>
-                <td>
-                  {(() => {
-                    const tasks = (botTasks.data as Record<string, Task[]> | undefined)?.[mate.id] ?? [];
-                    const active = tasks.filter(
-                      (t) => t.status === "pending" || t.status === "running" || t.status === "blocked",
-                    );
-                    const latest = tasks[0];
-                    if (!latest) return <span className="muted">—</span>;
-                    const busy = active.length > 0;
-                    return (
-                      <div>
-                        <div className={`muted mono ${busy ? "text-soft" : ""}`} style={{ fontSize: 11 }}>
-                          {latest.description || "Untitled task"}
-                        </div>
-                        <div className="row" style={{ marginTop: 2 }}>
-                          <StatusBadge status={latest.status} />
-                          {busy ? (
-                            <span className="muted" style={{ fontSize: 10, marginLeft: 6 }}>
-                              active
-                            </span>
-                          ) : null}
-                        </div>
+                </div>
+                <StatusDot
+                  status={liveStatus}
+                  label={liveStatus === "running" ? "working now" : liveStatus}
+                  pulse={liveStatus === "running"}
+                />
+                <span className="mono hidden max-w-[90px] truncate text-[var(--step-minus-2)] text-[var(--faint)] lg:inline">
+                  {mate.provider_id ? mate.provider_id.slice(0, 10) + "…" : "no model"}
+                </span>
+                <span className="flex-1 min-w-0">
+                  {latest ? (
+                    <>
+                      <button
+                        className="block w-full truncate text-left text-[var(--step-minus-1)] text-[var(--text-soft)] hover:underline"
+                        title={latest.description}
+                        onClick={() => openTask(latest.project_id, latest.id)}
+                      >
+                        {latest.description || "Untitled task"}
+                      </button>
+                      <div className="mt-0.5 flex items-center gap-2">
+                        <StatusBadge status={latest.status} />
+                        {busy ? <span className="text-[var(--step-minus-2)] text-[var(--info)]">+{active.length - 1} more</span> : null}
                       </div>
-                    );
-                  })()}
-                </td>
-                <td>
-                  <div className="row" style={{ gap: 6 }}>
-                    <button
-                      className="primary"
-                      onClick={() => {
-                        window.location.hash = `#/bot/${mate.id}`;
-                      }}
-                      style={{ padding: "4px 10px", fontSize: 12 }}
-                    >
-                      Open
-                    </button>
-                    <button
-                      className="button"
-                      onClick={() => {
-                        setGiveWorkMateId(mate.id);
-                      }}
-                      disabled={mate.status !== "active"}
-                      style={{ padding: "4px 10px", fontSize: 12, opacity: mate.status !== "active" ? 0.5 : 1 }}
-                      title={mate.status !== "active" ? "Only active bots can be given work" : "Give this bot a task"}
-                    >
-                      Give work
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                    </>
+                  ) : (
+                    <span className="text-[var(--step-minus-1)] text-[var(--faint)]">—</span>
+                  )}
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <Button
+                    onClick={() => {
+                      setGiveWorkMateId(mate.id);
+                    }}
+                    disabled={mate.status !== "active"}
+                    title={mate.status !== "active" ? "Only active bots can be given work" : "Give this bot a task"}
+                  >
+                    Give work
+                  </Button>
+                  <Button variant="ghost" onClick={() => openBot(mate.id)}>
+                    Open →
+                  </Button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       ) : (
         <EmptyState
           title="No bots yet"
           action={
-            <button className="button primary" onClick={() => setShowCreate(true)}>
+            <Button variant="primary" onClick={() => setShowCreate(true)}>
               Create your first bot
-            </button>
+            </Button>
           }
           hint="Bots are persistent AI teammates. Give one a persona, attach a model, and assign it tasks. It will run work in an isolated workspace and keep its own memory."
         />
@@ -1111,14 +1067,15 @@ export function BotsView() {
           title={`Give work to ${mates.find((m) => m.id === giveWorkMateId)?.persona || "bot"}`}
           onClose={() => setGiveWorkMateId("")}
         >
-          <form onSubmit={giveWorkSubmit} className="row" style={{ flexDirection: "column", gap: 10 }}>
+          <form onSubmit={giveWorkSubmit} className="flex flex-col gap-2">
             <Field label="Work to do">
               <textarea
                 value={giveWorkDesc}
                 onChange={(e) => setGiveWorkDesc(e.target.value)}
                 placeholder="e.g. review the login flow and add tests"
                 rows={3}
-                style={{ width: 460 }}
+                required
+                className={`${FORM_INPUT} resize-y`}
               />
             </Field>
             <Field label="Command (optional)">
@@ -1126,31 +1083,31 @@ export function BotsView() {
                 value={giveWorkCmd}
                 onChange={(e) => setGiveWorkCmd(e.target.value)}
                 placeholder="e.g. npm test"
-                style={{ width: 460 }}
+                className={FORM_INPUT}
               />
             </Field>
-            <div className="row" style={{ gap: 8 }}>
-              <button className="primary" type="submit" disabled={giveWorkBusy || !giveWorkDesc.trim()}>
-                {giveWorkBusy ? "Creating…" : "Create task"}
-              </button>
-              <button type="button" onClick={() => setGiveWorkMateId("")} style={{ padding: "7px 14px" }}>
+            <div className="mt-1 flex justify-end gap-2">
+              <Button type="button" onClick={() => setGiveWorkMateId("")}>
                 Cancel
-              </button>
+              </Button>
+              <Button variant="primary" type="submit" disabled={giveWorkBusy || !giveWorkDesc.trim()}>
+                {giveWorkBusy ? "Creating…" : "Create task"}
+              </Button>
             </div>
           </form>
         </Modal>
       ) : null}
-    </div>
+    </Page>
   );
 }
 
 function stepName(s: string): string {
   const names: Record<string, string> = {
-    identity: "Identity &amp; role",
+    identity: "Identity & role",
     model: "Model provider",
-    permissions: "Tools &amp; permissions",
-    memory: "Memory &amp; scope",
-    review: "Review &amp; save",
+    permissions: "Tools & permissions",
+    memory: "Memory & scope",
+    review: "Review & save",
   };
   return names[s] ?? s;
 }

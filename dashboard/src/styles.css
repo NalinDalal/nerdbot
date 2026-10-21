@@ -258,6 +258,46 @@ a:hover {
   .search-input {
     @apply w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-[var(--step-0)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)] h-8;
   }
+  .log {
+    @apply overflow-x-auto whitespace-pre rounded-lg bg-[var(--surface-2)] px-3 py-2 font-mono text-[var(--step-minus-1)] leading-relaxed text-[var(--text-soft)];
+  }
+  .pill {
+    @apply inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-0.5 text-[var(--step-minus-2)] font-medium text-[var(--text-soft)];
+  }
+  .muted {
+    @apply text-[var(--muted)];
+  }
+  /* Bare <button className="primary|danger"> (legacy files without .button). */
+  .primary {
+    @apply rounded-md border border-[var(--accent)] bg-[var(--accent)] px-3 py-1.5 text-[var(--step-minus-1)] font-semibold text-[var(--text-inverse)] transition-colors hover:border-[var(--accent-hover)] hover:bg-[var(--accent-hover)] disabled:pointer-events-none disabled:opacity-50;
+  }
+  .danger {
+    @apply rounded-md border border-[var(--danger)] bg-transparent px-3 py-1.5 text-[var(--step-minus-1)] font-medium text-[var(--danger)] transition-colors hover:bg-[var(--danger-dim)] disabled:pointer-events-none disabled:opacity-50;
+  }
+  .chip {
+    @apply inline-flex items-center rounded-full bg-[var(--surface-3)] px-2 py-0.5 text-[var(--step-minus-2)] text-[var(--text-soft)];
+  }
+  .badge {
+    @apply inline-flex items-center rounded-full bg-[var(--surface-3)] px-2 py-0.5 text-[var(--step-minus-2)] font-medium text-[var(--muted)];
+  }
+  .table-wrap {
+    @apply overflow-x-auto;
+  }
+  .table {
+    @apply w-full;
+  }
+  .table th {
+    @apply border-b border-[var(--border)] px-3 py-2 text-left text-[var(--step-minus-1)] font-medium uppercase tracking-wide text-[var(--faint)];
+  }
+  .table td {
+    @apply border-b border-[var(--border-dim)] px-3 py-2.5 align-top;
+  }
+  .table tbody tr:hover td {
+    @apply bg-[var(--surface-2)];
+  }
+  .select {
+    @apply rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-[var(--step-minus-1)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)];
+  }
 }
 
 /* ===== Skeleton (motion) ===== */
