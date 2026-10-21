@@ -249,5 +249,7 @@ def test_loop_fetch_tool_end_to_end(tmp_path) -> None:
     )
     assert result is not None and result.exit_code == 0 and "rate is 7" in result.output
     roles = [t["role"] for t in adapter.last_transcript]
-    assert roles == ["user", "assistant", "tool", "assistant"]
+    # schedule_run now always assembles an agent context, so the transcript
+    # opens with the system message before the user instruction.
+    assert roles == ["system", "user", "assistant", "tool", "assistant"]
     conn.close()

@@ -39,7 +39,7 @@ def test_phase1_slice_end_to_end(app_client: TestClient) -> None:
             "persona": "coder",
             "instructions": "write tested patches",
             "capabilities": ["code"],
-            "permissions": ["workspace.write"],
+            "permissions": ["task.create"],
         },
         headers=AUTH,
     )

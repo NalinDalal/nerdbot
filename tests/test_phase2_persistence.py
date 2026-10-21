@@ -65,12 +65,12 @@ def test_teammate_lifecycle(app_client: TestClient) -> None:
 
     r = app_client.patch(
         f"/teammates/{t1}",
-        json={"persona": "senior-coder", "tool_policy": {"shell": "ask"}},
+        json={"persona": "senior-coder", "tool_policy": {"board.delete": "ask"}},
         headers=AUTH,
     )
     assert r.status_code == 200, r.text
     assert r.json()["persona"] == "senior-coder"
-    assert r.json()["tool_policy"] == {"shell": "ask"}
+    assert r.json()["tool_policy"] == {"board.delete": "ask"}
 
     r = app_client.post(f"/teammates/{t2}/disable", headers=AUTH)
     assert r.status_code == 200 and r.json()["status"] == "disabled"
