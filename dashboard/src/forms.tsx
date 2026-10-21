@@ -2,7 +2,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { describeError } from "./api";
 import { notifyError } from "./app";
-import { Field } from "./components";
+import { Button, ERROR_BOX, Field } from "./components";
 
 export interface FormField {
   name: string;
@@ -69,7 +69,7 @@ export function EntityForm({
   return (
     <form onSubmit={submit}>
       {failed ? (
-        <div className="error-box" role="alert">
+        <div className={ERROR_BOX} role="alert">
           {failed}
         </div>
       ) : null}
@@ -110,9 +110,9 @@ export function EntityForm({
           ) : null}
         </Field>
       ))}
-      <button className="button primary mt-2" type="submit" disabled={submitting}>
+      <Button variant="primary" type="submit" disabled={submitting} className="mt-2">
         {submitting ? "Saving…" : submitLabel}
-      </button>
+      </Button>
     </form>
   );
 }

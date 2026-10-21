@@ -18,6 +18,7 @@ import {
   useAsync,
   usePermissionCatalogue,
   Badge,
+  ERROR_BOX,
   FORM_INPUT,
   Field,
 } from "./components";
@@ -438,7 +439,7 @@ function BotAccess({ mate, boards }: { mate: Teammate; boards: Board[] }) {
       </div>
 
       <div className="mt-3">
-        <div className="section-label mb-1.5 text-[var(--step-minus-2)] uppercase tracking-[0.14em] text-[var(--faint)]">
+        <div className="mb-1.5 text-[var(--step-minus-2)] font-medium uppercase tracking-[0.14em] text-[var(--faint)]">
           Granted ({granted.length})
         </div>
         {granted.length > 0 ? (
@@ -828,7 +829,7 @@ export function BotsView() {
                 {providers.loading ? (
                   <LoadingState lines={1} />
                 ) : providers.error ? (
-                  <div className="error-box">{describeError(providers.error)}</div>
+                  <div className={ERROR_BOX}>{describeError(providers.error)}</div>
                 ) : provList.length === 0 ? (
                   <p className="text-[var(--step-minus-1)] text-[var(--muted)]">
                     No providers configured for this project. Add one in the project&apos;s Providers
