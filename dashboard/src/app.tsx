@@ -84,9 +84,13 @@ export default function App() {
   }
 
   const nav = (href: string, label: string, active: boolean) => (
-    <a key={href} href={href} className={active ? "active" : ""}>
+    <button
+      key={href}
+      className={`nav-item${active ? " active" : ""}`}
+      onClick={() => navigate(href)}
+    >
       {label}
-    </a>
+    </button>
   );
 
   const isChatRoute = route.name === "home" || route.name === "chat";
@@ -94,82 +98,81 @@ export default function App() {
   return (
     <div className="layout">
       <aside className="sidebar">
-        <div className="brand">
-          <strong>NerdBot</strong>
-          <div className="brand-sub">personal assistant</div>
-        </div>
+        <div className="sidebar-inner">
+          <div className="brand">
+            <strong>NerdBot</strong>
+            <div className="brand-sub">personal assistant</div>
+          </div>
 
-        <div className="sidebar-section">
-          <button
-            className="primary"
-            onClick={openHome}
-            aria-label="Start a new conversation"
-          >
-            New chat
-          </button>
-          <div className="field" style={{ marginTop: 10, marginBottom: 8 }}>
-            <input
-              className="search-input"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search conversations"
-              aria-label="Search conversations"
-            />
+          <div className="sidebar-section">
+            <button
+              className="button primary"
+              onClick={openHome}
+              aria-label="Start a new conversation"
+            >
+              New chat
+            </button>
+            <div className="field" style={{ marginTop: 14, marginBottom: 8 }}>
+              <input
+                className="search-input"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search conversations"
+                aria-label="Search conversations"
+              />
+            </div>
+            <div className="sidebar-section-label">Recent</div>
+            <div className="recent-list">
+              {threads.loading ? (
+                <LoadingState lines={2} />
+              ) : threads.error ? (
+                <div className="error-box" style={{ padding: 8, fontSize: 12 }}>
+                  {apiDescribeError(threads.error)}
+                </div>
+              ) : (threads.data?.threads ?? []).length === 0 ? (
+                <div className="muted" style={{ fontSize: 12 }}>No conversations yet</div>
+              ) : null}
+              {(threads.data?.threads ?? [])
+                .filter((t) => !search || t.title.toLowerCase().includes(search.toLowerCase()))
+                .slice(0, 8)
+                .map((thread) => (
+                <div
+                  key={thread.id}
+                  className="recent-item"
+                  onClick={() => {
+                    setActiveThread(thread.id);
+                    navigate("#/");
+                  }}
+                >
+                  <div className="recent-title">{thread.title || "Untitled"}</div>
+                  <div className="recent-meta mono muted">{thread.id.slice(0, 10)}…</div>
+                </div>
+              ))}
+            </div>
           </div>
-          <div className="muted" style={{ fontSize: 11, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.05em" }}>
-            Recent
-          </div>
-          <div className="recent-list">
-            {threads.loading ? (
-              <LoadingState lines={2} />
-            ) : threads.error ? (
-              <div className="error-box" style={{ padding: 8, fontSize: 12 }}>
-                {apiDescribeError(threads.error)}
-              </div>
-            ) : (threads.data?.threads ?? []).length === 0 ? (
-              <div className="muted" style={{ fontSize: 12 }}>No conversations yet</div>
-            ) : null}
-            {(threads.data?.threads ?? [])
-              .filter((t) => !search || t.title.toLowerCase().includes(search.toLowerCase()))
-              .slice(0, 8)
-              .map((thread) => (
-              <div
-                key={thread.id}
-                className="recent-item"
-                onClick={() => {
-                  setActiveThread(thread.id);
-                  navigate("#/");
-                }}
-              >
-                <div className="recent-title">{thread.title || "Untitled"}</div>
-                <div className="recent-meta mono muted">{thread.id.slice(0, 10)}…</div>
-              </div>
-            ))}
-          </div>
-        </div>
 
-        <div className="sidebar-section">
-          <div className="muted" style={{ fontSize: 11, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.05em" }}>
-            Workspace
+          <div className="sidebar-section">
+            <div className="sidebar-section-label">Workspace</div>
+            {nav("#/", "Home", route.name === "home")}
+            {nav("#/projects", "Projects", route.name === "projects" || route.name === "project")}
+            {nav("#/bots", "Bots", route.name === "bots" || route.name === "bot")}
+            {nav("#/boards", "Boards", route.name === "boards" || route.name === "board")}
+            {nav("#/teams", "Teams", route.name === "teams" || route.name === "team")}
+            {nav("#/settings", "Settings", route.name === "settings")}
           </div>
-          {nav("#/", "Home", route.name === "home")}
-          {nav("#/projects", "Projects", route.name === "projects" || route.name === "project")}
-          {nav("#/bots", "Bots", route.name === "bots" || route.name === "bot")}
-          {nav("#/boards", "Boards", route.name === "boards" || route.name === "board")}
-          {nav("#/teams", "Teams", route.name === "teams" || route.name === "team")}
-          {nav("#/settings", "Settings", route.name === "settings")}
-        </div>
 
-        <div style={{ padding: "16px 12px", marginTop: "auto" }}>
-          <button
-            onClick={() => {
-              setSession(null);
-              setConnected(false);
-              navigate("#/");
-            }}
-          >
-            Disconnect
-          </button>
+          <div style={{ padding: "16px 12px", marginTop: "auto" }}>
+            <button
+              className="button"
+              onClick={() => {
+                setSession(null);
+                setConnected(false);
+                navigate("#/");
+              }}
+            >
+              Disconnect
+            </button>
+          </div>
         </div>
       </aside>
 

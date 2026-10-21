@@ -25,11 +25,17 @@ export function ConversationView({
   const home = useAsync(() => api.getHome(), []);
   const resolvedProjectId = projectId ?? (home.data?.id ?? "");
   const threads = useAsync(
-    () => (resolvedProjectId ? api.listThreads(resolvedProjectId) : Promise.resolve({ threads: [] })),
+    () =>
+      resolvedProjectId
+        ? api.listThreads(resolvedProjectId)
+        : Promise.resolve({ threads: [] }),
     [resolvedProjectId],
   );
   const providers = useAsync(
-    () => (resolvedProjectId ? api.listProviders(resolvedProjectId) : Promise.resolve({ providers: [] })),
+    () =>
+      resolvedProjectId
+        ? api.listProviders(resolvedProjectId)
+        : Promise.resolve({ providers: [] }),
     [resolvedProjectId],
   );
   const [activeId, setActiveId] = useState<string | null>(initialThreadId ?? null);
@@ -37,7 +43,9 @@ export function ConversationView({
   const [showNew, setShowNew] = useState(false);
 
   useEffect(() => {
-    if (activeId) onSetActiveThread?.(activeId);
+    if (activeId) {
+      onSetActiveThread?.(activeId);
+    }
   }, [activeId, onSetActiveThread]);
 
   if (!resolvedProjectId) {
@@ -61,7 +69,7 @@ export function ConversationView({
           </p>
         </div>
         <div className="header-actions">
-          <button className="primary" onClick={() => setShowNew(true)} disabled={!home.data}>
+          <button className="button primary" onClick={() => setShowNew(true)} disabled={!home.data}>
             New chat
           </button>
         </div>
@@ -77,14 +85,12 @@ export function ConversationView({
               aria-label="Search conversations"
             />
           </div>
-          <div className="muted" style={{ fontSize: 11, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.05em" }}>
-            Recent conversations
-          </div>
+          <div className="sidebar-section-label">Recent conversations</div>
           <div className="recent-list">
             {threads.loading ? (
               <LoadingState lines={3} />
             ) : threads.error ? (
-              <div className="error-box" style={{ padding: 8, fontSize: 12 }}>
+              <div className="error-box" style={{ padding: 8 }}>
                 {describeError(threads.error)}
               </div>
             ) : filtered.length === 0 ? (
@@ -101,9 +107,7 @@ export function ConversationView({
                 title={thread.title || "Untitled"}
               >
                 <div className="thread-title">{thread.title || "Untitled"}</div>
-                <div className="thread-meta mono muted">
-                  {thread.id.slice(0, 12)}…
-                </div>
+                <div className="thread-meta mono muted">{thread.id.slice(0, 12)}…</div>
               </div>
             ))}
           </div>
@@ -121,7 +125,7 @@ export function ConversationView({
               title="Select a conversation"
               hint="Pick a recent chat or start a new one."
               action={
-                <button className="primary" onClick={() => setShowNew(true)}>
+                <button className="button primary" onClick={() => setShowNew(true)}>
                   New chat
                 </button>
               }
@@ -159,7 +163,8 @@ function NewThreadModal({
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const create = async () => {
+  const create = async (e: React.FormEvent) => {
+    e.preventDefault();
     if (!title.trim()) return;
     setBusy(true);
     try {
@@ -174,7 +179,7 @@ function NewThreadModal({
 
   return (
     <Modal title="New chat" onClose={onClose}>
-      <form onSubmit={(e) => { e.preventDefault(); create(); }} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <form onSubmit={create} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         <Field label="Title">
           <input
             value={title}
@@ -184,11 +189,11 @@ function NewThreadModal({
           />
         </Field>
         <Field label="Model provider">
-          <select value="__default__" disabled style={{ width: 320 }}>
+          <select className="button" value="__default__" disabled style={{ width: 320 }}>
             <option value="__default__">Default model</option>
-            {providers.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} ({p.kind})
+            {providers.map((provider) => (
+              <option key={provider.id} value={provider.id}>
+                {provider.name} ({provider.kind})
               </option>
             ))}
           </select>
@@ -197,8 +202,10 @@ function NewThreadModal({
           </div>
         </Field>
         <div className="row" style={{ justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
-          <button onClick={onClose}>Cancel</button>
-          <button className="primary" type="submit" disabled={busy || !title.trim()}>
+          <button className="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="button primary" type="submit" disabled={busy || !title.trim()}>
             {busy ? "Creating…" : "Start chat"}
           </button>
         </div>
@@ -225,7 +232,7 @@ function ThreadPane({
   const [useStream, setUseStream] = useState(true);
   const [retryFrom, setRetryFrom] = useState<string | null>(null);
   const [execView, setExecView] = useState<{ kind: "task"; taskId: string } | null>(null);
-  const [contextPanel, setContextPanel] = useState<{ kind: "files" | "bots" } | null>(null);
+  const [contextPanel, setContextPanel] = useState<"files" | "bots" | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<Array<{ name: string; content: string }>>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -241,7 +248,9 @@ function ThreadPane({
     try {
       let fullContent = content;
       if (attachedFiles.length > 0) {
-        const fileText = attachedFiles.map((f) => `\n\n[Attachment: ${f.name}]\n${f.content}`).join("");
+        const fileText = attachedFiles
+          .map((f) => `\n\n[Attachment: ${f.name}]\n${f.content}`)
+          .join("");
         fullContent = content + fileText;
         setAttachedFiles([]);
       }
@@ -275,7 +284,8 @@ function ThreadPane({
     setBusy(true);
     setStreaming("");
     try {
-      const content = view.data.messages.find((m) => m.id === target)?.content ?? "";
+      const content =
+        view.data.messages.find((m) => m.id === target)?.content ?? "";
       if (useStream) {
         await api.sendChatStream(threadId, content, (chunk) => {
           setStreaming((prev) => prev + chunk);
@@ -295,7 +305,9 @@ function ThreadPane({
 
   const switchProvider = async (id: string) => {
     try {
-      await api.updateThread(threadId, { provider_id: id === "__default__" ? null : id });
+      await api.updateThread(threadId, {
+        provider_id: id === "__default__" ? null : id,
+      });
       onReload();
       view.reload();
     } catch (err) {
@@ -335,7 +347,7 @@ function ThreadPane({
     }
   };
 
-  const openContext = (type: { kind: "files" | "bots" }) => {
+  const openContext = (type: "files" | "bots") => {
     setContextPanel(type);
   };
 
@@ -357,7 +369,10 @@ function ThreadPane({
         new Promise((resolve) => {
           const reader = new FileReader();
           reader.onload = () => {
-            setAttachedFiles((prev) => [...prev, { name: file.name, content: String(reader.result ?? "") }]);
+            setAttachedFiles((prev) => [
+              ...prev,
+              { name: file.name, content: String(reader.result ?? "") },
+            ]);
             resolve();
           };
           reader.onerror = () => resolve();
@@ -379,7 +394,9 @@ function ThreadPane({
     <div className="thread-pane">
       <div className="thread-header">
         <div>
-          <strong className="thread-title">{view.data?.thread.title || "Untitled"}</strong>
+          <strong className="thread-title-page">
+            {view.data?.thread.title || "Untitled"}
+          </strong>
           <div className="mono muted" style={{ fontSize: 11, marginTop: 2 }}>
             {view.data?.thread.id.slice(0, 14)}…
             {view.data?.thread.provider_id ? ` · ${view.data.thread.provider_id.slice(0, 10)}…` : ""}
@@ -390,6 +407,7 @@ function ThreadPane({
             value={providerId}
             onChange={(e) => void switchProvider(e.target.value)}
             aria-label="Model provider"
+            className="button"
             style={{ fontSize: 12, padding: "4px 8px" }}
           >
             <option value="__default__">Default model</option>
@@ -408,21 +426,32 @@ function ThreadPane({
             />
             Stream
           </label>
-          <button onClick={view.reload} style={{ fontSize: 12, padding: "4px 10px", marginLeft: 6 }}>
+          <button
+            className="button"
+            onClick={view.reload}
+            style={{ fontSize: 12, padding: "4px 10px", marginLeft: 6 }}
+          >
             Refresh
           </button>
-          <button onClick={summarize} disabled={busy} style={{ fontSize: 12, padding: "4px 10px", marginLeft: 6 }}>
+          <button
+            className="button"
+            onClick={summarize}
+            disabled={busy}
+            style={{ fontSize: 12, padding: "4px 10px", marginLeft: 6 }}
+          >
             Summarize
           </button>
           <button
-            onClick={() => openContext({ kind: "files" })}
+            className="button"
+            onClick={() => openContext("files")}
             title="Project files"
             style={{ fontSize: 12, padding: "4px 10px", marginLeft: 6 }}
           >
             Files
           </button>
           <button
-            onClick={() => openContext({ kind: "bots" })}
+            className="button"
+            onClick={() => openContext("bots")}
             title="Teammates / bots"
             style={{ fontSize: 12, padding: "4px 10px", marginLeft: 6 }}
           >
@@ -433,16 +462,17 @@ function ThreadPane({
 
       {view.data?.thread.summary ? (
         <div className="summary-card">
-          <div className="muted" style={{ fontSize: 11, marginBottom: 4 }}>Summary (recalled by other threads)</div>
-          <div style={{ whiteSpace: "pre-wrap", fontSize: 13 }}>{view.data.thread.summary}</div>
+          <div className="muted" style={{ fontSize: 11, marginBottom: 4 }}>
+            Summary (recalled by other threads)
+          </div>
+          <div style={{ whiteSpace: "pre-wrap", fontSize: 13 }}>
+            {view.data.thread.summary}
+          </div>
         </div>
       ) : null}
 
       {execView && (
-        <ExecutionView
-          state={execView}
-          onClose={closeExec}
-        />
+        <ExecutionView state={execView} onClose={closeExec} />
       )}
 
       <div className="message-list">
@@ -491,10 +521,12 @@ function ThreadPane({
               <div className="attached-list">
                 {attachedFiles.map((f, i) => (
                   <div key={i} className="attached-item">
-                    <span className="mono muted" style={{ fontSize: 11 }}>{f.name}</span>
+                    <span className="mono muted" style={{ fontSize: 11 }}>
+                      {f.name}
+                    </span>
                     <button
                       onClick={() => setAttachedFiles(attachedFiles.filter((_, j) => j !== i))}
-                      className="danger"
+                      className="button danger"
                       style={{ padding: "2px 6px", fontSize: 11, marginLeft: 4 }}
                     >
                       remove
@@ -506,9 +538,9 @@ function ThreadPane({
             <div className="composer-left-actions">
               <button
                 type="button"
-                onClick={() => openContext({ kind: "files" })}
+                onClick={() => openContext("files")}
                 title="Attach project files"
-                style={{ padding: "6px 10px", fontSize: 12, border: "1px solid var(--border)", background: "transparent", color: "var(--text)", borderRadius: "6px", cursor: "pointer" }}
+                className="button"
               >
                 Files
               </button>
@@ -516,7 +548,8 @@ function ThreadPane({
                 type="button"
                 onClick={handleAttachFile}
                 title="Attach local file"
-                style={{ padding: "6px 10px", fontSize: 12, border: "1px solid var(--border)", background: "transparent", color: "var(--text)", borderRadius: "6px", cursor: "pointer", marginLeft: 6 }}
+                className="button"
+                style={{ marginLeft: 6 }}
               >
                 Attach
               </button>
@@ -531,18 +564,18 @@ function ThreadPane({
           </div>
           <div className="composer-actions">
             {busy ? (
-              <button className="danger" onClick={stop} title="Stop streaming">
+              <button className="button danger" onClick={stop} title="Stop streaming">
                 Stop
               </button>
             ) : (
               <>
                 {retryFrom ? (
-                  <button className="" onClick={retry} title="Retry last message">
+                  <button className="button" onClick={retry} title="Retry last message">
                     Retry
                   </button>
                 ) : null}
                 <button
-                  className="primary"
+                  className="button primary"
                   type="submit"
                   disabled={!draft.trim() || busy}
                 >
@@ -551,10 +584,9 @@ function ThreadPane({
               </>
             )}
             <button
-              className=""
+              className="button"
               onClick={createTaskFromChat}
               title="Create a task from this conversation"
-              style={{ padding: "6px 10px", fontSize: 12 }}
             >
               Task
             </button>
@@ -564,7 +596,7 @@ function ThreadPane({
 
       {contextPanel && (
         <ContextPanel
-          type={contextPanel.kind}
+          type={contextPanel}
           projectId={projectId}
           onClose={closeContext}
           onSelectBot={handleBotSelect}
@@ -574,23 +606,17 @@ function ThreadPane({
   );
 }
 
-function Message({
-  message,
-  streaming = false,
-}: {
-  message: ChatMessage;
-  streaming?: boolean;
-}) {
+function Message({ message, streaming = false }: { message: ChatMessage; streaming?: boolean }) {
   const isUser = message.role === "user";
   return (
     <div className={`message ${isUser ? "message-user" : "message-assistant"}${streaming ? " streaming" : ""}`}>
       <div className="message-meta">
         <span className="mono muted" style={{ fontSize: 11 }}>{message.role}</span>
-        {streaming ? <span className="mono muted" style={{ fontSize: 11, marginLeft: 6 }}>streaming…</span> : null}
+        {streaming ? (
+          <span className="mono muted" style={{ fontSize: 11, marginLeft: 6 }}>streaming…</span>
+        ) : null}
       </div>
-      <div className="message-content" style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-        {message.content}
-      </div>
+      <div className="message-content">{message.content}</div>
     </div>
   );
 }
@@ -606,7 +632,12 @@ function ExecutionView({
   const [poll, setPoll] = useState(0);
 
   useEffect(() => {
-    if (!view.data || (view.data.task.status !== "done" && view.data.task.status !== "failed" && view.data.task.status !== "blocked")) {
+    if (
+      !view.data ||
+      (view.data.task.status !== "done" &&
+        view.data.task.status !== "failed" &&
+        view.data.task.status !== "blocked")
+    ) {
       const t = setTimeout(() => setPoll((n) => n + 1), 3000);
       return () => clearTimeout(t);
     }
@@ -620,15 +651,21 @@ function ExecutionView({
   return (
     <div className="execution-view">
       <div className="execution-header">
-        <span className="mono muted" style={{ fontSize: 11 }}>Execution</span>
-        <button onClick={onClose} className="muted" style={{ fontSize: 11, padding: 0, background: "none", border: "none", cursor: "pointer" }}>
+        <span className="execution-label">Execution</span>
+        <button
+          className="button"
+          onClick={onClose}
+          style={{ fontSize: 11, padding: 0, background: "none", border: "none", cursor: "pointer" }}
+        >
           Close
         </button>
       </div>
       <div className="execution-body">
         <div className="execution-task">
           <strong>Task</strong>
-          <div className="mono muted" style={{ fontSize: 12 }}>{task?.description || ""}</div>
+          <div className="mono muted" style={{ fontSize: 12 }}>
+            {task?.description || ""}
+          </div>
           <div style={{ marginTop: 6 }}>
             <StatusBadge status={task?.status || "pending"} />
             {latestRun && (
@@ -641,9 +678,13 @@ function ExecutionView({
         {latestRun && (
           <div className="execution-run">
             <strong>Last run</strong>
-            <div className="mono muted" style={{ fontSize: 12 }}>{latestRun.command || "(no command)"}</div>
+            <div className="mono muted" style={{ fontSize: 12 }}>
+              {latestRun.command || "(no command)"}
+            </div>
             <div style={{ marginTop: 4 }}>
-              <span className="mono muted" style={{ fontSize: 11 }}>{latestRun.output_excerpt?.slice(0, 200) || "(no output)"}</span>
+              <span className="mono muted" style={{ fontSize: 11 }}>
+                {latestRun.output_excerpt?.slice(0, 200) || "(no output)"}
+              </span>
             </div>
           </div>
         )}
@@ -653,16 +694,16 @@ function ExecutionView({
             <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
               {artifacts.map((art) => (
                 <div key={art.id} className="artifact-item">
-                  <div className="mono muted" style={{ fontSize: 12 }}>{art.type} · {art.location}</div>
+                  <div className="mono muted" style={{ fontSize: 12 }}>
+                    {art.type} · {art.location}
+                  </div>
                   <div style={{ marginTop: 4 }}>{art.summary}</div>
                 </div>
               ))}
             </div>
           </div>
         )}
-        {!task && view.loading ? (
-          <LoadingState lines={2} />
-        ) : null}
+        {!task && view.loading ? <LoadingState lines={2} /> : null}
       </div>
     </div>
   );
@@ -680,7 +721,10 @@ function ContextPanel({
   onSelectBot: (teammateId: string) => void;
 }) {
   const data = useAsync(
-    () => (type === "bots" ? api.listTeammates(projectId) : Promise.resolve({ teammates: [] })),
+    () =>
+      type === "bots"
+        ? api.listTeammates(projectId)
+        : Promise.resolve({ teammates: [] }),
     [projectId, type],
   );
 
@@ -688,10 +732,14 @@ function ContextPanel({
     <div className="context-panel-backdrop" onClick={onClose}>
       <div className="context-panel" onClick={(e) => e.stopPropagation()}>
         <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
-          <strong>{type === "bots" ? "Teammates / bots" : "Project files"}</strong>
-          <button onClick={onClose} aria-label="Close">Close</button>
+          <strong className="context-panel-title">
+            {type === "bots" ? "Teammates / bots" : "Project files"}
+          </strong>
+          <button className="button" onClick={onClose} aria-label="Close" style={{ padding: 0, background: "none", border: "none", cursor: "pointer", fontSize: 12 }}>
+            Close
+          </button>
         </div>
-        {type === "bots" && data ? (
+        {type === "bots" ? (
           data.loading ? (
             <LoadingState lines={3} />
           ) : data.error ? (
@@ -702,11 +750,13 @@ function ContextPanel({
                 <div key={mate.id} className="context-item">
                   <div>
                     <div style={{ fontWeight: 600 }}>{mate.persona || mate.id}</div>
-                    <div className="mono muted" style={{ fontSize: 11 }}>{mate.instructions?.slice(0, 80) || ""}</div>
+                    <div className="mono muted" style={{ fontSize: 11 }}>
+                      {mate.instructions?.slice(0, 80) || ""}
+                    </div>
                   </div>
                   <button
                     onClick={() => onSelectBot(mate.id)}
-                    className="primary"
+                    className="button primary"
                     style={{ padding: "4px 10px", fontSize: 12 }}
                   >
                     Select
@@ -715,15 +765,15 @@ function ContextPanel({
               ))}
             </div>
           )
-        ) : null}
-        {type === "files" && (
+        ) : (
           <div>
             <div className="muted" style={{ fontSize: 11, marginBottom: 6 }}>
               Attach files from an active task workspace. Open a task from the execution view first.
             </div>
             <button
+              className="button"
               onClick={onClose}
-              style={{ padding: "6px 12px", fontSize: 12, border: "1px solid var(--border)", background: "transparent", color: "var(--text)", borderRadius: "6px", cursor: "pointer" }}
+              style={{ padding: "6px 12px", fontSize: 12 }}
             >
               Done
             </button>
@@ -733,4 +783,3 @@ function ContextPanel({
     </div>
   );
 }
-

@@ -1,6 +1,6 @@
-# NerdBot — Chat-first personal AI workspace
+# NerdBot: Chat-first personal AI workspace
 
-NerdBot is a self-hosted, single-owner personal AI workspace. Conversation is the primary entry point. Open it, start talking, and your existing workspace capabilities — persistent teammates (bots), projects, tasks, isolated Git workspaces, model providers, approvals, and bot-to-bot delegation — are all available from the same screen.
+NerdBot is a self-hosted, single-owner personal AI workspace. Conversation is the primary entry point. Open it, start talking, and your existing workspace capabilities: persistent teammates (bots), projects, tasks, isolated Git workspaces, model providers, approvals, and bot-to-bot delegation are all available from the same screen.
 
 It is one product, not a dashboard assembled around backend resources. Projects organize sustained work but are never required to chat.
 
@@ -12,12 +12,12 @@ One person (you) running a personal AI workspace on `http://localhost:8080`. You
 
 Open NerdBot and you see:
 
-1. **Left sidebar** — New chat, searchable recent conversations, and Workspace navigation (Home, Projects, Bots, Boards, Teams, Settings).
-2. **Main conversation area** — A useful empty state when no chat is selected. Pick a conversation or start a new one.
-3. **Composer** — Send/stop/retry, model selection, and file/context attachments.
-4. **Contextual access** — Project files, teammates/bots, and workspace resources from within the conversation, without navigating away.
-5. **Execution view** — When work is underway: what is happening, which tools or bots are involved, progress, results, failures, and controls.
-6. **Inspectable results** — Files, artifacts, task links, code diffs, and research outputs as appropriate to the request.
+1. **Left sidebar:** New chat, searchable recent conversations, and Workspace navigation (Home, Projects, Bots, Boards, Teams, Settings).
+2. **Main conversation area:** A useful empty state when no chat is selected. Pick a conversation or start a new one.
+3. **Composer:** Send/stop/retry, model selection, and file/context attachments.
+4. **Contextual access:** Project files, teammates/bots, and workspace resources from within the conversation, without navigating away.
+5. **Execution view:** When work is underway: what is happening, which tools or bots are involved, progress, results, failures, and controls.
+6. **Inspectable results:** Files, artifacts, task links, code diffs, and research outputs as appropriate to the request.
 
 Projects are optional contexts. General assistant chats use your default Home context. Project-scoped chats use the project's files, instructions, tasks, and authorized artifacts. Project information never leaks into unrelated chats; context selection and permissions are explicit and enforced server-side.
 
@@ -70,9 +70,9 @@ Browser (React dashboard, served at /)
 ```
 
 Relevant architecture decision records:
-- `docs/decisions/0008-workspace-isolation.md` — workspace isolation and per-task Git workspaces
-- `docs/ARCHITECTURE.md` — architecture boundary document and eight extension seams
-- `docs/PLAN.md` — phase plan and capability matrix
+- `docs/decisions/0008-workspace-isolation.md:` workspace isolation and per-task Git workspaces
+- `docs/ARCHITECTURE.md:` architecture boundary document and eight extension seams
+- `docs/PLAN.md:` phase plan and capability matrix
 
 ## Local setup
 
@@ -137,7 +137,7 @@ curl -H "Authorization: Bearer $NERDBOT_TOKEN" \
 
 ## First-use walkthrough
 
-1. **Open Home.** Start the server, open `http://localhost:8080`, sign in with your bearer token. You land in Home — your default personal conversation context. No project is required.
+1. **Open Home.** Start the server, open `http://localhost:8080`, sign in with your bearer token. You land in Home, your default personal conversation context. No project is required.
 2. **Start a chat.** Click **New chat** (or pick a recent conversation) and send a message. The assistant answers using your configured provider, or the mock provider if none is set.
 3. **Create a project.** From the sidebar, open **Workspace > Projects**, then create a project (a repository plus shared knowledge, memory, tasks, bots, boards, and approvals). Projects are optional organizational contexts; they add files, instructions, history, and scoped work to your chats.
 4. **Configure a teammate.** In the project (or the global Fleet page), create a bot: give it a persona, instructions, memory scope, permissions, and attach a model provider. Bots are persistent teammates with their own task history.
@@ -148,7 +148,7 @@ curl -H "Authorization: Bearer $NERDBOT_TOKEN" \
 - **Workspace context:** Project-scoped chats prepend read-only project context (name, task and teammate counts) to the system prompt. General Home chats use your default personal context.
 - **Persistent memory:** Provenanced, scoped storage (project / teammate / task). Reads are fail-closed (a read error is an error, never an empty result). Bots may touch their own `teammate:<id>` scope, and the shared `project:<id>` scope only when `memory_scope` is `project`.
 - **Task workspaces:** Each task runs in an isolated Git workspace at `<data-dir>/workspaces/<task_id>/`. File I/O goes through the workspace manager, never directly to disk. Returned patches, files, and artifacts are visible in the shared workspace through the transfer model.
-- **Bot permissions:** Bots hold permissions from the canonical server catalogue. Admin actions are default-deny and approval-gated. Bot instructions express intent only — they are never authorization.
+- **Bot permissions:** Bots hold permissions from the canonical server catalogue. Admin actions are default-deny and approval-gated. Bot instructions express intent only; they are never authorization.
 
 ## Testing, linting, type-checking, builds
 
