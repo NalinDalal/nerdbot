@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.responses import Response
 
 from . import backup as backup_mod
 from . import boards as boards_mod
@@ -2793,9 +2794,30 @@ def create_app() -> FastAPI:
     # take precedence. Hash-routed frontend paths fall through to index.html.
     _dist = Path(__file__).resolve().parents[3] / "dashboard" / "dist"
     if _dist.is_dir():
-        app.mount("/", StaticFiles(directory=str(_dist), html=True), name="spa")
+        app.mount("/", _SPAStaticFiles(directory=str(_dist), html=True), name="spa")
 
     return app
+
+
+class _SPAStaticFiles(StaticFiles):
+    """Serve the built dashboard with cache headers that cannot pin a stale UI.
+
+    Vite writes content-hashed asset names, so ``/assets/...`` is safe to
+    cache forever. The entry document is not: it names the hashed bundles,
+    so it has to be revalidated or a browser can keep asking for a bundle
+    that no longer exists — or, worse, keep running the old one. Without
+    these headers the server sent no ``Cache-Control`` at all, which left
+    the freshness to browser heuristics.
+    """
+
+    def file_response(self, *args: Any, **kwargs: Any) -> Response:
+        response = super().file_response(*args, **kwargs)
+        path = str(args[0]) if args else ""
+        if "/assets/" in path:
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 app = create_app()
