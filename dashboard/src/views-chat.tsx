@@ -89,7 +89,10 @@ export function ConversationView({
   return (
     <div className="flex h-full flex-col overflow-hidden">
       {/* Header */}
-      <header className="flex flex-wrap items-end justify-between gap-3 border-b border-[var(--border-dim)] px-4 py-3 md:px-6">
+      {/* Header. The mobile left padding reserves the gutter the fixed menu
+          button floats in (app.tsx: `fixed left-3 top-3`), so "Home" is not
+          painted underneath it. */}
+      <header className="flex flex-wrap items-end justify-between gap-3 border-b border-[var(--border-dim)] py-3 pl-14 pr-4 md:px-6">
         <div className="min-w-0">
           <h1 className="text-[var(--step-1)] font-semibold tracking-tight">
             {isHome ? "Home" : "Project conversation"}
@@ -683,7 +686,7 @@ function ThreadPane({
               ))}
             </div>
           )}
-          <div className="flex items-end gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-2 shadow-sm focus-within:border-[var(--border-focus)]">
+          <div className="flex flex-col gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-2 shadow-sm focus-within:border-[var(--border-focus)] sm:flex-row sm:items-end">
             <div className="flex items-center gap-1 pb-1 pl-1">
               <button
                 type="button"
@@ -726,9 +729,9 @@ function ThreadPane({
               spellCheck
               rows={1}
               autoComplete="off"
-              className="max-h-40 min-h-[36px] flex-1 resize-none bg-transparent py-1.5 text-[var(--step-0)] leading-relaxed outline-none placeholder:text-[var(--faint)] disabled:opacity-50"
+              className="max-h-40 min-h-[36px] w-full min-w-0 resize-none bg-transparent py-1.5 text-[var(--step-0)] leading-relaxed outline-none placeholder:text-[var(--faint)] disabled:opacity-50 sm:w-auto sm:flex-1"
             />
-            <div className="flex items-center gap-1.5 pb-0.5">
+            <div className="flex items-center gap-1.5 justify-end pb-0.5">
               <button
                 type="button"
                 onClick={createTaskFromChat}
@@ -1128,7 +1131,7 @@ function CommandCenter({
             Your AI fleet. One place to get work done.
           </p>
           <form onSubmit={send} className="mt-5">
-            <div className="flex items-end gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-2 shadow-sm focus-within:border-[var(--border-focus)]">
+            <div className="flex flex-col gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-2 shadow-sm focus-within:border-[var(--border-focus)] sm:flex-row sm:items-end">
               <textarea
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
@@ -1147,23 +1150,28 @@ function CommandCenter({
                 spellCheck
                 rows={2}
                 aria-label="Start a conversation"
-                className="max-h-48 min-h-[52px] flex-1 resize-none bg-transparent p-2.5 leading-relaxed outline-none placeholder:text-[var(--faint)] disabled:opacity-50"
+                className="max-h-48 min-h-[52px] w-full min-w-0 resize-none bg-transparent p-2.5 leading-relaxed outline-none placeholder:text-[var(--faint)] disabled:opacity-50 sm:w-auto sm:flex-1"
               />
-              <ModelChip
-                providers={providers}
-                value={selectedProviderId}
-                onChange={setSelectedProviderId}
-                disabled={busy || !hasProvider}
-              />
-              {busy ? (
-                <Button variant="danger" type="button" onClick={stop} disabled={!streaming}>
-                  ■ Stop
-                </Button>
-              ) : (
-                <Button variant="primary" type="submit" disabled={busy || !draft.trim() || !hasProvider}>
-                  Send ⏎
-                </Button>
-              )}
+              {/* The model chip and the send button keep their own row so the
+                  textarea gets the full width on a narrow screen instead of
+                  being squeezed to a few characters wide. */}
+              <div className="flex items-center gap-2 justify-end">
+                <ModelChip
+                  providers={providers}
+                  value={selectedProviderId}
+                  onChange={setSelectedProviderId}
+                  disabled={busy || !hasProvider}
+                />
+                {busy ? (
+                  <Button variant="danger" type="button" onClick={stop} disabled={!streaming}>
+                    ■ Stop
+                  </Button>
+                ) : (
+                  <Button variant="primary" type="submit" disabled={busy || !draft.trim() || !hasProvider}>
+                    Send ⏎
+                  </Button>
+                )}
+              </div>
             </div>
             {streaming && (
               <div className="mono mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-minus-1)] text-[var(--text-soft)]">

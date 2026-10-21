@@ -140,7 +140,10 @@ export function Page({
 }) {
   return (
     <div className={`flex-1 overflow-y-auto ${className}`}>
-      <div className="mx-auto w-full max-w-[var(--max-width-wide)] px-6 py-6 md:px-8 md:py-8">
+      {/* pl-14 on mobile reserves the gutter the fixed menu button floats in
+          (app.tsx: `fixed left-3 top-3`), so a page heading is never
+          painted underneath it. md:px-8 releases the gutter on desktop. */}
+      <div className="mx-auto w-full max-w-[var(--max-width-wide)] py-6 pl-14 pr-6 md:px-8 md:py-8">
         {children}
       </div>
     </div>
