@@ -49,6 +49,8 @@ export interface Run {
   stderr: string;
   duration_s: number;
   provider_id: string | null;
+  /** True once a stop was requested for this run. */
+  cancel_requested: boolean;
 }
 
 export interface Artifact {

@@ -55,6 +55,27 @@ def test_run_command_uses_guardrails(tmp_path) -> None:
         execute_tool(base, "nope", {})
 
 
+def test_run_command_never_exports_server_secrets(tmp_path, monkeypatch) -> None:
+    """The child process never inherits the server's token or secret key."""
+    monkeypatch.setenv("NERDBOT_TOKEN", "super-secret-token-value")
+    monkeypatch.setenv("NERDBOT_SECRET_KEY", "super-secret-key-value")
+    base = tmp_path / "ws"
+    base.mkdir()
+    out = execute_tool(base, "run_command", {"command": "echo [$NERDBOT_TOKEN][$NERDBOT_SECRET_KEY]"})
+    assert "super-secret-token-value" not in out
+    assert "super-secret-key-value" not in out
+
+
+def test_run_command_scrubs_secrets_from_output(tmp_path, monkeypatch) -> None:
+    """A secret that reaches stdout is redacted before it is returned."""
+    monkeypatch.setenv("NERDBOT_TOKEN", "super-secret-token-value")
+    base = tmp_path / "ws"
+    base.mkdir()
+    out = execute_tool(base, "run_command", {"command": "echo leaked super-secret-token-value"})
+    assert "super-secret-token-value" not in out
+    assert "[redacted]" in out
+
+
 def test_truncation_bounds_output() -> None:
     long_text = "x" * (agent_tools.TOOL_OUTPUT_MAX_CHARS + 100)
     assert len(truncate_output(long_text)) < len(long_text)

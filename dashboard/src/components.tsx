@@ -48,6 +48,8 @@ export function runStatusLabel(status: string): string {
     running: "Running",
     failed: "Failed",
     blocked: "Blocked",
+    stopped: "Stopped",
+    cancelled: "Cancelled",
   };
   return labels[status] ?? status;
 }
@@ -544,29 +546,32 @@ export const LOG_SHELL =
 
 /* --- Shared task tally --- */
 /** The one task-status tally: queued = pending | ready, plus running,
- *  blocked, done, failed. Unknown statuses are ignored. Every aggregate
- *  surface (workspace summary, team rollups, per-team counts) derives its
- *  numbers through this so the status vocabulary cannot drift. */
+ *  blocked, done, failed, cancelled. Unknown statuses are ignored. Every
+ *  aggregate surface (workspace summary, team rollups, per-team counts)
+ *  derives its numbers through this so the status vocabulary cannot drift. */
 export function taskTally(tasks: Task[]): {
   running: number;
   queued: number;
   blocked: number;
   done: number;
   failed: number;
+  cancelled: number;
 } {
   let running = 0;
   let queued = 0;
   let blocked = 0;
   let done = 0;
   let failed = 0;
+  let cancelled = 0;
   for (const task of tasks) {
     if (task.status === "running") running += 1;
     else if (task.status === "blocked") blocked += 1;
     else if (task.status === "pending" || task.status === "ready") queued += 1;
     else if (task.status === "done") done += 1;
     else if (task.status === "failed") failed += 1;
+    else if (task.status === "cancelled") cancelled += 1;
   }
-  return { running, queued, blocked, done, failed };
+  return { running, queued, blocked, done, failed, cancelled };
 }
 
 /* --- Async --- */

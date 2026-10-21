@@ -202,6 +202,25 @@ def add_board_member_service(
         raise HTTPException(status_code=404, detail="board not found")
     if acting is not None:
         authorize_board(conn, board_id, acting, "teammate.create")
+        # Admin-tier roster change for a bot: same digest-bound approval
+        # flow as creating a teammate outright. The digest covers the exact
+        # (board, teammate, role, operation) tuple, so approving one roster
+        # change never authorizes a different one — and an approval to add a
+        # member never authorizes removing it.
+        try:
+            gates.require(
+                conn,
+                acting,
+                "teammate.create",
+                payload={
+                    "board_id": board_id,
+                    "teammate_id": teammate_id,
+                    "role": role,
+                    "op": "add",
+                },
+            )
+        except (gates.GateDenied, gates.GateApprovalRequired) as exc:
+            raise gates.wrap_gate_error(exc) from exc
     return store.create_board_member(
         conn, board_id=board_id, teammate_id=teammate_id, role=role
     )
@@ -218,6 +237,33 @@ def remove_board_member_service(
         raise HTTPException(status_code=404, detail="board not found")
     if acting is not None:
         authorize_board(conn, board_id, acting, "teammate.create")
+        # Same digest-bound approval as adding: removing a member can eject
+        # a working bot from its coordination surface. The digest carries the
+        # member's *current* role and the operation, so an approval to eject
+        # a member does not become a standing permission to eject a
+        # differently-roled one — or to add it in the first place.
+        current = next(
+            (
+                m
+                for m in store.list_board_members(conn, board_id)
+                if m.teammate_id == teammate_id
+            ),
+            None,
+        )
+        try:
+            gates.require(
+                conn,
+                acting,
+                "teammate.create",
+                payload={
+                    "board_id": board_id,
+                    "teammate_id": teammate_id,
+                    "role": current.role if current else "",
+                    "op": "remove",
+                },
+            )
+        except (gates.GateDenied, gates.GateApprovalRequired) as exc:
+            raise gates.wrap_gate_error(exc) from exc
     store.remove_board_member(conn, board_id, teammate_id)
 
 

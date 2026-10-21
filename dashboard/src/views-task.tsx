@@ -186,6 +186,8 @@ export function TaskDetailView({
     ),
   ];
   const latestRun = runs.length > 0 ? runs[runs.length - 1] : null;
+  // The run that can still be stopped: the newest one that has not ended.
+  const liveRun = [...runs].reverse().find((run) => run.status === "running") ?? null;
   const latestPackage = pr_packages.length > 0 ? pr_packages[pr_packages.length - 1] : null;
   const owner = task.owner_teammate_id
     ? teammates.data?.teammates.find((m) => m.id === task.owner_teammate_id)
@@ -273,6 +275,15 @@ export function TaskDetailView({
           >
             {busy === "cancel" ? "Cancelling…" : "Cancel task"}
           </Button>
+          {liveRun ? (
+            <Button
+              variant="danger"
+              disabled={!!busy}
+              onClick={() => void act("stop", () => api.cancelRun(liveRun.id))}
+            >
+              {busy === "stop" ? "Stopping…" : "Stop run"}
+            </Button>
+          ) : null}
           <span className="mx-1 h-4 w-px bg-[var(--border)]" aria-hidden />
           <Button disabled={!!busy} onClick={() => void act("workspace", () => api.ensureWorkspace(taskId))}>
             Ensure workspace

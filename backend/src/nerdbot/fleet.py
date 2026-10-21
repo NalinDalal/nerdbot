@@ -20,21 +20,6 @@ from . import gates, store
 from .models import Team, Teammate, TeammateStatus, TeamMember
 
 
-def _wrap_gate_error(exc: Exception) -> HTTPException:
-    if isinstance(exc, gates.GateApprovalRequired):
-        return HTTPException(
-            status_code=409,
-            detail={
-                "message": "action requires owner approval",
-                "approval": exc.approval.model_dump(mode="json"),
-                "approvals": [a.model_dump(mode="json") for a in exc.approvals],
-            },
-        )
-    if isinstance(exc, gates.GateDenied):
-        return HTTPException(status_code=403, detail=str(exc))
-    return HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}")
-
-
 def create_teammate_service(
     conn: sqlite3.Connection,
     project_id: str,
@@ -76,9 +61,9 @@ def create_teammate_service(
                 task_id=None,
             )
         except gates.GateDenied as exc:
-            raise _wrap_gate_error(exc) from exc
+            raise gates.wrap_gate_error(exc) from exc
         except gates.GateApprovalRequired as exc:
-            raise _wrap_gate_error(exc) from exc
+            raise gates.wrap_gate_error(exc) from exc
     try:
         mate = store.create_teammate(
             conn,
@@ -159,7 +144,7 @@ def update_teammate_service(
         try:
             gates.require_many(conn, acting, requirements, task_id=None)
         except (gates.GateDenied, gates.GateApprovalRequired) as exc:
-            raise _wrap_gate_error(exc) from exc
+            raise gates.wrap_gate_error(exc) from exc
     try:
         return store.update_teammate(conn, teammate_id, **updates)
     except ValueError as exc:
@@ -192,7 +177,7 @@ def set_teammate_status_service(
                 task_id=None,
             )
         except (gates.GateDenied, gates.GateApprovalRequired) as exc:
-            raise _wrap_gate_error(exc) from exc
+            raise gates.wrap_gate_error(exc) from exc
     conn.execute("UPDATE teammates SET status = ? WHERE id = ?", (status.value, teammate_id))
     conn.commit()
     store.record_event(
@@ -241,7 +226,7 @@ def create_team_service(
                 task_id=None,
             )
         except (gates.GateDenied, gates.GateApprovalRequired) as exc:
-            raise _wrap_gate_error(exc) from exc
+            raise gates.wrap_gate_error(exc) from exc
     try:
         team = store.create_team(conn, owner=owner, name=name, description=description)
     except (KeyError, ValueError) as exc:
@@ -288,7 +273,7 @@ def add_teammate_to_team_service(
                 task_id=None,
             )
         except (gates.GateDenied, gates.GateApprovalRequired) as exc:
-            raise _wrap_gate_error(exc) from exc
+            raise gates.wrap_gate_error(exc) from exc
     try:
         return store.add_teammate_to_team(conn, team_id, teammate_id)
     except (KeyError, ValueError) as exc:
@@ -321,5 +306,5 @@ def remove_teammate_from_team_service(
                 task_id=None,
             )
         except (gates.GateDenied, gates.GateApprovalRequired) as exc:
-            raise _wrap_gate_error(exc) from exc
+            raise gates.wrap_gate_error(exc) from exc
     store.remove_teammate_from_team(conn, team_id, teammate_id)

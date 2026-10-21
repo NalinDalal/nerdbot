@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from . import agent_context as agent_context_mod
+from . import runtime as runtime_mod
 from . import store, workspace
 from .models import (
     Approval,
@@ -38,8 +39,10 @@ from .models import (
 )
 from .runtime import (
     BlockedError,
+    CancelToken,
     ExecutionError,
     LocalRuntimeAdapter,
+    RunCancelled,
     RunResult,
     RuntimeAdapter,
     frame_untrusted,
@@ -141,8 +144,20 @@ def schedule_run(
     if not task.workspace_path:
         store.set_task_workspace(conn, task_id, workspace.branch_name_for_task(task_id), str(ws))
     started = time.monotonic()
+    # The cancel token is this run's stop switch: the API signals it from
+    # another request, the runtime polls it and kills the process group.
+    cancel = CancelToken()
+    runtime_mod.register_run(run.id, cancel)
+    if store.run_cancel_requested(conn, run.id):
+        # A cancel that arrived before this run registered itself still
+        # applies: the request is durable, and it is honoured here.
+        cancel.cancel()
     try:
-        result = active.start_run(task.command, ws, timeout_s=timeout_s, context=ctx)
+        result = active.start_run(
+            task.command, ws, timeout_s=timeout_s, context=ctx, cancel=cancel
+        )
+    except RunCancelled as exc:
+        return (run, None, _finish_cancelled(conn, run, task, exc, ws, data_dir, started))
     except BlockedError as exc:
         store.finish_run(conn, run.id, RunStatus.BLOCKED, None, f"blocked: {exc.reason}")
         run.status = RunStatus.BLOCKED
@@ -177,6 +192,8 @@ def schedule_run(
         store.set_task_status(conn, task_id, TaskStatus.FAILED)
         _finalize_child_delegation(conn, task, run, message, failed=True)
         return run, None, None
+    finally:
+        runtime_mod.unregister_run(run.id)
 
     duration_s = time.monotonic() - started
     ok = result.exit_code == 0
@@ -256,6 +273,55 @@ def schedule_run(
     if transcript:
         _record_transcript(conn, task_id, run, data_dir, transcript, turns)
     return run, result, artifact_id
+
+
+def _finish_cancelled(
+    conn: sqlite3.Connection,
+    run: Run,
+    task: Task,
+    exc: RunCancelled,
+    ws: Path,
+    data_dir: str,
+    started: float,
+) -> str:
+    """Record a cancelled run: stopped on request, not a success and not a
+    failure of the work itself.
+
+    The partial output the command produced before the kill is kept, so the
+    owner sees what had already happened when they pressed stop. Returns
+    the id of the test-log artifact that records it.
+    """
+    duration_s = time.monotonic() - started
+    note = f"cancelled: {exc}"
+    store.finish_run(
+        conn,
+        run.id,
+        RunStatus.CANCELLED,
+        None,
+        note,
+        stdout=exc.stdout,
+        stderr=exc.stderr,
+        duration_s=duration_s,
+    )
+    run.status = RunStatus.CANCELLED
+    run.output_excerpt = note
+    run.stdout = exc.stdout
+    run.stderr = exc.stderr
+    run.duration_s = duration_s
+    store.set_task_status(conn, task.id, TaskStatus.CANCELLED)
+    _finalize_child_delegation(conn, task, run, note, failed=True)
+    return _record_test_log(
+        conn,
+        task.id,
+        run,
+        ws,
+        data_dir,
+        exit_code=None,
+        stdout=exc.stdout,
+        stderr=exc.stderr,
+        duration_s=duration_s,
+        passed=False,
+    )
 
 
 def _finalize_child_delegation(

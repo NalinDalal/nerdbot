@@ -71,6 +71,7 @@ Browser (React dashboard, served at /)
 
 Relevant architecture decision records:
 - `docs/decisions/0008-workspace-isolation.md:` workspace isolation and per-task Git workspaces
+- `docs/decisions/0009-shell-tool-approval-policy.md:` what the approval gate covers, and what bounds the shell instead
 - `docs/ARCHITECTURE.md:` architecture boundary document and eight extension seams
 - `docs/PLAN.md:` phase plan and capability matrix
 
@@ -141,7 +142,7 @@ curl -H "Authorization: Bearer $NERDBOT_TOKEN" \
 2. **Start a chat.** Click **New chat** (or pick a recent conversation) and send a message. The assistant answers using your configured provider, or the mock provider if none is set.
 3. **Create a project.** From the sidebar, open **Workspace > Projects**, then create a project (a repository plus shared knowledge, memory, tasks, bots, boards, and approvals). Projects are optional organizational contexts; they add files, instructions, history, and scoped work to your chats.
 4. **Configure a teammate.** In the project (or the global Fleet page), create a bot: give it a persona, instructions, memory scope, permissions, and attach a model provider. Bots are persistent teammates with their own task history.
-5. **Run a real task.** From a conversation, click **Task** to create a task from the chat, or create one in Projects. Assign it to your bot and run it. The bot executes in its isolated workspace. Inspect the run output, artifacts, workspace files, and diff from the execution view or the task page. For admin actions, you will see an approval to decide (reject / approve once / approve forever).
+5. **Run a real task.** From a conversation, click **Task** to create a task from the chat, or create one in Projects. Assign it to your bot and run it. The bot executes in its isolated workspace. Inspect the run output, artifacts, workspace files, and diff from the execution view or the task page. For admin actions, you will see an approval to decide (reject / approve once / approve forever). A run that is still in flight can be stopped with **Stop run** — the command's whole process group is killed and the run is recorded as `cancelled`.
 
 ## How context, memory, and permissions work
 
@@ -149,13 +150,14 @@ curl -H "Authorization: Bearer $NERDBOT_TOKEN" \
 - **Persistent memory:** Provenanced, scoped storage (project / teammate / task). Reads are fail-closed (a read error is an error, never an empty result). Bots may touch their own `teammate:<id>` scope, and the shared `project:<id>` scope only when `memory_scope` is `project`.
 - **Task workspaces:** Each task runs in an isolated Git workspace at `<data-dir>/workspaces/<task_id>/`. File I/O goes through the workspace manager, never directly to disk. Returned patches, files, and artifacts are visible in the shared workspace through the transfer model.
 - **Bot permissions:** Bots hold permissions from the canonical server catalogue. Admin actions are default-deny and approval-gated. Bot instructions express intent only; they are never authorization.
+- **The shell is not approval-gated, on purpose.** A bot that runs a task can run shell commands inside that task's isolated workspace. What bounds it is the run boundary, the workspace, the command deny-list, secret hygiene, and the ability to stop the run mid-flight — not a per-command approval. See `docs/decisions/0009-shell-tool-approval-policy.md` for the decision, the rejected alternatives, and the trigger that would change it.
 
 ## Testing, linting, type-checking, builds
 
 ### Backend
 
 ```bash
-uv run pytest -q                 # 351 tests
+uv run pytest -q                 # 372 tests
 uv run ruff check backend/src/ tests/
 uv run mypy
 ```
@@ -164,7 +166,7 @@ uv run mypy
 
 ```bash
 cd dashboard
-npm run test        # vitest (42 tests)
+npm run test        # vitest (50 tests)
 npm run lint        # eslint
 npx tsc --noEmit    # typecheck
 npm run build       # tsc + vite → dist/

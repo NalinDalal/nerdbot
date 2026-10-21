@@ -297,6 +297,8 @@ export const api = {
     post<{ run: Run }>(`/tasks/${taskId}/retry`),
   projectRuns: (projectId: string) => req<{ runs: Run[] }>(`/projects/${projectId}/runs`),
   getRun: (runId: string) => req<{ run: Run; artifacts: Artifact[] }>(`/runs/${runId}`),
+  cancelRun: (runId: string) =>
+    post<{ run: Run; cancel_requested: boolean; signalled: boolean }>(`/runs/${runId}/cancel`),
   getArtifact: (id: string) => req<Artifact>(`/artifacts/${id}`),
   deleteWorkspace: (taskId: string) =>
     req<{ removed: boolean }>(`/tasks/${taskId}/workspace`, { method: "DELETE" }),

@@ -81,7 +81,8 @@ CREATE TABLE IF NOT EXISTS runs (
   status TEXT NOT NULL DEFAULT 'queued', started_at TEXT NOT NULL,
   finished_at TEXT, exit_code INTEGER, output_excerpt TEXT NOT NULL DEFAULT '',
   command TEXT NOT NULL DEFAULT '', stdout TEXT NOT NULL DEFAULT '',
-  stderr TEXT NOT NULL DEFAULT '', duration_s REAL NOT NULL DEFAULT 0.0
+  stderr TEXT NOT NULL DEFAULT '', duration_s REAL NOT NULL DEFAULT 0.0,
+  cancel_requested INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS memories (
   id TEXT PRIMARY KEY, scope TEXT NOT NULL, content TEXT NOT NULL, source TEXT NOT NULL,
@@ -225,33 +226,65 @@ def _now_iso() -> str:
 
 
 TASK_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
-    TaskStatus.PENDING: frozenset({TaskStatus.READY, TaskStatus.RUNNING, TaskStatus.BLOCKED}),
-    TaskStatus.READY: frozenset({TaskStatus.RUNNING, TaskStatus.BLOCKED, TaskStatus.PENDING}),
-    TaskStatus.RUNNING: frozenset(
-        {TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.PENDING}
+    TaskStatus.PENDING: frozenset(
+        {TaskStatus.READY, TaskStatus.RUNNING, TaskStatus.BLOCKED, TaskStatus.CANCELLED}
     ),
-    TaskStatus.BLOCKED: frozenset({TaskStatus.PENDING}),
+    TaskStatus.READY: frozenset(
+        {TaskStatus.RUNNING, TaskStatus.BLOCKED, TaskStatus.PENDING, TaskStatus.CANCELLED}
+    ),
+    TaskStatus.RUNNING: frozenset(
+        {
+            TaskStatus.DONE,
+            TaskStatus.FAILED,
+            TaskStatus.BLOCKED,
+            TaskStatus.PENDING,
+            TaskStatus.CANCELLED,
+        }
+    ),
+    TaskStatus.BLOCKED: frozenset({TaskStatus.PENDING, TaskStatus.CANCELLED}),
     TaskStatus.FAILED: frozenset({TaskStatus.PENDING}),
     TaskStatus.DONE: frozenset({TaskStatus.PENDING}),
+    TaskStatus.CANCELLED: frozenset({TaskStatus.PENDING, TaskStatus.RUNNING}),
 }
 
 RUN_TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {
     RunStatus.QUEUED: frozenset(
-        {RunStatus.RUNNING, RunStatus.BLOCKED, RunStatus.FAILED, RunStatus.STOPPED}
+        {
+            RunStatus.RUNNING,
+            RunStatus.BLOCKED,
+            RunStatus.FAILED,
+            RunStatus.STOPPED,
+            RunStatus.CANCELLED,
+        }
     ),
     RunStatus.RUNNING: frozenset(
-        {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.BLOCKED, RunStatus.STOPPED}
+        {
+            RunStatus.SUCCEEDED,
+            RunStatus.FAILED,
+            RunStatus.BLOCKED,
+            RunStatus.STOPPED,
+            RunStatus.CANCELLED,
+        }
     ),
     RunStatus.SUCCEEDED: frozenset(),
     RunStatus.FAILED: frozenset(),
     RunStatus.BLOCKED: frozenset(),
     RunStatus.STOPPED: frozenset(),
+    RunStatus.CANCELLED: frozenset(),
 }
 
 TERMINAL_RUN_STATUSES = frozenset(
-    {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.BLOCKED, RunStatus.STOPPED}
+    {
+        RunStatus.SUCCEEDED,
+        RunStatus.FAILED,
+        RunStatus.BLOCKED,
+        RunStatus.STOPPED,
+        RunStatus.CANCELLED,
+    }
 )
-TERMINAL_TASK_STATUSES = frozenset({TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.BLOCKED})
+TERMINAL_TASK_STATUSES = frozenset(
+    {TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.CANCELLED}
+)
 
 # A task may be retried a bounded number of times. Without a cap a task that
 # keeps failing can be retried forever, burning provider budget in a loop.
@@ -402,6 +435,13 @@ _PHASE15_COLUMNS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
+_PHASE16_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    # A run can be cancelled while it is in flight. The request is recorded
+    # so it survives a restart and so the dashboard can show that a stop was
+    # asked for even before the runtime acknowledges it.
+    "runs": [("cancel_requested", "INTEGER NOT NULL DEFAULT 0")],
+}
+
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Idempotent migrations for databases created by older schemas."""
@@ -411,7 +451,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     for phase in (_PHASE2_COLUMNS, _PHASE3_COLUMNS, _PHASE4_COLUMNS, _PHASE5_COLUMNS,
                   _PHASE6_COLUMNS, _PHASE7_COLUMNS, _PHASE8_COLUMNS, _PHASE9_COLUMNS,
                   _PHASE10_COLUMNS, _PHASE11_COLUMNS, _PHASE12_COLUMNS, _PHASE13_COLUMNS,
-                  _PHASE14_COLUMNS, _PHASE15_COLUMNS):
+                  _PHASE14_COLUMNS, _PHASE15_COLUMNS, _PHASE16_COLUMNS):
         for table, columns in phase.items():
             phases.setdefault(table, []).extend(columns)
     for table, columns in phases.items():
@@ -2018,6 +2058,7 @@ def _run_from_row(r: sqlite3.Row) -> Run:
         stderr=r["stderr"] if "stderr" in keys and r["stderr"] else "",
         duration_s=r["duration_s"] if "duration_s" in keys and r["duration_s"] else 0.0,
         provider_id=r["provider_id"] if "provider_id" in keys else None,
+        cancel_requested=bool(r["cancel_requested"]) if "cancel_requested" in keys else False,
     )
 
 
@@ -2094,6 +2135,39 @@ def finish_run(
     task = get_task(conn, run.task_id)
     if task is not None:
         record_event(conn, task.project_id, "run", run_id, f"run.status.{status.value}")
+
+
+def request_run_cancel(conn: sqlite3.Connection, run_id: str) -> Run:
+    """Record that the owner asked for this run to stop.
+
+    The request is durable: it is written to the run row before the runtime
+    is signalled, so a cancel that arrives while the run is still starting
+    (or that the runtime never sees) is still visible afterwards. Recording
+    it twice is harmless — the flag is idempotent.
+    """
+    run = get_run(conn, run_id)
+    if run is None:
+        raise KeyError(f"unknown run {run_id}")
+    if run.status in TERMINAL_RUN_STATUSES:
+        raise TerminalRunError(f"run {run_id} is already terminal ({run.status.value})")
+    conn.execute("UPDATE runs SET cancel_requested = 1 WHERE id = ?", (run_id,))
+    conn.commit()
+    task = get_task(conn, run.task_id)
+    if task is not None:
+        record_event(conn, task.project_id, "run", run_id, "run.cancel.requested")
+    refreshed = get_run(conn, run_id)
+    assert refreshed is not None
+    return refreshed
+
+
+def run_cancel_requested(conn: sqlite3.Connection, run_id: str) -> bool:
+    """True when a cancel was recorded for this run."""
+    row = conn.execute(
+        "SELECT cancel_requested FROM runs WHERE id = ?", (run_id,)
+    ).fetchone()
+    if row is None:
+        return False
+    return bool(row["cancel_requested"])
 
 
 # -- Memory (fail-closed reads) ----------------------------------------------

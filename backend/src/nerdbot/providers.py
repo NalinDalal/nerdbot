@@ -28,8 +28,10 @@ from .fetch import FetchProtocolError, FetchTimeoutError
 from .models import Provider, ProviderKind, ProviderStatus
 from .runtime import (
     BlockedError,
+    CancelToken,
     ExecutionError,
     LocalRuntimeAdapter,
+    RunCancelled,
     RunResult,
     RuntimeAdapter,
 )
@@ -181,6 +183,8 @@ class OpenAICompatibleAdapter:
         workspace: Path,
         timeout_s: float = 60.0,
         context: Any | None = None,
+        *,
+        cancel: CancelToken | None = None,
     ) -> RunResult:
         if not command.strip():
             raise ExecutionError("empty command")
@@ -212,6 +216,11 @@ class OpenAICompatibleAdapter:
             for _ in range(max_turns):
                 if time.monotonic() >= deadline:
                     raise ProviderTimeoutError("agent loop wall-clock budget expired")
+                if cancel is not None and cancel.cancelled:
+                    # The model loop is interruptible between turns: a cancel
+                    # request stops the loop instead of waiting for the next
+                    # model call to come back.
+                    raise RunCancelled(f"run cancelled after {turns} turn(s)")
                 turns += 1
                 data = self._authed_post(client, api_key, model, messages, tools)
                 message = self._first_message(data)
@@ -223,6 +232,8 @@ class OpenAICompatibleAdapter:
                 for call in calls:
                     if time.monotonic() >= deadline:
                         raise ProviderTimeoutError("agent loop wall-clock budget expired")
+                    if cancel is not None and cancel.cancelled:
+                        raise RunCancelled(f"run cancelled after {turns} turn(s)")
                     try:
                         result = self._execute_one(
                             workspace, call["name"], call["arguments"], context
@@ -388,10 +399,14 @@ class MockRuntimeAdapter:
         workspace: Path,
         timeout_s: float = 60.0,
         context: Any | None = None,
+        *,
+        cancel: CancelToken | None = None,
     ) -> RunResult:
         _ = (workspace, timeout_s, context)
         if not command.strip():
             raise ExecutionError("empty command")
+        if cancel is not None and cancel.cancelled:
+            raise RunCancelled("run cancelled before the mock executed")
         output = f"[mock provider] would execute: {command.strip()}"
         return RunResult(exit_code=0, output=output, stdout=output, stderr="")
 

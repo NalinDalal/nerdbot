@@ -28,6 +28,7 @@ class TaskStatus(StrEnum):
     DONE = "done"
     FAILED = "failed"
     BLOCKED = "blocked"
+    CANCELLED = "cancelled"
 
 
 class RunStatus(StrEnum):
@@ -37,6 +38,7 @@ class RunStatus(StrEnum):
     FAILED = "failed"
     BLOCKED = "blocked"
     STOPPED = "stopped"
+    CANCELLED = "cancelled"
 
 
 class VerificationStatus(StrEnum):
@@ -168,6 +170,7 @@ class Run(BaseModel):
     stderr: str = ""
     duration_s: float = 0.0
     provider_id: str | None = None
+    cancel_requested: bool = False
 
 
 class MemoryEntry(BaseModel):

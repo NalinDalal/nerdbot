@@ -21,11 +21,14 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from . import permissions as permissions_mod
 from . import store
 from .models import Approval, Decision, Teammate
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from fastapi import HTTPException
 
 # The catalogue lives in :mod:`nerdbot.permissions` so the store can validate
 # names without importing this module (which imports the store). Re-exported
@@ -57,6 +60,29 @@ class GateApprovalRequired(Exception):
         )
         self.approval = approval
         self.approvals = list(approvals) if approvals else [approval]
+
+
+def wrap_gate_error(exc: Exception) -> HTTPException:
+    """Map a gate exception to the HTTP error the API owes the caller.
+
+    Shared by every service that runs ``require``/``require_many`` with an
+    acting teammate (fleet, boards): 409 with the pending approval payload
+    when a human decision is needed, 403 when the permission is absent.
+    """
+    from fastapi import HTTPException as _HTTPException
+
+    if isinstance(exc, GateApprovalRequired):
+        return _HTTPException(
+            status_code=409,
+            detail={
+                "message": "action requires owner approval",
+                "approval": exc.approval.model_dump(mode="json"),
+                "approvals": [a.model_dump(mode="json") for a in exc.approvals],
+            },
+        )
+    if isinstance(exc, GateDenied):
+        return _HTTPException(status_code=403, detail=str(exc))
+    return _HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}")
 
 
 def action_digest(action: str, payload: dict[str, Any] | None = None) -> str:

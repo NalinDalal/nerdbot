@@ -32,6 +32,7 @@ from . import notify as notify_mod
 from . import orchestrator, store
 from . import permissions as permissions_mod
 from . import providers as providers_impl
+from . import runtime as runtime_mod
 from . import secrets as secrets_mod
 from . import workspace as workspace_mgr
 from .auth import PRINCIPAL, expected_token, principal_from_header, require_project_owner
@@ -1402,6 +1403,50 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="task not found")
         require_project_owner(conn, task.project_id, principal)
         return artifact.model_dump(mode="json")
+
+    @app.post("/runs/{run_id}/cancel")
+    def cancel_run(
+        run_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """Stop a run that is in flight.
+
+        Two steps, in order: the request is recorded on the run row (so it
+        is durable and visible even if the runtime never sees it), then the
+        live process is signalled — the local runtime kills the command's
+        process group, the provider adapter stops its model loop at the next
+        turn boundary.
+
+        ``signalled`` says whether the live process was reached directly. It
+        is false when the cancel landed in the short window before the run
+        registered itself with the runtime; the recorded request still stops
+        that run, because the orchestrator honours it as it starts.
+
+        A run that already finished cannot be cancelled: the endpoint says
+        so with 409 rather than pretending the work was stopped.
+        """
+        run = store.get_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        task = store.get_task(conn, run.task_id)
+        if task is None:  # pragma: no cover - orphaned run
+            raise HTTPException(status_code=404, detail="task not found")
+        require_project_owner(conn, task.project_id, principal)
+        try:
+            store.request_run_cancel(conn, run_id)
+        except store.TerminalRunError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        # The runtime holds the live run; it stops the command in flight.
+        signalled = runtime_mod.request_run_cancel(run_id)
+        refreshed = store.get_run(conn, run_id)
+        return {
+            "run": (refreshed or run).model_dump(mode="json"),
+            "cancel_requested": True,
+            "signalled": signalled,
+        }
 
     @app.delete("/tasks/{task_id}/workspace")
     def delete_task_workspace(
