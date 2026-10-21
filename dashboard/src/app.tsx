@@ -1,25 +1,44 @@
 import { useEffect, useState } from "react";
 import { Toaster, toast } from "sonner";
-import { ApiError, api, getSession, setSession } from "./api";
+import { ApiError, api, describeError as apiDescribeError, getSession, setSession } from "./api";
+import { ConversationView } from "./views-chat";
 import { CapabilitiesView } from "./views-projects";
 import { ProjectDetailView } from "./views-project";
-import { ChatHome } from "./views-chat";
 import { ProjectsView } from "./views-projects";
 import { TaskDetailView } from "./views-task";
 import { SettingsView } from "./views-settings";
+import { TeamsView, TeamDetailView } from "./views-teams";
+import { BotDetailView, BotsView } from "./views-bot";
+import { BoardsView, BoardDetailView } from "./views-boards";
+import { EmptyState, LoadingState, useAsync } from "./components";
 
 export type Route =
   | { name: "home" }
+  | { name: "chat"; projectId?: string }
+  | { name: "teams" }
+  | { name: "team"; teamId: string }
+  | { name: "bot"; teammateId: string }
+  | { name: "boards" }
+  | { name: "board"; boardId: string }
   | { name: "projects" }
   | { name: "settings" }
   | { name: "project"; projectId: string }
   | { name: "task"; projectId: string; taskId: string }
-  | { name: "capabilities" };
+  | { name: "capabilities" }
+  | { name: "bots" };
 
 export function parseHash(): Route {
   const hash = window.location.hash.replace(/^#\/?/, "");
   const parts = hash.split("/").filter(Boolean);
   if (parts.length === 0) return { name: "home" };
+  if (parts[0] === "chat") {
+    return parts[1] ? { name: "chat", projectId: parts[1] } : { name: "chat" };
+  }
+  if (parts[0] === "teams") return { name: "teams" };
+  if (parts[0] === "team" && parts[1]) return { name: "team", teamId: parts[1] };
+  if (parts[0] === "bot" && parts[1]) return { name: "bot", teammateId: parts[1] };
+  if (parts[0] === "boards") return { name: "boards" };
+  if (parts[0] === "board" && parts[1]) return { name: "board", boardId: parts[1] };
   if (parts[0] === "projects") return { name: "projects" };
   if (parts[0] === "settings") return { name: "settings" };
   if (parts[0] === "p" && parts[1] && parts[2] === "t" && parts[3]) {
@@ -29,6 +48,7 @@ export function parseHash(): Route {
     return { name: "project", projectId: parts[1] };
   }
   if (parts[0] === "capabilities") return { name: "capabilities" };
+  if (parts[0] === "bots") return { name: "bots" };
   return { name: "home" };
 }
 
@@ -39,7 +59,13 @@ export function navigate(route: string): void {
 export default function App() {
   const [route, setRoute] = useState<Route>(parseHash);
   const [connected, setConnected] = useState(() => getSession() !== null);
-  const [projects, setProjects] = useState<string[]>([]);
+  const [activeThreadId, setActiveThread] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const home = useAsync(() => api.getHome(), []);
+  const threads = useAsync(
+    () => (home.data ? api.listThreads(home.data.id) : Promise.resolve({ threads: [] })),
+    [home.data?.id],
+  );
 
   useEffect(() => {
     const onHash = () => setRoute(parseHash());
@@ -48,9 +74,10 @@ export default function App() {
   }, []);
 
   const openProject = (id: string) => {
-    setProjects((prev) => (prev.includes(id) ? prev : [...prev, id]));
-    navigate(`#/p/${id}`);
+    navigate(`#/chat/${id}`);
   };
+
+  const openHome = () => navigate("#/");
 
   if (!connected) {
     return <ConnectScreen onConnected={() => setConnected(true)} />;
@@ -62,28 +89,78 @@ export default function App() {
     </a>
   );
 
+  const isChatRoute = route.name === "home" || route.name === "chat";
+
   return (
     <div className="layout">
       <aside className="sidebar">
         <div className="brand">
-          NerdBot<small>personal assistant</small>
+          <strong>NerdBot</strong>
+          <div className="brand-sub">personal assistant</div>
         </div>
-        <nav className="nav">
-          {nav("#/", "Chat", route.name === "home")}
-          {nav("#/projects", "Projects", route.name === "projects")}
+
+        <div className="sidebar-section">
+          <button
+            className="primary"
+            onClick={openHome}
+            aria-label="Start a new conversation"
+          >
+            New chat
+          </button>
+          <div className="field" style={{ marginTop: 10, marginBottom: 8 }}>
+            <input
+              className="search-input"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search conversations"
+              aria-label="Search conversations"
+            />
+          </div>
+          <div className="muted" style={{ fontSize: 11, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+            Recent
+          </div>
+          <div className="recent-list">
+            {threads.loading ? (
+              <LoadingState lines={2} />
+            ) : threads.error ? (
+              <div className="error-box" style={{ padding: 8, fontSize: 12 }}>
+                {apiDescribeError(threads.error)}
+              </div>
+            ) : (threads.data?.threads ?? []).length === 0 ? (
+              <div className="muted" style={{ fontSize: 12 }}>No conversations yet</div>
+            ) : null}
+            {(threads.data?.threads ?? [])
+              .filter((t) => !search || t.title.toLowerCase().includes(search.toLowerCase()))
+              .slice(0, 8)
+              .map((thread) => (
+              <div
+                key={thread.id}
+                className="recent-item"
+                onClick={() => {
+                  setActiveThread(thread.id);
+                  navigate("#/");
+                }}
+              >
+                <div className="recent-title">{thread.title || "Untitled"}</div>
+                <div className="recent-meta mono muted">{thread.id.slice(0, 10)}…</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="sidebar-section">
+          <div className="muted" style={{ fontSize: 11, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+            Workspace
+          </div>
+          {nav("#/", "Home", route.name === "home")}
+          {nav("#/projects", "Projects", route.name === "projects" || route.name === "project")}
+          {nav("#/bots", "Bots", route.name === "bots" || route.name === "bot")}
+          {nav("#/boards", "Boards", route.name === "boards" || route.name === "board")}
+          {nav("#/teams", "Teams", route.name === "teams" || route.name === "team")}
           {nav("#/settings", "Settings", route.name === "settings")}
-          {projects.map((id) => (
-            <span key={id}>
-              {nav(`#/p/${id}`, `· ${id.slice(0, 14)}…`, route.name !== "projects" &&
-                route.name !== "capabilities" &&
-                route.name !== "home" &&
-                "projectId" in route &&
-                route.projectId === id)}
-            </span>
-          ))}
-          {nav("#/capabilities", "Capabilities", route.name === "capabilities")}
-        </nav>
-        <div style={{ padding: "16px 12px" }}>
+        </div>
+
+        <div style={{ padding: "16px 12px", marginTop: "auto" }}>
           <button
             onClick={() => {
               setSession(null);
@@ -95,14 +172,29 @@ export default function App() {
           </button>
         </div>
       </aside>
+
       <main className="main">
-        {route.name === "home" && (
-          <ChatHome projects={projects} onOpen={openProject} />
+        {isChatRoute && (
+          <ConversationView
+            projectId={route.name === "chat" ? route.projectId : undefined}
+            initialThreadId={activeThreadId}
+            onSetActiveThread={setActiveThread}
+          />
         )}
+        {route.name === "teams" && <TeamsView />}
+        {route.name === "team" && (
+          <TeamDetailView teamId={route.teamId} onOpenProject={openProject} />
+        )}
+        {route.name === "bot" && <BotDetailView teammateId={route.teammateId} />}
+        {route.name === "boards" && <BoardsView />}
+        {route.name === "board" && <BoardDetailView boardId={route.boardId} />}
         {route.name === "projects" && <ProjectsView onOpen={openProject} />}
         {route.name === "settings" && <SettingsView />}
         {route.name === "project" && (
-          <ProjectDetailView projectId={route.projectId} onOpenTask={(taskId) => navigate(`#/p/${route.projectId}/t/${taskId}`)} />
+          <ProjectDetailView
+            projectId={route.projectId}
+            onOpenTask={(taskId) => navigate(`#/p/${route.projectId}/t/${taskId}`)}
+          />
         )}
         {route.name === "task" && (
           <TaskDetailView
@@ -112,14 +204,41 @@ export default function App() {
           />
         )}
         {route.name === "capabilities" && <CapabilitiesView />}
+        {route.name === "bots" && <BotsView />}
+        {!isChatRoute &&
+          route.name !== "teams" &&
+          route.name !== "team" &&
+          route.name !== "bot" &&
+          route.name !== "boards" &&
+          route.name !== "board" &&
+          route.name !== "projects" &&
+          route.name !== "settings" &&
+          route.name !== "project" &&
+          route.name !== "task" &&
+          route.name !== "capabilities" &&
+          route.name !== "bots" && (
+          <EmptyState title="Workspace" hint="Select a workspace area from the sidebar." />
+        )}
         <Toaster position="bottom-right" richColors closeButton />
       </main>
     </div>
   );
 }
 
+/** The dashboard is normally served by the API itself (e.g. localhost:8080,
+ *  documented in the README). Defaulting the API base to the current origin
+ *  keeps that flow same-origin (no CORS involved); only when the page is
+ *  served elsewhere (the vite dev server) does the local default remain. */
+export function defaultApiBase(): string {
+  const loc = typeof window !== "undefined" ? window.location : null;
+  if (loc && (loc.protocol === "http:" || loc.protocol === "https:") && loc.port !== "5173") {
+    return loc.origin;
+  }
+  return "http://127.0.0.1:8080";
+}
+
 function ConnectScreen({ onConnected }: { onConnected: () => void }) {
-  const [baseUrl, setBaseUrl] = useState("http://127.0.0.1:8088");
+  const [baseUrl, setBaseUrl] = useState(defaultApiBase);
   const [token, setToken] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -128,7 +247,6 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }) {
     e.preventDefault();
     setError(null);
     setBusy(true);
-    // Configure in memory so we can probe /health; cleared on failure.
     setSession({ baseUrl: baseUrl.replace(/\/+$/, ""), token });
     try {
       const health = await api.health();
@@ -145,7 +263,7 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }) {
   return (
     <div className="layout" style={{ gridTemplateColumns: "1fr" }}>
       <main className="main" style={{ margin: "60px auto", width: "100%", maxWidth: 460 }}>
-        <h1>NerdBot Ops</h1>
+        <h1>NerdBot</h1>
         <p className="subtitle">Connect to a running NerdBot API server.</p>
         {error ? (
           <div className="error-box" role="alert">
@@ -176,7 +294,11 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }) {
   );
 }
 
+/** Human-readable form for any thrown error (see api.describeError). */
+export function describeError(err: unknown): string {
+  return apiDescribeError(err);
+}
+
 export function notifyError(err: unknown): void {
-  const message = err instanceof ApiError ? `Error ${err.status}: ${err.detail}` : String(err);
-  toast.error(message);
+  toast.error(describeError(err));
 }
