@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ApiError, api } from "./api";
-import { notifyError } from "./app";
-import type { Board, BoardMember, MemoryEntry, Run, Task, Teammate } from "./types";
+import { describeError, notifyError } from "./app";
+import type { Board, BoardMember, MemoryEntry, Provider, Run, Task, Teammate } from "./types";
 import {
   EmptyState,
   ErrorState,
@@ -10,6 +10,8 @@ import {
   StatusBadge,
   useAsync,
   usePermissionCatalogue,
+  Badge,
+  Field,
 } from "./components";
 
 export function BotDetailView({
@@ -512,29 +514,67 @@ function BotAccess({ mate, boards }: { mate: Teammate; boards: Board[] }) {
 export function BotsView() {
   const all = useAsync(() => api.listAllTeammates(), []);
   const projects = useAsync(() => api.listProjects(), []);
+  const catalogue = usePermissionCatalogue();
+  const [step, setStep] = useState<"identity" | "model" | "permissions" | "memory" | "review">(
+    "identity",
+  );
   const [showCreate, setShowCreate] = useState(false);
-  const [createProjectId, setCreateProjectId] = useState("");
-  const [createPersona, setCreatePersona] = useState("");
-  const [createInstructions, setCreateInstructions] = useState("");
+
+  // creation draft
+  const [pid, setPid] = useState("");
+  const [persona, setPersona] = useState("");
+  const [instructions, setInstructions] = useState("");
+  const [providerId, setProviderId] = useState("");
+  const [selectedPerms, setSelectedPerms] = useState<string[]>([]);
+  const [memoryScope, setMemoryScope] = useState("project");
+
+  const providers = useAsync(
+    () => (pid ? api.listProviders(pid) : Promise.resolve({ providers: [] })),
+    [pid],
+  );
+
+  const back = () => {
+    if (step === "identity") setStep("identity");
+    else if (step === "model") setStep("identity");
+    else if (step === "permissions") setStep("model");
+    else if (step === "memory") setStep("permissions");
+    else if (step === "review") setStep("memory");
+  };
+
+  const next = () => {
+    if (step === "identity") {
+      if (!persona.trim()) return;
+      setStep("model");
+    } else if (step === "model") {
+      setStep("permissions");
+    } else if (step === "permissions") {
+      setStep("memory");
+    } else if (step === "memory") {
+      setStep("review");
+    }
+  };
 
   const createBot = async (e: React.FormEvent) => {
     e.preventDefault();
-    const pid = createProjectId.trim();
-    if (!pid || !createPersona.trim()) {
-      return notifyError("Pick a project and give the bot a persona.");
-    }
+    const p = pid.trim();
+    if (!p || !persona.trim()) return notifyError("Pick a project and give the bot a persona.");
     try {
-      await api.createTeammate(pid, {
-        persona: createPersona.trim(),
-        instructions: createInstructions.trim(),
+      await api.createTeammate(p, {
+        persona: persona.trim(),
+        instructions: instructions.trim(),
         capabilities: [],
-        permissions: [],
-        memory_scope: "project",
+        permissions: selectedPerms,
+        memory_scope: memoryScope,
+        provider_id: providerId || undefined,
       });
       setShowCreate(false);
-      setCreateProjectId("");
-      setCreatePersona("");
-      setCreateInstructions("");
+      setPid("");
+      setPersona("");
+      setInstructions("");
+      setProviderId("");
+      setSelectedPerms([]);
+      setMemoryScope("project");
+      setStep("identity");
       all.reload();
       projects.reload();
     } catch (err) {
@@ -542,15 +582,15 @@ export function BotsView() {
     }
   };
 
-  if (all.loading || projects.loading) {
+  if (all.loading || projects.loading || catalogue.loading) {
     return <LoadingState lines={4} />;
   }
-  if (all.error || projects.error) {
+  if (all.error || projects.error || catalogue.error) {
     return (
       <div>
         <button onClick={() => (window.location.hash = "#/")}>← Home</button>
         <ErrorState
-          error={all.error ?? projects.error ?? "Unable to load fleet"}
+          error={all.error ?? projects.error ?? catalogue.error ?? "Unable to load fleet"}
           onRetry={all.reload}
         />
       </div>
@@ -560,18 +600,19 @@ export function BotsView() {
   const mates: Teammate[] = (all.data as { teammates: Teammate[] }).teammates;
   const projList: { id: string; repository: string }[] =
     (projects.data as { projects: { id: string; repository: string }[] }).projects;
+  const provList: Provider[] = (providers.data as { providers: Provider[] } | null)?.providers ?? [];
 
-  const projectOf = (pid: string) =>
-    projList.find((p) => p.id === pid)?.repository || pid.slice(0, 10);
+  const projectOf = (pid2: string) =>
+    projList.find((p) => p.id === pid2)?.repository || pid2.slice(0, 10);
 
   return (
     <div>
       <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
         <div>
-          <h1>Fleet</h1>
+          <h1>AI fleet</h1>
           <p className="subtitle">
-            Every bot on this server, across all workspaces. Create a bot in a
-            project, then assign it tasks from that project's Teammates tab.
+            Persistent AI teammates with identity, instructions, model/provider, permissions, memory,
+            and task history. Bots own tasks and run them in isolated workspaces.
           </p>
         </div>
         <div className="row">
@@ -583,59 +624,253 @@ export function BotsView() {
       </div>
 
       {showCreate ? (
-        <Modal title="Create bot" onClose={() => setShowCreate(false)}>
-          <form onSubmit={createBot} className="row" style={{ gap: 8, flexDirection: "column" }}>
-            <label className="field">
-              <span>Project (workspace)</span>
-              <select
-                value={createProjectId}
-                onChange={(e) => setCreateProjectId(e.target.value)}
-                required
-                style={{ width: 320 }}
-              >
-                <option value="">(select project)</option>
-                {projList.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.repository || "workspace"} ({p.id.slice(0, 8)}…)
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>Persona / name</span>
-              <input
-                value={createPersona}
-                onChange={(e) => setCreatePersona(e.target.value)}
-                required
-                placeholder="engineer"
-                style={{ width: 320 }}
-              />
-            </label>
-            <label className="field">
-              <span>Instructions (optional)</span>
-              <textarea
-                value={createInstructions}
-                onChange={(e) => setCreateInstructions(e.target.value)}
-                placeholder="You are a careful engineering bot…"
-                rows={2}
-                style={{ width: 460 }}
-              />
-            </label>
-            <div className="row">
-              <button className="primary" type="submit">Create bot</button>
-              <button
-                className=""
-                onClick={() => {
-                  setShowCreate(false);
-                  setCreateProjectId("");
-                  setCreatePersona("");
-                  setCreateInstructions("");
-                }}
-              >
-                Cancel
-              </button>
+        <Modal title={`Create bot — ${stepName(step)}`} onClose={() => setShowCreate(false)}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {step === "identity" && (
+              <>
+                <Field label="Project (workspace)">
+                  <select
+                    value={pid}
+                    onChange={(e) => setPid(e.target.value)}
+                    required
+                    style={{ width: 340 }}
+                  >
+                    <option value="">(select project)</option>
+                    {projList.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.repository || "workspace"} ({p.id.slice(0, 8)}…)
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Persona / name">
+                  <input
+                    value={persona}
+                    onChange={(e) => setPersona(e.target.value)}
+                    required
+                    placeholder="engineer"
+                    style={{ width: 340 }}
+                  />
+                </Field>
+                <Field label="Instructions (optional)">
+                  <textarea
+                    value={instructions}
+                    onChange={(e) => setInstructions(e.target.value)}
+                    placeholder="You are a careful engineering bot…"
+                    rows={3}
+                    style={{ width: 480 }}
+                  />
+                </Field>
+              </>
+            )}
+            {step === "model" && (
+              <>
+                <Field label="Model provider">
+                  {providers.loading ? (
+                    <LoadingState lines={1} />
+                  ) : providers.error ? (
+                    <div className="error-box" style={{ padding: 8 }}>
+                      {describeError(providers.error)}
+                    </div>
+                  ) : provList.length === 0 ? (
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      No providers configured for this project. Add one in the project's Providers
+                      tab, then attach it here. The bot will work without a provider until one is
+                      attached.
+                    </div>
+                  ) : (
+                    <select
+                      value={providerId}
+                      onChange={(e) => setProviderId(e.target.value)}
+                      style={{ width: 340 }}
+                    >
+                      <option value="">(none — use default)</option>
+                      {provList.map((pr) => (
+                        <option key={pr.id} value={pr.id}>
+                          {pr.name} ({pr.kind})
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                    Select the model connection this bot uses to think. Leave unset to use the
+                    project's default provider.
+                  </div>
+                </Field>
+              </>
+            )}
+            {step === "permissions" && (
+              <>
+                <Field label="Tools &amp; permissions">
+                  <p className="muted" style={{ fontSize: 12, marginBottom: 8, maxWidth: 460 }}>
+                    Choose permissions from the server's canonical catalogue. Admin actions
+                    (marked with a shield) require your approval before the bot can use them.
+                  </p>
+                  <div
+                    style={{
+                      maxHeight: 260,
+                      overflowY: "auto" as const,
+                      border: "1px solid var(--border)",
+                      borderRadius: "var(--radius)",
+                      padding: 8,
+                      background: "var(--surface)",
+                    }}
+                  >
+                    {catalogue.permissions.length === 0 ? (
+                      <div className="muted" style={{ fontSize: 12, padding: 6 }}>
+                        No permissions available from the server.
+                      </div>
+                    ) : (
+                      catalogue.permissions.map((perm) => {
+                        const held = selectedPerms.includes(perm.name);
+                        return (
+                          <label
+                            key={perm.name}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 8,
+                              padding: "4px 6px",
+                              borderRadius: "var(--radius-sm)",
+                              cursor: "pointer",
+                              background: held ? "var(--accent-dim)" : "transparent",
+                              border: held ? "1px solid var(--accent)" : "1px solid transparent",
+                            }}
+                            onClick={() => {
+                              if (held) {
+                                setSelectedPerms(selectedPerms.filter((x) => x !== perm.name));
+                              } else {
+                                setSelectedPerms([...selectedPerms, perm.name]);
+                              }
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={held}
+                              readOnly
+                              style={{ width: "auto", margin: 0 }}
+                            />
+                            <div style={{ flex: 1 }}>
+                              <div style={{ fontWeight: 500 }}>{perm.name}</div>
+                              <div className="muted" style={{ fontSize: 11 }}>
+                                {perm.summary}
+                              </div>
+                            </div>
+                            {perm.requires_approval && (
+                              <span style={{ fontSize: 10, marginLeft: 6 }}>
+                                <Badge variant="warn">approval-gated</Badge>
+                              </span>
+                            )}
+                          </label>
+                        );
+                      })
+                    )}
+                  </div>
+                  <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                    {selectedPerms.length} selected
+                  </div>
+                </Field>
+              </>
+            )}
+            {step === "memory" && (
+              <>
+                <Field label="Memory scope">
+                  <select
+                    value={memoryScope}
+                    onChange={(e) => setMemoryScope(e.target.value)}
+                    style={{ width: 240 }}
+                  >
+                    <option value="project">Project</option>
+                    <option value="private">Private (this bot only)</option>
+                  </select>
+                  <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                    Project scope shares memory with other bots and tasks in the workspace. Private
+                    keeps it to this bot alone.
+                  </div>
+                </Field>
+              </>
+            )}
+            {step === "review" && (
+              <>
+                <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
+                  <div className="row">
+                    <span className="muted">Project</span>
+                    <span>{projList.find((p) => p.id === pid)?.repository || pid}</span>
+                  </div>
+                  <div className="row">
+                    <span className="muted">Persona / name</span>
+                    <span>{persona}</span>
+                  </div>
+                  {instructions && (
+                    <div className="row">
+                      <span className="muted">Instructions</span>
+                      <span>{instructions}</span>
+                    </div>
+                  )}
+                  <div className="row">
+                    <span className="muted">Model provider</span>
+                    <span>
+                      {provList.find((pr) => pr.id === providerId)?.name || "(none — default)"}
+                    </span>
+                  </div>
+                  <div className="row">
+                    <span className="muted">Permissions</span>
+                    <span>
+                      {selectedPerms.length > 0 ? selectedPerms.join(", ") : "— none —"}
+                    </span>
+                  </div>
+                  <div className="row">
+                    <span className="muted">Memory scope</span>
+                    <span>{memoryScope}</span>
+                  </div>
+                </div>
+              </>
+            )}
+
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 16 }}>
+              {step !== "identity" && (
+                <button onClick={back} style={{ padding: "7px 14px" }}>
+                  Back
+                </button>
+              )}
+              <div style={{ display: "flex", gap: 6 }}>
+                {step === "review" ? (
+                  <button className="primary" onClick={createBot} disabled={!persona.trim()}>
+                    Create bot
+                  </button>
+                ) : (
+                  <button
+                    className="primary"
+                    onClick={next}
+                    disabled={
+                      step === "identity"
+                        ? !pid.trim() || !persona.trim()
+                        : step === "model"
+                        ? false
+                        : false
+                    }
+                  >
+                    Continue
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    setShowCreate(false);
+                    setPid("");
+                    setPersona("");
+                    setInstructions("");
+                    setProviderId("");
+                    setSelectedPerms([]);
+                    setMemoryScope("project");
+                    setStep("identity");
+                  }}
+                  style={{ padding: "7px 14px" }}
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
-          </form>
+          </div>
         </Modal>
       ) : null}
 
@@ -648,8 +883,8 @@ export function BotsView() {
               <th>Workspace</th>
               <th>Status</th>
               <th>Model</th>
-              <th>Memory</th>
               <th>Permissions</th>
+              <th>Tasks</th>
               <th></th>
             </tr>
           </thead>
@@ -657,15 +892,12 @@ export function BotsView() {
             {mates.map((mate) => (
               <tr key={mate.id}>
                 <td>
-                  <a href={`#/bot/${mate.id}`}>
-                    <strong>{mate.persona || "Unnamed bot"}</strong>
-                  </a>
-                  <div className="muted mono">{mate.id.slice(0, 12)}…</div>
-                  {mate.instructions ? (
-                    <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
-                      {mate.instructions.slice(0, 80)}…
-                    </div>
-                  ) : null}
+                  <div>
+                    <a href={`#/bot/${mate.id}`}>
+                      <strong>{mate.persona || "Unnamed bot"}</strong>
+                    </a>
+                    <div className="muted mono">{mate.id.slice(0, 12)}…</div>
+                  </div>
                 </td>
                 <td className="muted">{projectOf(mate.project_id)}</td>
                 <td>
@@ -674,26 +906,21 @@ export function BotsView() {
                 <td className="muted mono">
                   {mate.provider_id ? mate.provider_id.slice(0, 10) + "…" : "—"}
                 </td>
-                <td className="muted">{mate.memory_scope}</td>
                 <td className="muted" style={{ fontSize: 11 }}>
                   {(mate.permissions ?? []).length > 0
                     ? (mate.permissions ?? []).join(", ")
                     : "—"}
                 </td>
+                <td className="muted">—</td>
                 <td>
                   <button
-                    className="danger"
+                    className="primary"
                     onClick={() => {
-                      if (
-                        window.confirm(
-                          `Disable bot ${mate.persona || mate.id}? This stops it from owning new tasks.`
-                        )
-                      ) {
-                        void api.disableTeammate(mate.id).then(() => all.reload());
-                      }
+                      window.location.hash = `#/bot/${mate.id}`;
                     }}
+                    style={{ padding: "4px 10px", fontSize: 12 }}
                   >
-                    Disable
+                    Open
                   </button>
                 </td>
               </tr>
@@ -703,9 +930,25 @@ export function BotsView() {
       ) : (
         <EmptyState
           title="No bots yet"
-          hint="Create a bot in a workspace above. Bots own tasks, run them in isolated workspaces, and keep private memory."
+          action={
+            <button className="button primary" onClick={() => setShowCreate(true)}>
+              Create your first bot
+            </button>
+          }
+          hint="Bots are persistent AI teammates. Give one a persona, attach a model, and assign it tasks. It will run work in an isolated workspace and keep its own memory."
         />
       )}
     </div>
   );
+}
+
+function stepName(s: string): string {
+  const names: Record<string, string> = {
+    identity: "Identity &amp; role",
+    model: "Model provider",
+    permissions: "Tools &amp; permissions",
+    memory: "Memory &amp; scope",
+    review: "Review &amp; save",
+  };
+  return names[s] ?? s;
 }
