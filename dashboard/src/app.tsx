@@ -12,6 +12,9 @@ import { BotDetailView, BotsView } from "./views-bot";
 import { BoardsView, BoardDetailView } from "./views-boards";
 import {
   EmptyState,
+  Button,
+  useTheme,
+  ThemeButton,
 } from "./components";
 
 export type Route =
@@ -63,6 +66,7 @@ export default function App() {
   const [connected, setConnected] = useState(() => getSession() !== null);
   const [activeThreadId, setActiveThread] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const { setTheme } = useTheme();
 
   useEffect(() => {
     const onHash = () => setRoute(parseHash());
@@ -88,68 +92,97 @@ export default function App() {
 
   const isChatRoute = route.name === "home" || route.name === "chat";
 
-  const nav = (href: string, label: string, active: boolean) => (
-    <button
-      key={href}
-      className={`nav-item${active ? " active" : ""}`}
-      onClick={() => navigate(href)}
-    >
-      {label}
-    </button>
-  );
-
   return (
-    <div className="layout">
+    <div className="layout h-full overflow-hidden bg-[var(--bg)] text-[var(--text)]">
       <button
-        className="mobile-menu"
+        className="mobile-menu fixed top-4 left-4 z-70 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] hover:border-[var(--faint)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-1"
         aria-label="Open navigation"
         onClick={() => setDrawerOpen((d) => !d)}
       >
         ☰
       </button>
 
-      <aside className={`sidebar${drawerOpen ? " open" : ""}`}>
-        <div className="sidebar-inner">
-          <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+      <aside className={`sidebar border-r border-[var(--border)] bg-[var(--surface)] flex flex-col overflow-hidden ${drawerOpen ? "translate-x-0" : "-translate-x-full"} transition-transform duration-200 ease-[var(--ease-out)]`}>
+        <div className="p-4 overflow-y-auto">
+          <div className="flex items-center justify-between mb-4">
             <div className="brand">
-              <strong>NerdBot</strong>
-              <div className="brand-sub">personal assistant</div>
+              <strong className="text-base font-semibold tracking-tight">NerdBot</strong>
+              <div className="text-[var(--step-minus-1)] text-[var(--muted)] mt-0.5 uppercase tracking-widest">assistant</div>
             </div>
             {drawerOpen && (
               <button
-                className="button"
+                className="rounded-sm p-1.5 text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--surface-2)] transition-colors"
                 onClick={() => setDrawerOpen(false)}
                 aria-label="Close navigation"
-                style={{ padding: "6px 10px", fontSize: 12 }}
               >
-                Close
+                ×
               </button>
             )}
           </div>
 
-          <div className="sidebar-section">
-            <button
-              className="button primary"
+          <div className="mt-6">
+            <Button
+              variant="primary"
+              className="w-full"
               onClick={openHome}
               aria-label="Start a new conversation"
             >
               New chat
-            </button>
+            </Button>
           </div>
 
-          <div className="sidebar-section">
-            <div className="sidebar-section-label">Workspace</div>
-            {nav("#/", "Home", route.name === "home")}
-            {nav("#/projects", "Projects", route.name === "projects" || route.name === "project")}
-            {nav("#/bots", "Bots", route.name === "bots" || route.name === "bot")}
-            {nav("#/boards", "Boards", route.name === "boards" || route.name === "board")}
-            {nav("#/teams", "Teams", route.name === "teams" || route.name === "team")}
-            {nav("#/settings", "Settings", route.name === "settings")}
+          <div className="mt-8">
+            <div className="text-[var(--step-minus-2)] text-[var(--faint)] uppercase tracking-widest mb-2">Workspace</div>
+            <nav className="space-y-0.5">
+              <Button
+                variant={route.name === "home" ? "primary" : "default"}
+                className={`w-full text-left justify-start border-transparent bg-transparent hover:bg-[var(--surface-2)] ${route.name === "home" ? "bg-[var(--accent-dim)] border-[var(--accent)] text-[var(--text)]" : "text-[var(--text-soft)]"}`}
+                onClick={openHome}
+              >
+                Home
+              </Button>
+              <Button
+                variant={route.name === "projects" || route.name === "project" ? "primary" : "default"}
+                className={`w-full text-left justify-start border-transparent bg-transparent hover:bg-[var(--surface-2)] ${(route.name === "projects" || route.name === "project") ? "bg-[var(--accent-dim)] border-[var(--accent)] text-[var(--text)]" : "text-[var(--text-soft)]"}`}
+                onClick={() => navigate("#/projects")}
+              >
+                Workspaces
+              </Button>
+              <Button
+                variant={route.name === "bots" || route.name === "bot" ? "primary" : "default"}
+                className={`w-full text-left justify-start border-transparent bg-transparent hover:bg-[var(--surface-2)] ${(route.name === "bots" || route.name === "bot") ? "bg-[var(--accent-dim)] border-[var(--accent)] text-[var(--text)]" : "text-[var(--text-soft)]"}`}
+                onClick={() => navigate("#/bots")}
+              >
+                AI fleet
+              </Button>
+              <Button
+                variant={route.name === "boards" || route.name === "board" ? "primary" : "default"}
+                className={`w-full text-left justify-start border-transparent bg-transparent hover:bg-[var(--surface-2)] ${(route.name === "boards" || route.name === "board") ? "bg-[var(--accent-dim)] border-[var(--accent)] text-[var(--text)]" : "text-[var(--text-soft)]"}`}
+                onClick={() => navigate("#/boards")}
+              >
+                Boards
+              </Button>
+              <Button
+                variant={route.name === "teams" || route.name === "team" ? "primary" : "default"}
+                className={`w-full text-left justify-start border-transparent bg-transparent hover:bg-[var(--surface-2)] ${(route.name === "teams" || route.name === "team") ? "bg-[var(--accent-dim)] border-[var(--accent)] text-[var(--text)]" : "text-[var(--text-soft)]"}`}
+                onClick={() => navigate("#/teams")}
+              >
+                Teams
+              </Button>
+              <Button
+                variant={route.name === "settings" ? "primary" : "default"}
+                className={`w-full text-left justify-start border-transparent bg-transparent hover:bg-[var(--surface-2)] ${route.name === "settings" ? "bg-[var(--accent-dim)] border-[var(--accent)] text-[var(--text)]" : "text-[var(--text-soft)]"}`}
+                onClick={() => navigate("#/settings")}
+              >
+                Settings
+              </Button>
+            </nav>
           </div>
 
-          <div style={{ padding: "16px 12px", marginTop: "auto" }}>
-            <button
-              className="button"
+          <div className="mt-auto pt-6 border-t border-[var(--border-dim)]">
+            <Button
+              variant="default"
+              className="w-full text-left"
               onClick={() => {
                 setSession(null);
                 setConnected(false);
@@ -157,12 +190,16 @@ export default function App() {
               }}
             >
               Disconnect
-            </button>
+            </Button>
+            <div className="mt-3 flex items-center gap-2">
+              <span className="text-[var(--step-minus-2)] text-[var(--faint)]">Theme</span>
+              <ThemeButton onThemeChange={setTheme} />
+            </div>
           </div>
         </div>
       </aside>
 
-      <div className={`main${drawerOpen ? " dimmed" : ""}`}>
+      <div className="main flex flex-col h-full overflow-hidden relative">
         {isChatRoute && (
           <ConversationView
             projectId={route.name === "chat" ? route.projectId : undefined}
@@ -189,7 +226,7 @@ export default function App() {
           <TaskDetailView
             projectId={route.projectId}
             taskId={route.taskId}
-            onBack={() => navigate(`#/p/${route.projectId}`)}
+            onBack={() => navigate(`#/p/${route.projectId}/t/${route.taskId}`)}
           />
         )}
         {route.name === "capabilities" && <CapabilitiesView />}
@@ -250,40 +287,48 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }) {
   };
 
   return (
-    <div className="layout" style={{ gridTemplateColumns: "1fr" }}>
-      <main className="main" style={{ margin: "60px auto", width: "100%", maxWidth: 460 }}>
-        <h1>NerdBot</h1>
-        <p className="subtitle">Connect to a running NerdBot API server.</p>
-        {error ? (
-          <div className="error-box" role="alert">
-            {error}
-          </div>
-        ) : null}
-        <form onSubmit={connect}>
-          <label className="field">
-            <span>API base URL</span>
-            <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} required />
-          </label>
-          <label className="field">
-            <span>API token (kept in this browser's local storage only)</span>
-            <input
-              type="password"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              required
-              autoComplete="off"
-            />
-          </label>
-          <button className="primary" type="submit" disabled={busy}>
-            {busy ? "Connecting…" : "Connect"}
-          </button>
-        </form>
+    <div className="layout h-full bg-[var(--bg)] text-[var(--text)]">
+      <main className="flex flex-col items-center justify-center h-full px-6">
+        <div className="w-full max-w-[460px]">
+          <h1 className="text-[var(--step-4)] font-semibold tracking-tight mb-2">NerdBot</h1>
+          <p className="text-[var(--step-0)] text-[var(--muted)] mb-6">Connect to a running NerdBot API server.</p>
+          {error ? (
+            <div className="rounded-lg border border-[var(--danger)] bg-[var(--danger-dim)] px-4 py-3 text-[var(--step-0)] mb-4" role="alert">
+              {error}
+            </div>
+          ) : null}
+          <form onSubmit={connect} className="space-y-4">
+            <div className="mb-4">
+              <span className="block text-[var(--step-minus-1)] font-medium text-[var(--muted)] mb-1.5 uppercase tracking-wide">API base URL</span>
+              <input
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                required
+                className="rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-0)] text-[var(--text)] w-full focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)] outline-none"
+              />
+            </div>
+            <div className="mb-4">
+              <span className="block text-[var(--step-minus-1)] font-medium text-[var(--muted)] mb-1.5 uppercase tracking-wide">API token (kept in this browser's local storage only)</span>
+              <input
+                type="password"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                required
+                autoComplete="off"
+                className="rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-0)] text-[var(--text)] w-full focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)] outline-none"
+              />
+            </div>
+            <button className="button primary w-full" type="submit" disabled={busy}>
+              {busy ? "Connecting…" : "Connect"}
+            </button>
+          </form>
+        </div>
       </main>
+      <Toaster position="bottom-right" richColors closeButton />
     </div>
   );
 }
 
-/** Human-readable form for any thrown error (see api.describeError). */
 export function describeError(err: unknown): string {
   return apiDescribeError(err);
 }

@@ -56,10 +56,14 @@ export function EntityForm({
             <textarea
               rows={3}
               placeholder={field.placeholder}
+              className="w-full resize-y rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-0)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
               {...register(field.name, { required: field.required ? `${field.label} is required` : false })}
             />
           ) : field.type === "select" ? (
-            <select {...register(field.name, { required: field.required ? `${field.label} is required` : false })}>
+            <select
+              className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-0)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
+              {...register(field.name, { required: field.required ? `${field.label} is required` : false })}
+            >
               {(field.options ?? []).map((option) => (
                 <option key={option} value={option}>
                   {option}
@@ -71,13 +75,16 @@ export function EntityForm({
               type={field.type === "password" ? "password" : "text"}
               placeholder={field.placeholder}
               autoComplete="off"
+              className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-0)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
               {...register(field.name, { required: field.required ? `${field.label} is required` : false })}
             />
           )}
-          {field.hint ? <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{field.hint}</div> : null}
+          {field.hint ? (
+            <div className="text-[var(--step-minus-1)] text-[var(--faint)]">{field.hint}</div>
+          ) : null}
         </Field>
       ))}
-      <button className="primary" type="submit" disabled={isSubmitting}>
+      <button className="button primary mt-2" type="submit" disabled={isSubmitting}>
         {isSubmitting ? "Saving…" : submitLabel}
       </button>
     </form>

@@ -1,8 +1,9 @@
 import { useEffect, useState, useRef } from "react";
 import { toast } from "sonner";
 import { api, ApiError } from "./api";
-import { notifyError, describeError } from "./app";
+import { notifyError } from "./app";
 import type { ChatMessage, ChatThread, Teammate } from "./types";
+import { AttentionBanner, ExecutionRollup, useWorkspaceSummary } from "./views-home";
 import {
   EmptyState,
   ErrorState,
@@ -12,10 +13,17 @@ import {
   Badge,
   Field,
   StatusBadge,
+  StatusDot,
+  SectionLabel,
+  relativeTime,
   useAsync,
   taskStatusLabel,
   runStatusLabel,
 } from "./components";
+
+function openTask(projectId: string, taskId: string): void {
+  window.location.hash = `#/p/${projectId}/t/${taskId}`;
+}
 
 export function ConversationView({
   projectId,
@@ -27,6 +35,7 @@ export function ConversationView({
   onSetActiveThread?: (id: string | null) => void;
 }) {
   const home = useAsync(() => api.getHome(), []);
+  const summary = useWorkspaceSummary();
   const resolvedProjectId = projectId ?? (home.data?.id ?? "");
   const threads = useAsync(
     () =>
@@ -42,21 +51,10 @@ export function ConversationView({
         : Promise.resolve({ providers: [] }),
     [resolvedProjectId],
   );
-  const runs = useAsync(
-    () =>
-      resolvedProjectId ? api.projectRuns(resolvedProjectId) : Promise.resolve({ runs: [] }),
-    [resolvedProjectId],
-  );
-  const approvals = useAsync(
-    () =>
-      resolvedProjectId
-        ? api.projectApprovals(resolvedProjectId)
-        : Promise.resolve({ approvals: [] }),
-    [resolvedProjectId],
-  );
   const [activeId, setActiveId] = useState<string | null>(initialThreadId ?? null);
   const [search, setSearch] = useState("");
   const [showNew, setShowNew] = useState(false);
+  const [decideBusy, setDecideBusy] = useState(false);
 
   useEffect(() => {
     if (activeId) {
@@ -64,109 +62,113 @@ export function ConversationView({
     }
   }, [activeId, onSetActiveThread]);
 
+  const decideApproval = async (
+    approvalId: string,
+    decision: "approved" | "approved_forever" | "denied",
+  ) => {
+    setDecideBusy(true);
+    try {
+      await api.decideApproval(approvalId, decision);
+      toast.success(
+        decision === "denied" ? "Rejected" : decision === "approved_forever" ? "Approved forever" : "Approved once",
+      );
+      summary.reload();
+    } catch (err) {
+      notifyError(err);
+    } finally {
+      setDecideBusy(false);
+    }
+  };
+
   if (!resolvedProjectId) {
     return <LoadingState lines={2} />;
   }
 
   const isHome = !projectId;
-  const filtered = (threads.data?.threads ?? []).filter(
-    (t) => !search || t.title.toLowerCase().includes(search.toLowerCase()),
-  );
-
-  const activeRuns = (runs.data?.runs ?? []).filter(
-    (r) => r.status === "running" || r.status === "blocked" || r.status === "queued",
-  );
-  const pendingApprovals = (approvals.data?.approvals ?? []).filter(
-    (a) => !a.decision || a.decision === "pending",
-  );
-  const needsAttention = activeRuns.length > 0 || pendingApprovals.length > 0;
 
   return (
-    <div className="conversation">
-      <div className="conversation-header">
-        <div>
-          <h1>{isHome ? "Home" : "Project conversation"}</h1>
-          <p className="subtitle">
+    <div className="flex h-full flex-col overflow-hidden">
+      {/* Header */}
+      <header className="flex flex-wrap items-end justify-between gap-3 border-b border-[var(--border-dim)] px-4 py-3 md:px-6">
+        <div className="min-w-0">
+          <h1 className="text-[var(--step-1)] font-semibold tracking-tight">
+            {isHome ? "Home" : "Project conversation"}
+          </h1>
+          <p className="text-[var(--step-minus-1)] text-[var(--muted)]">
             {isHome
               ? "Your default personal conversation. Projects are optional."
-              : "Scoped to this project's workspace — files, tasks, and teammates stay with it."}
+              : "Scoped to this workspace — files, tasks, and teammates stay with it."}
           </p>
         </div>
-        <div className="header-actions">
-          <button className="button primary" onClick={() => setShowNew(true)} disabled={!home.data}>
-            New chat
-          </button>
-        </div>
+        <Button variant="primary" onClick={() => setShowNew(true)} disabled={!home.data}>
+          New chat
+        </Button>
+      </header>
+
+      {/* Workspace-wide attention banner */}
+      <div className="px-4 pt-3 md:px-6">
+        <AttentionBanner
+          summary={summary.data}
+          busy={decideBusy}
+          onDecide={decideApproval}
+          onOpenTask={openTask}
+        />
       </div>
 
-      {needsAttention && (
-        <div className="attention-banner">
-          <div className="attention-inner">
-            {activeRuns.length > 0 && (
-              <div className="attention-item">
-                <Badge variant="info">{activeRuns.length}</Badge>
-                <span>task{activeRuns.length !== 1 ? "s" : ""} running</span>
-              </div>
-            )}
-            {pendingApprovals.length > 0 && (
-              <div className="attention-item">
-                <Badge variant="warn">{pendingApprovals.length}</Badge>
-                <span>
-                  approval{pendingApprovals.length !== 1 ? "s" : ""} awaiting your decision
-                </span>
-              </div>
-            )}
-            <Button
-              variant="ghost"
-              onClick={() => {
-                window.location.hash = "#/projects";
-              }}
-            >
-              Go to workspaces
-            </Button>
-          </div>
-        </div>
-      )}
-
-      <div className="conversation-body">
-        <aside className="conversation-sidebar">
-          <div className="field" style={{ marginBottom: 10 }}>
+      {/* Body: thread rail + active pane */}
+      <div className="flex min-h-0 flex-1">
+        <aside className="hidden w-[280px] shrink-0 flex-col border-r border-[var(--border-dim)] md:flex">
+          <div className="px-3 pt-3">
             <input
-              className="search-input"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search conversations"
               aria-label="Search conversations"
+              className="h-8 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-[var(--step-minus-1)] outline-none transition-colors placeholder:text-[var(--faint)] focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
             />
           </div>
-          <div className="sidebar-section-label">Recent conversations</div>
-          <div className="recent-list">
+          <div className="px-3 pb-1 pt-4">
+            <SectionLabel>Recent conversations</SectionLabel>
+          </div>
+          <div className="flex-1 overflow-y-auto px-2 pb-4 pt-1">
             {threads.loading ? (
               <LoadingState lines={3} />
             ) : threads.error ? (
-              <div className="error-box" style={{ padding: 8 }}>
-                {describeError(threads.error)}
-              </div>
-            ) : filtered.length === 0 ? (
-              <div className="muted" style={{ fontSize: 12, padding: 8 }}>No conversations yet</div>
+              <ErrorState error={threads.error} onRetry={threads.reload} />
             ) : null}
-            {filtered.map((thread: ChatThread) => (
-              <div
-                key={thread.id}
-                className={`thread-item${activeId === thread.id ? " active" : ""}`}
-                onClick={() => {
-                  setActiveId(thread.id);
-                  onSetActiveThread?.(thread.id);
-                }}
-                title={thread.title || "Untitled"}
-              >
-                <div className="thread-title">{thread.title || "Untitled"}</div>
-                <div className="thread-meta mono muted">{thread.id.slice(0, 12)}…</div>
-              </div>
-            ))}
+            {(threads.data?.threads ?? [])
+              .filter((t) => !search || t.title.toLowerCase().includes(search.toLowerCase()))
+              .map((thread: ChatThread) => (
+                <button
+                  key={thread.id}
+                  onClick={() => {
+                    setActiveId(thread.id);
+                    onSetActiveThread?.(thread.id);
+                  }}
+                  title={thread.title || "Untitled"}
+                  className={`mb-0.5 flex w-full flex-col rounded-md px-2.5 py-2 text-left transition-colors ${
+                    activeId === thread.id
+                      ? "bg-[var(--surface-3)] text-[var(--text)]"
+                      : "text-[var(--text-soft)] hover:bg-[var(--surface-2)]"
+                  }`}
+                >
+                  <span className="truncate text-[var(--step-minus-1)] font-medium">
+                    {thread.title || "Untitled"}
+                  </span>
+                  <span className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
+                    {relativeTime(thread.created_at)}
+                  </span>
+                </button>
+              ))}
+            {threads.data && (threads.data.threads ?? []).length === 0 && !threads.loading ? (
+              <p className="px-2.5 py-2 text-[var(--step-minus-1)] text-[var(--faint)]">
+                No conversations yet
+              </p>
+            ) : null}
           </div>
         </aside>
-        <section className="conversation-main">
+
+        <section className="flex min-w-0 flex-1 flex-col">
           {activeId ? (
             <ThreadPane
               threadId={activeId}
@@ -176,6 +178,7 @@ export function ConversationView({
             />
           ) : isHome ? (
             <CommandCenter
+              summary={summary}
               projectId={resolvedProjectId}
               threads={threads.data?.threads ?? []}
               providers={providers.data?.providers ?? []}
@@ -186,20 +189,23 @@ export function ConversationView({
               }}
               refreshProviders={() => providers.reload()}
               refreshThreads={() => threads.reload()}
+              onDecide={decideApproval}
+              decideBusy={decideBusy}
             />
           ) : (
             <EmptyState
               title="Select a conversation"
               hint="Pick a recent chat or start a new one."
               action={
-                <button className="button primary" onClick={() => setShowNew(true)}>
+                <Button variant="primary" onClick={() => setShowNew(true)}>
                   New chat
-                </button>
+                </Button>
               }
             />
           )}
         </section>
       </div>
+
       {showNew ? (
         <NewThreadModal
           projectId={resolvedProjectId}
@@ -209,6 +215,7 @@ export function ConversationView({
             setShowNew(false);
             threads.reload();
             setActiveId(thread.id);
+            onSetActiveThread?.(thread.id);
           }}
         />
       ) : null}
@@ -246,17 +253,23 @@ function NewThreadModal({
 
   return (
     <Modal title="New chat" onClose={onClose}>
-      <form onSubmit={create} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <form onSubmit={create} className="flex flex-col gap-2">
         <Field label="Title">
           <input
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder="Evening check-in"
             autoFocus
+            className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-0)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
           />
         </Field>
         <Field label="Model provider">
-          <select className="button" value="__default__" disabled style={{ width: 320 }}>
+          <select
+            value="__default__"
+            disabled
+            aria-label="Model provider"
+            className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-0)] opacity-70"
+          >
             <option value="__default__">Default model</option>
             {providers.map((provider) => (
               <option key={provider.id} value={provider.id}>
@@ -264,22 +277,25 @@ function NewThreadModal({
               </option>
             ))}
           </select>
-          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+          <p className="text-[var(--step-minus-1)] text-[var(--faint)]">
             The default provider is used for this thread. Change it later in the thread header.
-          </div>
+          </p>
         </Field>
-        <div className="row" style={{ justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
-          <button className="button" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="button primary" type="submit" disabled={busy || !title.trim()}>
+        <div className="mt-2 flex justify-end gap-2">
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" type="submit" disabled={busy || !title.trim()}>
             {busy ? "Creating…" : "Start chat"}
-          </button>
+          </Button>
         </div>
       </form>
     </Modal>
   );
 }
+
+/* --- Thread pane --- */
+
+const PROVIDER_SELECT_CLASS =
+  "rounded-md border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-[var(--step-minus-1)] text-[var(--text-soft)] outline-none transition-colors hover:border-[var(--faint)] focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]";
 
 function ThreadPane({
   threadId,
@@ -302,8 +318,14 @@ function ThreadPane({
   const [contextPanel, setContextPanel] = useState<"files" | "bots" | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<Array<{ name: string; content: string }>>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   const providerId = view.data?.thread.provider_id ?? "__default__";
+
+  /* Stick to the newest message while streaming. */
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+  }, [view.data?.messages.length, streaming]);
 
   const send = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -406,21 +428,13 @@ function ThreadPane({
         description,
         owner_teammate_id: null,
       });
-      toast.success("Task created");
-      setExecView({ kind: "task", taskId: task.id, projectId });
+      toast.success("Task created — its live execution view is one click away.");
+      openTask(projectId, task.id);
       await onReload();
     } catch (err) {
       notifyError(err);
     }
   };
-
-  const openContext = (type: "files" | "bots") => {
-    setContextPanel(type);
-  };
-
-  const closeContext = () => setContextPanel(null);
-
-  const closeExec = () => setExecView(null);
 
   const handleAttachFile = () => {
     fileInputRef.current?.click();
@@ -458,24 +472,24 @@ function ThreadPane({
   };
 
   return (
-    <div className="thread-pane">
-      <div className="thread-header">
-        <div>
-          <strong className="thread-title-page">
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* Thread header */}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border-dim)] px-4 py-2.5 md:px-6">
+        <div className="min-w-0">
+          <div className="truncate text-[var(--step-0)] font-semibold">
             {view.data?.thread.title || "Untitled"}
-          </strong>
-          <div className="mono muted" style={{ fontSize: 11, marginTop: 2 }}>
-            {view.data?.thread.id.slice(0, 14)}…
+          </div>
+          <div className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
+            {relativeTime(view.data?.thread.created_at ?? "")}
             {view.data?.thread.provider_id ? ` · ${view.data.thread.provider_id.slice(0, 10)}…` : ""}
           </div>
         </div>
-        <div className="thread-controls">
+        <div className="flex items-center gap-1.5">
           <select
             value={providerId}
             onChange={(e) => void switchProvider(e.target.value)}
             aria-label="Model provider"
-            className="button"
-            style={{ fontSize: 12, padding: "4px 8px" }}
+            className={PROVIDER_SELECT_CLASS}
           >
             <option value="__default__">Default model</option>
             {providers.map((provider) => (
@@ -484,141 +498,106 @@ function ThreadPane({
               </option>
             ))}
           </select>
-          <label className="muted" style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 4, cursor: "pointer", marginLeft: 10 }}>
-            <input
-              type="checkbox"
-              checked={useStream}
-              onChange={(e) => setUseStream(e.target.checked)}
-              style={{ width: "auto" }}
-            />
-            Stream
-          </label>
-          <button
-            className="button"
-            onClick={view.reload}
-            style={{ fontSize: 12, padding: "4px 10px", marginLeft: 6 }}
-          >
-            Refresh
-          </button>
-          <button
-            className="button"
-            onClick={summarize}
-            disabled={busy}
-            style={{ fontSize: 12, padding: "4px 10px", marginLeft: 6 }}
-          >
+          <Button variant="ghost" onClick={view.reload} title="Refresh">
+            ⟳
+          </Button>
+          <Button variant="ghost" onClick={summarize} disabled={busy} title="Summarize thread">
             Summarize
-          </button>
-          <button
-            className="button"
-            onClick={() => openContext("files")}
-            title="Project files"
-            style={{ fontSize: 12, padding: "4px 10px", marginLeft: 6 }}
-          >
-            Files
-          </button>
-          <button
-            className="button"
-            onClick={() => openContext("bots")}
-            title="Teammates / bots"
-            style={{ fontSize: 12, padding: "4px 10px", marginLeft: 6 }}
-          >
+          </Button>
+          <Button variant="ghost" onClick={() => setContextPanel("bots")} title="Teammates / bots">
             Bots
-          </button>
+          </Button>
         </div>
       </div>
 
       {view.data?.thread.summary ? (
-        <div className="summary-card">
-          <div className="muted" style={{ fontSize: 11, marginBottom: 4 }}>
-            Summary (recalled by other threads)
+        <div className="mx-4 mt-3 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 md:mx-6">
+          <div className="text-[var(--step-minus-2)] uppercase tracking-wider text-[var(--faint)]">
+            Summary · recalled by other threads
           </div>
-          <div style={{ whiteSpace: "pre-wrap", fontSize: 13 }}>
+          <div className="mt-1 whitespace-pre-wrap text-[var(--step-minus-1)] text-[var(--text-soft)]">
             {view.data.thread.summary}
           </div>
         </div>
       ) : null}
 
-      {execView && (
-        <ExecutionView state={execView} onClose={closeExec} />
-      )}
+      {execView && <ExecutionView state={execView} onClose={() => setExecView(null)} />}
 
-      <div className="message-list">
-        {view.loading ? (
-          <LoadingState lines={4} />
-        ) : view.error ? (
-          <ErrorState error={view.error} onRetry={view.reload} />
-        ) : view.data ? (
-          <>
-            {view.data.messages.length === 0 && !streaming ? (
-              <EmptyState title="Empty conversation" hint="Say hello to begin." />
-            ) : null}
-            {view.data.messages.map((message) => (
-              <Message key={message.id} message={message} />
-            ))}
-            {streaming ? (
-              <Message
-                key="streaming"
-                message={{
-                  id: "streaming",
-                  thread_id: threadId,
-                  role: "assistant",
-                  content: streaming,
-                  created_at: "",
-                }}
-                streaming
-              />
-            ) : null}
-          </>
-        ) : null}
+      {/* Messages */}
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-6">
+        <div className="mx-auto flex w-full max-w-[var(--max-width-read)] flex-col gap-4">
+          {view.loading ? (
+            <LoadingState lines={4} />
+          ) : view.error ? (
+            <ErrorState error={view.error} onRetry={view.reload} />
+          ) : view.data ? (
+            <>
+              {view.data.messages.length === 0 && !streaming && (
+                <EmptyState title="Empty conversation" hint="Say hello to begin." />
+              )}
+              {view.data.messages.map((message) => (
+                <Message key={message.id} message={message} />
+              ))}
+              {streaming && (
+                <Message
+                  key="streaming"
+                  message={{
+                    id: "streaming",
+                    thread_id: threadId,
+                    role: "assistant",
+                    content: streaming,
+                    created_at: "",
+                  }}
+                  streaming
+                />
+              )}
+            </>
+          ) : null}
+        </div>
       </div>
 
-      <form onSubmit={send} className="composer-form">
-        <div className="composer">
-          <div className="composer-input-wrap">
-            <input
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              placeholder="Talk to NerdBot…"
-              aria-label="Chat message"
-              disabled={busy}
-              spellCheck
-              autoComplete="off"
-            />
-            {attachedFiles.length > 0 && (
-              <div className="attached-list">
-                {attachedFiles.map((f, i) => (
-                  <div key={i} className="attached-item">
-                    <span className="mono muted" style={{ fontSize: 11 }}>
-                      {f.name}
-                    </span>
-                    <button
-                      onClick={() => setAttachedFiles(attachedFiles.filter((_, j) => j !== i))}
-                      className="button danger"
-                      style={{ padding: "2px 6px", fontSize: 11, marginLeft: 4 }}
-                    >
-                      remove
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="composer-left-actions">
+      {/* Composer */}
+      <form onSubmit={send} className="border-t border-[var(--border-dim)] px-4 py-3 md:px-6">
+        <div className="mx-auto w-full max-w-[var(--max-width-read)]">
+          {attachedFiles.length > 0 && (
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              {attachedFiles.map((f, i) => (
+                <span
+                  key={i}
+                  className="inline-flex items-center gap-1 rounded-full bg-[var(--surface-2)] px-2 py-0.5 text-[var(--step-minus-2)] text-[var(--muted)]"
+                >
+                  <span className="mono">{f.name}</span>
+                  <button
+                    type="button"
+                    aria-label={`Remove attachment ${f.name}`}
+                    onClick={() => setAttachedFiles(attachedFiles.filter((_, j) => j !== i))}
+                    className="text-[var(--danger)] hover:text-[var(--text)]"
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="flex items-end gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-2 shadow-sm focus-within:border-[var(--border-focus)]">
+            <div className="flex items-center gap-1 pb-1 pl-1">
               <button
                 type="button"
-                onClick={() => openContext("files")}
-                title="Attach project files"
-                className="button"
+                onClick={() => setContextPanel("bots")}
+                title="Mention a bot"
+                aria-label="Mention a bot"
+                className="rounded-md px-2 py-1.5 text-[var(--step-minus-1)] text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
               >
-                Files
+                ∞ Bots
               </button>
               <button
                 type="button"
                 onClick={handleAttachFile}
                 title="Attach local file"
-                className="button"
-                style={{ marginLeft: 6 }}
+                aria-label="Attach local file"
+                className="rounded-md px-2 py-1.5 text-[var(--step-minus-1)] text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
               >
-                Attach
+                +
               </button>
               <input
                 type="file"
@@ -628,35 +607,63 @@ function ThreadPane({
                 multiple
               />
             </div>
-          </div>
-          <div className="composer-actions">
-            {busy ? (
-              <button className="button danger" onClick={stop} title="Stop streaming">
-                Stop
+            <textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void send(e);
+                }
+              }}
+              placeholder="Talk to NerdBot…"
+              aria-label="Chat message"
+              disabled={busy}
+              spellCheck
+              rows={1}
+              autoComplete="off"
+              className="max-h-40 min-h-[36px] flex-1 resize-none bg-transparent py-1.5 text-[var(--step-0)] leading-relaxed outline-none placeholder:text-[var(--faint)] disabled:opacity-50"
+            />
+            <div className="flex items-center gap-1.5 pb-0.5">
+              <button
+                type="button"
+                onClick={createTaskFromChat}
+                title="Create a task from this conversation"
+                className="rounded-md px-2.5 py-1.5 text-[var(--step-minus-1)] text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
+              >
+                Task
               </button>
-            ) : (
-              <>
-                {retryFrom ? (
-                  <button className="button" onClick={retry} title="Retry last message">
-                    Retry
-                  </button>
-                ) : null}
-                <button
-                  className="button primary"
-                  type="submit"
-                  disabled={!draft.trim() || busy}
-                >
-                  Send
-                </button>
-              </>
-            )}
-            <button
-              className="button"
-              onClick={createTaskFromChat}
-              title="Create a task from this conversation"
-            >
-              Task
-            </button>
+              {busy ? (
+                <Button variant="danger" onClick={stop} title="Stop streaming">
+                  ■ Stop
+                </Button>
+              ) : (
+                <>
+                  {retryFrom ? (
+                    <Button onClick={retry} title="Retry last message">
+                      Retry
+                    </Button>
+                  ) : null}
+                  <Button variant="primary" type="submit" disabled={!draft.trim() || busy}>
+                    Send ⏎
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
+          <div className="mt-1.5 flex items-center justify-between px-1">
+            <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
+              Enter to send · Shift+Enter for a new line
+            </span>
+            <label className="flex cursor-pointer items-center gap-1.5 text-[var(--step-minus-2)] text-[var(--faint)]">
+              <input
+                type="checkbox"
+                checked={useStream}
+                onChange={(e) => setUseStream(e.target.checked)}
+                className="h-3 w-3"
+              />
+              Stream
+            </label>
           </div>
         </div>
       </form>
@@ -665,7 +672,7 @@ function ThreadPane({
         <ContextPanel
           type={contextPanel}
           projectId={projectId}
-          onClose={closeContext}
+          onClose={() => setContextPanel(null)}
           onSelectBot={handleBotSelect}
         />
       )}
@@ -676,17 +683,28 @@ function ThreadPane({
 function Message({ message, streaming = false }: { message: ChatMessage; streaming?: boolean }) {
   const isUser = message.role === "user";
   return (
-    <div className={`message ${isUser ? "message-user" : "message-assistant"}${streaming ? " streaming" : ""}`}>
-      <div className="message-meta">
-        <span className="mono muted" style={{ fontSize: 11 }}>{message.role}</span>
+    <div className={`flex flex-col ${isUser ? "items-end" : "items-start"}`}>
+      <div
+        className={`max-w-[85%] rounded-2xl px-4 py-3 text-[var(--step-0)] leading-relaxed ${
+          isUser
+            ? "border border-[var(--accent)] bg-[var(--accent-dim)] text-[var(--text)]"
+            : "border border-[var(--border)] bg-[var(--surface)] text-[var(--text-soft)]"
+        } ${streaming ? "animate-pulse" : ""}`}
+      >
+        <div className="whitespace-pre-wrap break-words">{message.content}</div>
         {streaming ? (
-          <span className="mono muted" style={{ fontSize: 11, marginLeft: 6 }}>streaming…</span>
+          <div className="mt-2 inline-block h-4 w-2 animate-pulse rounded-[1px] bg-[var(--accent)]" aria-hidden />
         ) : null}
       </div>
-      <div className="message-content">{message.content}</div>
+      <div className={`mono mt-1 text-[var(--step-minus-2)] text-[var(--faint)] ${isUser ? "mr-1" : "ml-1"}`}>
+        {isUser ? "you" : "nerdbot"}
+        {streaming ? " · streaming…" : ""}
+      </div>
     </div>
   );
 }
+
+/* --- Inline execution view (live task status inside the chat) --- */
 
 function ExecutionView({
   state,
@@ -730,72 +748,74 @@ function ExecutionView({
   const awaitingDecision = task?.status === "blocked";
 
   return (
-    <div className="execution-view">
-      <div className="execution-header">
-        <span className="execution-label">Execution</span>
-        <button
-          className="button"
-          onClick={onClose}
-          style={{ fontSize: 11, padding: 0, background: "none", border: "none", cursor: "pointer" }}
-        >
-          Close
-        </button>
+    <div className="mx-4 mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-sm md:mx-6">
+      <div className="flex items-center justify-between border-b border-[var(--border-dim)] px-4 py-2">
+        <span className="text-[var(--step-minus-2)] font-medium uppercase tracking-[0.14em] text-[var(--faint)]">
+          Execution
+        </span>
+        <div className="flex items-center gap-2">
+          {task ? (
+            <button
+              onClick={() => openTask(task.project_id, task.id)}
+              className="text-[var(--step-minus-1)] text-[var(--accent)] hover:underline"
+            >
+              Open task →
+            </button>
+          ) : null}
+          <button
+            onClick={onClose}
+            aria-label="Close execution view"
+            className="rounded-sm p-1 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
+          >
+            ×
+          </button>
+        </div>
       </div>
-      <div className="execution-body">
-        <div className="execution-task">
-          <strong>Task</strong>
-          <div className="mono muted" style={{ fontSize: 12 }}>{task?.description || ""}</div>
-          <div style={{ marginTop: 6 }}>
-            <StatusBadge
-              status={task?.status || "pending"}
-              label={taskStatusLabel(task?.status || "pending")}
-            />
+      <div className="flex flex-col gap-3 px-4 py-3 text-[var(--step-minus-1)]">
+        <div>
+          <div className="font-medium text-[var(--text)]">{task?.description || "Loading task…"}</div>
+          <div className="mt-1.5 flex flex-wrap items-center gap-3">
+            <StatusBadge status={task?.status || "pending"} label={taskStatusLabel(task?.status || "pending")} />
             {owner && (
-              <span style={{ marginLeft: 8, fontSize: 12, color: "var(--muted)" }}>
-                {owner.persona || "bot"} is responsible
-              </span>
+              <span className="text-[var(--muted)]">{owner.persona || "bot"} is responsible</span>
             )}
             {latestRun && (
-              <span style={{ marginLeft: 8, fontSize: 12, color: "var(--muted)" }}>
-                run {runStatusLabel(latestRun.status)}
-              </span>
+              <StatusDot
+                status={latestRun.status}
+                label={`run ${runStatusLabel(latestRun.status)}`}
+                pulse={latestRun.status === "running"}
+              />
             )}
           </div>
-          {awaitingDecision && (
-            <div className="error-box" style={{ marginTop: 6, padding: 6, fontSize: 12 }}>
-              This run needs your decision. Open the project&rsquo;s Approvals tab to approve or
-              deny it.
-            </div>
-          )}
-          {!terminal && !awaitingDecision && latestRun && latestRun.status === "failed" && (
-            <div className="error-box" style={{ marginTop: 6, padding: 6, fontSize: 12 }}>
-              The last run failed. You can retry it from the task page.
-            </div>
-          )}
         </div>
+        {awaitingDecision && (
+          <div className="rounded-md border border-[var(--warn)] bg-[var(--warn-dim)] px-3 py-2 text-[var(--warn)]">
+            This run needs your decision — it appears in the banner above.
+          </div>
+        )}
+        {!terminal && !awaitingDecision && latestRun && latestRun.status === "failed" && (
+          <div className="rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-[var(--danger)]">
+            The last run failed. Retry it from the task page.
+          </div>
+        )}
         {latestRun && (
-          <div className="execution-run">
-            <strong>Last run</strong>
-            <div className="mono muted" style={{ fontSize: 12 }}>
-              {latestRun.command || "(no command)"}
-            </div>
-            <div style={{ marginTop: 4 }}>
-              <span className="mono muted" style={{ fontSize: 11 }}>
-                {latestRun.output_excerpt?.slice(0, 200) || "(no output)"}
-              </span>
+          <div className="rounded-lg bg-[var(--surface-2)] px-3 py-2">
+            <div className="mono truncate text-[var(--text-soft)]">{latestRun.command || "(no command)"}</div>
+            <div className="mono mt-1 line-clamp-3 text-[var(--step-minus-2)] text-[var(--faint)]">
+              {latestRun.output_excerpt?.slice(0, 240) || "(no output)"}
             </div>
           </div>
         )}
         {artifacts.length > 0 && (
-          <div className="execution-artifacts">
-            <strong>Artifacts</strong>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
+          <div>
+            <SectionLabel className="mb-1.5">Artifacts</SectionLabel>
+            <div className="flex flex-col gap-1.5">
               {artifacts.map((art) => (
-                <div key={art.id} className="artifact-item">
-                  <div className="mono muted" style={{ fontSize: 12 }}>
+                <div key={art.id} className="rounded-md bg-[var(--surface-2)] px-3 py-1.5">
+                  <div className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
                     {art.type} · {art.location}
                   </div>
-                  <div style={{ marginTop: 4 }}>{art.summary}</div>
+                  <div className="text-[var(--text-soft)]">{art.summary}</div>
                 </div>
               ))}
             </div>
@@ -806,6 +826,8 @@ function ExecutionView({
     </div>
   );
 }
+
+/* --- Bots context drawer --- */
 
 function ContextPanel({
   type,
@@ -822,19 +844,34 @@ function ContextPanel({
     () =>
       type === "bots"
         ? api.listTeammates(projectId)
-        : Promise.resolve({ teammates: [] }),
+        : Promise.resolve({ teammates: [] as Teammate[] }),
     [projectId, type],
   );
 
   return (
-    <div className="context-panel-backdrop" onClick={onClose}>
-      <div className="context-panel" onClick={(e) => e.stopPropagation()}>
-        <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
-          <strong className="context-panel-title">
+    <div
+      className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px]"
+      onClick={onClose}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onClose();
+      }}
+    >
+      <aside
+        className="absolute right-0 top-0 flex h-full w-[340px] flex-col border-l border-[var(--border)] bg-[var(--surface)] shadow-lg"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-label={type === "bots" ? "Teammates / bots" : "Project files"}
+      >
+        <div className="flex items-center justify-between border-b border-[var(--border-dim)] px-4 py-3">
+          <span className="text-[var(--step-0)] font-semibold">
             {type === "bots" ? "Teammates / bots" : "Project files"}
-          </strong>
-          <button className="button" onClick={onClose} aria-label="Close" style={{ padding: 0, background: "none", border: "none", cursor: "pointer", fontSize: 12 }}>
-            Close
+          </span>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="rounded-sm p-1 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
+          >
+            ×
           </button>
         </div>
         {type === "bots" ? (
@@ -843,61 +880,61 @@ function ContextPanel({
           ) : data.error ? (
             <ErrorState error={data.error} onRetry={data.reload} />
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div className="flex flex-1 flex-col gap-2 overflow-y-auto p-4">
               {(data.data?.teammates ?? []).map((mate: Teammate) => (
-                <div key={mate.id} className="context-item">
-                  <div>
-                    <div style={{ fontWeight: 600 }}>{mate.persona || mate.id}</div>
-                    <div className="mono muted" style={{ fontSize: 11 }}>
+                <div
+                  key={mate.id}
+                  className="flex items-center justify-between gap-2 rounded-lg border border-[var(--border)] px-3 py-2"
+                >
+                  <div className="min-w-0">
+                    <div className="truncate text-[var(--step-minus-1)] font-medium text-[var(--text)]">
+                      {mate.persona || mate.id}
+                    </div>
+                    <div className="mono truncate text-[var(--step-minus-2)] text-[var(--faint)]">
                       {mate.instructions?.slice(0, 80) || ""}
                     </div>
                   </div>
-                  <button
-                    onClick={() => onSelectBot(mate.id)}
-                    className="button primary"
-                    style={{ padding: "4px 10px", fontSize: 12 }}
-                  >
-                    Select
-                  </button>
+                  <Button variant="primary" onClick={() => onSelectBot(mate.id)}>
+                    Open
+                  </Button>
                 </div>
               ))}
             </div>
           )
         ) : (
-          <div>
-            <div className="muted" style={{ fontSize: 11, marginBottom: 6 }}>
-              Attach files from an active task workspace. Open a task from the execution view first.
-            </div>
-            <button
-              className="button"
-              onClick={onClose}
-              style={{ padding: "6px 12px", fontSize: 12 }}
-            >
-              Done
-            </button>
+          <div className="p-4 text-[var(--step-minus-1)] text-[var(--muted)]">
+            Attach files from an active task workspace. Open a task from the execution view first.
           </div>
         )}
-      </div>
+      </aside>
     </div>
   );
 }
+
+/* --- Command Center (Home landing) --- */
 
 function CommandCenter({
   projectId,
   threads,
   providers,
+  summary,
   onNewChat,
   onThreadCreated,
   refreshProviders,
   refreshThreads,
+  onDecide,
+  decideBusy,
 }: {
   projectId: string;
   threads: ChatThread[];
   providers: { id: string; name: string; kind: string }[];
+  summary: ReturnType<typeof useWorkspaceSummary>;
   onNewChat: () => void;
   onThreadCreated: (threadId: string) => void;
   refreshProviders?: () => void;
   refreshThreads?: () => void;
+  onDecide: (approvalId: string, decision: "approved" | "approved_forever" | "denied") => void;
+  decideBusy: boolean;
 }) {
   const hasProvider = providers.length > 0;
   const [draft, setDraft] = useState("");
@@ -905,12 +942,17 @@ function CommandCenter({
   const [busy, setBusy] = useState(false);
   const [streaming, setStreaming] = useState("");
   const abortRef = useRef<AbortController | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const [showConfigure, setShowConfigure] = useState(false);
   const [provName, setProvName] = useState("");
   const [provBaseUrl, setProvBaseUrl] = useState("");
   const [provModel, setProvModel] = useState("");
   const [provApiKey, setProvApiKey] = useState("");
   const [provBusy, setProvBusy] = useState(false);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+  }, [streaming]);
 
   const send = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -949,85 +991,93 @@ function CommandCenter({
   };
 
   const sorted = [...threads].sort(
-    (a, b) =>
-      new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
   );
 
   return (
-    <div className="command-center">
-      <div className="command-center-inner">
-        <div>
-          <h1 style={{ fontSize: "var(--step-4)", marginBottom: 2 }}>NerdBot</h1>
-          <p className="command-center-sub lead">
+    <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
+      <div className="mx-auto flex w-full max-w-[680px] flex-col gap-8 px-4 py-10 md:px-6">
+        {/* Attention first: the fleet state is more urgent than the composer */}
+        <AttentionBanner
+          summary={summary.data}
+          busy={decideBusy}
+          onDecide={onDecide}
+          onOpenTask={openTask}
+        />
+
+        {/* Landing composer */}
+        <div className="scroll-mt-6">
+          <h1 className="text-[var(--step-3)] font-semibold tracking-tight">Command Center</h1>
+          <p className="mt-1 text-[var(--step-0)] text-[var(--muted)]">
             Your AI fleet. One place to get work done.
           </p>
-          <div className="command-center-hint caption">
-            Projects are optional — start in Home. Your conversation context stays with you.
-          </div>
-        </div>
-
-        <form onSubmit={send} className="command-center-composer">
-          <label className="field" style={{ marginBottom: "var(--space-3)" }}>
-            <span style={{ fontSize: "var(--step-minus-1)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--muted)" }}>
-              What are we working on?
-            </span>
-          </label>
-          <div className="composer-row">
-            <input
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              placeholder={hasProvider ? "Ask anything, delegate work, or continue a task…" : "No model configured — add a provider in a project&rsquo;s Providers tab first."}
-              disabled={busy || !hasProvider}
-              spellCheck
-              autoComplete="off"
-              className="composer-input"
-            />
-            <select
-              value={selectedProviderId}
-              onChange={(e) => setSelectedProviderId(e.target.value as "__default__" | string)}
-              disabled={busy || !hasProvider}
-              aria-label="Model provider"
-              className="composer-provider-select"
-            >
-              <option value="__default__">Default model</option>
-              {providers.map((provider) => (
-                <option key={provider.id} value={provider.id}>
-                  {provider.name} ({provider.kind})
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              onClick={stop}
-              className="button"
-              disabled={!streaming}
-              style={{ padding: "10px 14px", fontSize: 12 }}
-              title="Stop streaming"
-            >
-              Stop
-            </button>
-            <button
-              type="submit"
-              className="button primary"
-              disabled={busy || !draft.trim() || !hasProvider}
-            >
-              {busy ? (streaming ? "Stopping…" : "Sending…") : "Send"}
-            </button>
-          </div>
+          <form onSubmit={send} className="mt-5">
+            <div className="flex items-end gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-2 shadow-sm focus-within:border-[var(--border-focus)]">
+              <textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void send(e);
+                  }
+                }}
+                placeholder={
+                  hasProvider
+                    ? "Ask anything, delegate work, or continue a task…"
+                    : "No model configured yet — connect a provider first."
+                }
+                disabled={busy || !hasProvider}
+                spellCheck
+                rows={2}
+                aria-label="Start a conversation"
+                className="max-h-48 min-h-[52px] flex-1 resize-none bg-transparent p-2.5 leading-relaxed outline-none placeholder:text-[var(--faint)] disabled:opacity-50"
+              />
+              <select
+                value={selectedProviderId}
+                onChange={(e) => setSelectedProviderId(e.target.value)}
+                disabled={busy || !hasProvider}
+                aria-label="Model provider"
+                className={PROVIDER_SELECT_CLASS}
+              >
+                <option value="__default__">Default model</option>
+                {providers.map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.name} ({provider.kind})
+                  </option>
+                ))}
+              </select>
+              {busy ? (
+                <Button variant="danger" type="button" onClick={stop} disabled={!streaming}>
+                  ■ Stop
+                </Button>
+              ) : (
+                <Button variant="primary" type="submit" disabled={busy || !draft.trim() || !hasProvider}>
+                  Send ⏎
+                </Button>
+              )}
+            </div>
+            {streaming && (
+              <div className="mono mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-minus-1)] text-[var(--text-soft)]">
+                {streaming}
+                <span className="ml-0.5 inline-block h-4 w-2 animate-pulse rounded-[1px] bg-[var(--accent)] align-middle" aria-hidden />
+              </div>
+            )}
+          </form>
           {!hasProvider && (
-            <div className="command-center-provider empty">
+            <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2">
               <Badge variant="bad">No model configured</Badge>
-              <span>
-                The mock provider answers with canned output for zero-setup verification. Add a
-                real model connection to chat with your own model.
+              <Button onClick={() => setShowConfigure((v) => !v)}>
+                Configure model
+              </Button>
+              <span className="text-[var(--step-minus-1)] text-[var(--muted)]">
+                The mock provider answers canned output for zero-setup verification; add a real connection to chat with your model.
               </span>
             </div>
           )}
           {showConfigure && (
-            <div className="card" style={{ marginTop: "var(--space-6)" }}>
-              <div className="command-center-section-label" style={{ marginBottom: "var(--space-4)" }}>
-                Configure model connection
-              </div>
+            <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+              <SectionLabel className="mb-3">Configure model connection</SectionLabel>
               <form
                 onSubmit={async (e: React.FormEvent) => {
                   e.preventDefault();
@@ -1054,30 +1104,29 @@ function CommandCenter({
                     setProvBusy(false);
                   }
                 }}
-                className="row"
-                style={{ gap: "var(--space-4)", flexWrap: "wrap", alignItems: "end" }}
+                className="flex flex-wrap items-end gap-3"
               >
                 <input
                   value={provName}
                   onChange={(e) => setProvName(e.target.value)}
                   placeholder="Name (e.g. groq)"
                   aria-label="Provider name"
-                  style={{ minWidth: 160 }}
+                  className="w-40 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-[var(--step-minus-1)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
                 />
                 <input
                   value={provBaseUrl}
                   onChange={(e) => setProvBaseUrl(e.target.value)}
                   placeholder="Base URL (e.g. https://api.groq.com/openai/v1)"
                   aria-label="Base URL"
-                  className="mono"
-                  style={{ flex: 1, minWidth: 260 }}
+                  required
+                  className="mono min-w-64 flex-1 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-[var(--step-minus-1)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
                 />
                 <input
                   value={provModel}
                   onChange={(e) => setProvModel(e.target.value)}
                   placeholder="Model (optional)"
                   aria-label="Model"
-                  style={{ minWidth: 150 }}
+                  className="w-44 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-[var(--step-minus-1)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
                 />
                 <input
                   type="password"
@@ -1086,116 +1135,100 @@ function CommandCenter({
                   placeholder="API key"
                   aria-label="API key"
                   autoComplete="off"
-                  style={{ minWidth: 180 }}
+                  className="w-48 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-[var(--step-minus-1)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
                 />
-                <button
-                  className="button primary"
-                  type="submit"
-                  disabled={provBusy || !provBaseUrl.trim()}
-                >
+                <Button variant="primary" type="submit" disabled={provBusy || !provBaseUrl.trim()}>
                   {provBusy ? "Connecting…" : "Connect"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowConfigure(false)}
-                  style={{ padding: "7px 14px" }}
-                >
+                </Button>
+                <Button type="button" onClick={() => setShowConfigure(false)}>
                   Cancel
-                </button>
+                </Button>
               </form>
+              <p className="mt-2 text-[var(--step-minus-2)] text-[var(--faint)]">
+                Keys are stored Fernet-encrypted at rest when the server has NERDBOT_SECRET_KEY set.
+              </p>
             </div>
           )}
-          {!hasProvider && !showConfigure && (
-            <div className="command-center-hint caption" style={{ marginTop: "var(--space-3)" }}>
-              <button
-                type="button"
-                onClick={() => setShowConfigure(true)}
-                className="button"
-                style={{ padding: "6px 12px", fontSize: 12, marginLeft: 8 }}
-              >
-                Configure model
-              </button>
-              <span className="text-soft">
-                · Keys are stored Fernet-encrypted at rest when the server has
-                NERDBOT_SECRET_KEY set.
-              </span>
-            </div>
-          )}
-        </form>
-
-        <div className="command-center-section" style={{ marginTop: "var(--space-12)" }}>
-          <div className="command-center-section-label">Start with</div>
-          <div className="command-center-suggestions">
-            <button
-              className="suggestion-btn"
-              onClick={onNewChat}
-              title="Start a new conversation"
-            >
-              <span>New conversation</span>
-              <span className="mono muted text-soft" style={{ fontSize: 11, marginLeft: 6 }}>→ Home</span>
-            </button>
-            <button
-              className="suggestion-btn"
-              onClick={() => {
-                window.location.hash = "#/bots";
-              }}
-              title="Browse the AI fleet"
-            >
-              <span>AI fleet</span>
-              <span className="mono muted text-soft" style={{ fontSize: 11, marginLeft: 6 }}>→ Agents &amp; teams</span>
-            </button>
-            <button
-              className="suggestion-btn"
-              onClick={() => {
-                window.location.hash = "#/projects";
-              }}
-              title="Open a workspace"
-            >
-              <span>Workspaces</span>
-              <span className="mono muted text-soft" style={{ fontSize: 11, marginLeft: 6 }}>→ Projects</span>
-            </button>
-          </div>
         </div>
 
-        <div className="command-center-recent">
-          <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline", marginBottom: "var(--space-4)" }}>
-            <div className="command-center-section-label">Recent conversations</div>
-            {sorted.length > 0 && refreshThreads && (
-              <button
-                type="button"
-                onClick={() => void refreshThreads()}
-                className="button"
-                style={{ padding: "5px 10px", fontSize: 11 }}
-              >
+        {/* Quick entry points */}
+        <div className="grid gap-2 sm:grid-cols-3">
+          <button
+            onClick={onNewChat}
+            className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-left transition-colors hover:border-[var(--faint)] hover:bg-[var(--surface-2)]"
+          >
+            <div className="text-[var(--step-minus-1)] font-medium text-[var(--text)]">New conversation</div>
+            <div className="mono mt-0.5 text-[var(--step-minus-2)] text-[var(--faint)]">→ Home context</div>
+          </button>
+          <button
+            onClick={() => { window.location.hash = "#/bots"; }}
+            className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-left transition-colors hover:border-[var(--faint)] hover:bg-[var(--surface-2)]"
+          >
+            <div className="text-[var(--step-minus-1)] font-medium text-[var(--text)]">AI fleet</div>
+            <div className="mono mt-0.5 text-[var(--step-minus-2)] text-[var(--faint)]">→ Agents &amp; teams</div>
+          </button>
+          <button
+            onClick={() => { window.location.hash = "#/projects"; }}
+            className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-left transition-colors hover:border-[var(--faint)] hover:bg-[var(--surface-2)]"
+          >
+            <div className="text-[var(--step-minus-1)] font-medium text-[var(--text)]">Workspaces</div>
+            <div className="mono mt-0.5 text-[var(--step-minus-2)] text-[var(--faint)]">→ Projects</div>
+          </button>
+        </div>
+
+        {/* Team-level execution rollup */}
+        <section>
+          <div className="mb-2 flex items-center justify-between">
+            <SectionLabel>Fleet execution</SectionLabel>
+            {summary.data ? (
+              <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
+                {summary.data.runningTasks} running · {summary.data.queuedTasks} queued ·{" "}
+                {summary.data.blockedTasks} awaiting approval
+              </span>
+            ) : null}
+          </div>
+          <ExecutionRollup
+            summary={summary.data}
+            onOpenTeam={(teamId) => { window.location.hash = `#/team/${teamId}`; }}
+          />
+        </section>
+
+        {/* Recent conversations */}
+        <section>
+          <div className="mb-2 flex items-center justify-between">
+            <SectionLabel>Recent conversations</SectionLabel>
+            {sorted.length > 0 && refreshThreads ? (
+              <Button variant="ghost" onClick={() => void refreshThreads()}>
                 Refresh
-              </button>
-            )}
+              </Button>
+            ) : null}
           </div>
           {sorted.length === 0 ? (
-            <div className="command-center-recent-empty caption">
+            <p className="rounded-xl border border-dashed border-[var(--border-dim)] px-4 py-6 text-center text-[var(--step-minus-1)] text-[var(--faint)]">
               No recent conversations yet. Start one above.
-            </div>
-          ) : (
-            <div className="thread-list">
-              {sorted.slice(0, 8).map((t) => (
+            </p>
+          ) : (            <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
+              {sorted.slice(0, 8).map((t, index) => (
                 <button
                   key={t.id}
                   type="button"
-                  className="thread-row"
                   onClick={() => onThreadCreated(t.id)}
                   aria-label={`Resume: ${t.title || "Untitled"}`}
+                  className={`flex w-full items-baseline justify-between gap-3 px-4 py-2.5 text-left transition-colors hover:bg-[var(--surface-2)] ${
+                    index > 0 ? "border-t border-[var(--border-dim)]" : ""
+                  }`}
                 >
-                  <div className="thread-title" title={t.title}>
+                  <span className="truncate text-[var(--step-minus-1)] text-[var(--text)]">
                     {t.title || "Untitled"}
-                  </div>
-                  <div className="thread-meta caption">
-                    {new Date(t.created_at).toLocaleString()}
-                  </div>
+                  </span>
+                  <span className="mono shrink-0 text-[var(--step-minus-2)] text-[var(--faint)]">
+                    {relativeTime(t.created_at)}
+                  </span>
                 </button>
               ))}
             </div>
           )}
-        </div>
+        </section>
       </div>
     </div>
   );
