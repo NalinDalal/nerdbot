@@ -8,9 +8,11 @@ import {
   ErrorState,
   LoadingState,
   Modal,
-  useAsync,
+  Button,
+  Badge,
   Field,
   StatusBadge,
+  useAsync,
 } from "./components";
 
 export function ConversationView({
@@ -38,6 +40,18 @@ export function ConversationView({
         : Promise.resolve({ providers: [] }),
     [resolvedProjectId],
   );
+  const runs = useAsync(
+    () =>
+      resolvedProjectId ? api.projectRuns(resolvedProjectId) : Promise.resolve({ runs: [] }),
+    [resolvedProjectId],
+  );
+  const approvals = useAsync(
+    () =>
+      resolvedProjectId
+        ? api.projectApprovals(resolvedProjectId)
+        : Promise.resolve({ approvals: [] }),
+    [resolvedProjectId],
+  );
   const [activeId, setActiveId] = useState<string | null>(initialThreadId ?? null);
   const [search, setSearch] = useState("");
   const [showNew, setShowNew] = useState(false);
@@ -57,6 +71,14 @@ export function ConversationView({
     (t) => !search || t.title.toLowerCase().includes(search.toLowerCase()),
   );
 
+  const activeRuns = (runs.data?.runs ?? []).filter(
+    (r) => r.status === "running" || r.status === "blocked" || r.status === "queued",
+  );
+  const pendingApprovals = (approvals.data?.approvals ?? []).filter(
+    (a) => !a.decision || a.decision === "pending",
+  );
+  const needsAttention = activeRuns.length > 0 || pendingApprovals.length > 0;
+
   return (
     <div className="conversation">
       <div className="conversation-header">
@@ -74,6 +96,36 @@ export function ConversationView({
           </button>
         </div>
       </div>
+
+      {needsAttention && (
+        <div className="attention-banner">
+          <div className="attention-inner">
+            {activeRuns.length > 0 && (
+              <div className="attention-item">
+                <Badge variant="info">{activeRuns.length}</Badge>
+                <span>task{activeRuns.length !== 1 ? "s" : ""} running</span>
+              </div>
+            )}
+            {pendingApprovals.length > 0 && (
+              <div className="attention-item">
+                <Badge variant="warn">{pendingApprovals.length}</Badge>
+                <span>
+                  approval{pendingApprovals.length !== 1 ? "s" : ""} awaiting your decision
+                </span>
+              </div>
+            )}
+            <Button
+              variant="ghost"
+              onClick={() => {
+                window.location.hash = "#/projects";
+              }}
+            >
+              Go to workspaces
+            </Button>
+          </div>
+        </div>
+      )}
+
       <div className="conversation-body">
         <aside className="conversation-sidebar">
           <div className="field" style={{ marginBottom: 10 }}>
@@ -119,6 +171,11 @@ export function ConversationView({
               projectId={resolvedProjectId}
               providers={providers.data?.providers ?? []}
               onReload={() => threads.reload()}
+            />
+          ) : isHome ? (
+            <CommandCenter
+              providers={providers.data?.providers ?? []}
+              onNewChat={() => setShowNew(true)}
             />
           ) : (
             <EmptyState
@@ -779,6 +836,104 @@ function ContextPanel({
             </button>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function CommandCenter({
+  providers,
+  onNewChat,
+}: {
+  providers: { id: string; name: string; kind: string }[];
+  onNewChat: () => void;
+}) {
+  const hasProvider = providers.length > 0;
+  const defaultProvider = providers.find((p) => p.kind === "mock");
+
+  return (
+    <div className="command-center">
+      <div className="command-center-inner">
+        <div>
+          <h1 style={{ fontSize: "var(--step-4)", marginBottom: 4 }}>NerdBot</h1>
+          <p className="command-center-sub">
+            Chat with your AI, delegate work to specialists, or pick up where you left off.
+          </p>
+          <div className="command-center-hint">
+            Projects are optional — start in Home. Your conversation context stays with you.
+          </div>
+        </div>
+
+        <div className="command-center-primary">
+          <Button variant="primary" onClick={onNewChat} className="new-chat-btn">
+            New chat
+          </Button>
+        </div>
+
+        <div className="command-center-section">
+          <div className="command-center-section-label">Model provider</div>
+          {hasProvider ? (
+            <div className="command-center-provider">
+              <Badge variant="ok">{providers.length}</Badge>
+              <span>
+                {providers.length === 1 ? providers[0].name : `${providers.length} providers`}
+              </span>
+              {defaultProvider && (
+                <span className="command-center-provider-note">
+                  · Mock provider available for zero-setup verification
+                </span>
+              )}
+            </div>
+          ) : (
+            <div className="command-center-provider empty">
+              <Badge variant="bad">No model configured</Badge>
+              <span>
+                Add a provider in a project's Providers tab to chat with a real model.
+              </span>
+            </div>
+          )}
+        </div>
+
+        <div className="command-center-section">
+          <div className="command-center-section-label">Start with</div>
+          <div className="command-center-suggestions">
+            <button
+              className="suggestion-btn"
+              onClick={onNewChat}
+              title="Start a new conversation"
+            >
+              <span>New conversation</span>
+              <span className="mono muted" style={{ fontSize: 11, marginLeft: 6 }}>→ Home</span>
+            </button>
+            <button
+              className="suggestion-btn"
+              onClick={() => {
+                window.location.hash = "#/bots";
+              }}
+              title="Browse the AI fleet"
+            >
+              <span>AI fleet</span>
+              <span className="mono muted" style={{ fontSize: 11, marginLeft: 6 }}>→ Agents &amp; teams</span>
+            </button>
+            <button
+              className="suggestion-btn"
+              onClick={() => {
+                window.location.hash = "#/projects";
+              }}
+              title="Open a workspace"
+            >
+              <span>Workspaces</span>
+              <span className="mono muted" style={{ fontSize: 11, marginLeft: 6 }}>→ Projects</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="command-center-recent">
+          <div className="command-center-section-label">Recent conversations</div>
+          <div className="command-center-recent-empty">
+            No recent conversations yet. Start one above.
+          </div>
+        </div>
       </div>
     </div>
   );
