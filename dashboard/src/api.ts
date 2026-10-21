@@ -415,6 +415,9 @@ export const api = {
 
   listThreads: (projectId: string) =>
     req<{ threads: ChatThread[] }>(`/projects/${projectId}/threads`),
+  /** Recent conversations across every project the caller owns. */
+  listRecentThreads: (limit = 20) =>
+    req<{ threads: ChatThread[] }>(`/threads?limit=${limit}`),
   createThread: (projectId: string, body: Record<string, unknown>) =>
     post<ChatThread>(`/projects/${projectId}/threads`, body),
   updateThread: (threadId: string, body: Record<string, unknown>) =>

@@ -242,7 +242,7 @@ export function TeamDetailView({
                 <StatusBadge status="running" label={`${rollup.running} running`} />
                 <StatusBadge status="pending" label={`${rollup.queued} queued`} />
                 {rollup.blocked > 0 && (
-                  <StatusBadge status="blocked" label={`${rollup.blocked} awaiting approval`} />
+                  <StatusBadge status="blocked" label={`${rollup.blocked} blocked`} />
                 )}
                 <StatusBadge status="done" label={`${rollup.done} completed`} />
                 {rollup.failed > 0 && (

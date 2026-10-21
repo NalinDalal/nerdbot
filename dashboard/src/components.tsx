@@ -36,7 +36,7 @@ export function taskStatusLabel(status: string): string {
     running: "Running",
     done: "Completed",
     failed: "Failed",
-    blocked: "Awaiting approval",
+    blocked: "Blocked",
     cancelled: "Cancelled",
   };
   return labels[status] ?? status;
@@ -210,7 +210,25 @@ export function statusTone(status: string): "ok" | "bad" | "warn" | "info" | "ne
   if (status === "done" || status === "ready") return "ok";
   if (status === "failed" || status === "denied" || status === "rejected") return "bad";
   if (status === "blocked" || status === "pending" || status === "queued") return "warn";
+  if (status === "expired") return "bad";
   return "neutral";
+}
+
+/** An approval is pending only while it can still be decided.
+ *
+ *  An undecided approval past its expiry is dead: the API answers 410 when
+ *  you try to decide it. It must not be offered as an actionable decision.
+ *  Mirrors `store.approval_is_pending` on the server, so both sides agree on
+ *  what "pending" means. */
+export function approvalIsPending(
+  approval: { decision?: string | null; expires_at?: string | null },
+  now: number = Date.now(),
+): boolean {
+  if ((approval.decision ?? "pending") !== "pending") return false;
+  if (!approval.expires_at) return true;
+  const expiry = new Date(approval.expires_at).getTime();
+  if (Number.isNaN(expiry)) return true;
+  return expiry > now;
 }
 
 export function StatusDot({

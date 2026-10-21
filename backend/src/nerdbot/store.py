@@ -2457,6 +2457,25 @@ def list_approvals_for_run(conn: sqlite3.Connection, run_id: str) -> list[Approv
     return [_approval_from_row(r) for r in rows]
 
 
+def approval_is_pending(approval: Approval, now: datetime | None = None) -> bool:
+    """True while the approval still awaits a decision that can actually be given.
+
+    An undecided approval whose ``expires_at`` has passed is dead: deciding it
+    raises :class:`ApprovalExpiredError` (HTTP 410). Reporting it as pending
+    would offer the owner a decision guaranteed to fail, which is exactly the
+    bug this predicate exists to prevent. The dashboard mirrors this rule in
+    ``approvalIsPending`` so both sides agree on what "pending" means.
+    """
+    if approval.decision != Decision.PENDING:
+        return False
+    if approval.expires_at is None:
+        return True
+    expires = approval.expires_at
+    if expires.tzinfo is None:  # pragma: no cover - stored values are UTC-aware
+        expires = expires.replace(tzinfo=UTC)
+    return expires > (now or datetime.now(UTC))
+
+
 def decide_approval(conn: sqlite3.Connection, approval_id: str, decision: Decision) -> Approval:
     approval = get_approval(conn, approval_id)
     if approval is None:
@@ -3565,6 +3584,26 @@ def get_thread(conn: sqlite3.Connection, thread_id: str) -> ChatThread | None:
 def list_threads(conn: sqlite3.Connection, project_id: str) -> list[ChatThread]:
     rows = conn.execute(
         "SELECT * FROM chat_threads WHERE project_id = ? ORDER BY rowid", (project_id,)
+    ).fetchall()
+    return [_thread_from_row(r) for r in rows]
+
+
+def list_threads_for_owner(
+    conn: sqlite3.Connection, owner: str, limit: int = 20
+) -> list[ChatThread]:
+    """Recent conversations across every project the owner owns.
+
+    The Command Center is a cross-workspace surface: a conversation started
+    in one project must still be reachable from it. Ordered newest first, so
+    the list is a resume list rather than a project-scoped index.
+    """
+    rows = conn.execute(
+        "SELECT chat_threads.* FROM chat_threads"
+        " JOIN projects ON chat_threads.project_id = projects.id"
+        " WHERE projects.owner = ?"
+        " ORDER BY chat_threads.created_at DESC, chat_threads.rowid DESC"
+        " LIMIT ?",
+        (owner, limit),
     ).fetchall()
     return [_thread_from_row(r) for r in rows]
 

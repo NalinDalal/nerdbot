@@ -2457,6 +2457,22 @@ def create_app() -> FastAPI:
         threads = [t.model_dump(mode="json") for t in store.list_threads(conn, project_id)]
         return {"threads": threads}
 
+    @app.get("/threads")
+    def list_recent_threads(
+        limit: int = 20,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """Recent conversations across every project the caller owns.
+
+        The Command Center is cross-workspace, so its resume list cannot be
+        scoped to one project. The owner check is the same one every other
+        project route uses: a caller only ever sees their own projects.
+        """
+        capped = max(1, min(limit, 50))
+        threads = store.list_threads_for_owner(conn, principal, limit=capped)
+        return {"threads": [t.model_dump(mode="json") for t in threads]}
+
     @app.patch("/threads/{thread_id}")
     def update_thread(
         thread_id: str,
@@ -2675,6 +2691,11 @@ def create_app() -> FastAPI:
         approvals = store.list_approvals_for_project(conn, project_id)
         if decision:
             approvals = [a for a in approvals if a.decision.value == decision]
+            if decision == "pending":
+                # An expired, undecided approval cannot be decided: the
+                # decision endpoint answers 410 for it. Reporting it as
+                # pending would offer a decision guaranteed to fail.
+                approvals = [a for a in approvals if store.approval_is_pending(a)]
         return {"approvals": [a.model_dump(mode="json") for a in approvals]}
 
     @app.get("/tasks/{task_id}/workspace/files")

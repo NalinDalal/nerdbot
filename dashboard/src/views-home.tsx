@@ -7,7 +7,7 @@
  *  so a bounded fan-out is fine). */
 import { api } from "./api";
 import type { Approval, Run, Task, Team, Teammate } from "./types";
-import { useAsync, statusTone, taskTally, Button, EmptyState } from "./components";
+import { useAsync, statusTone, taskTally, approvalIsPending, Button, EmptyState } from "./components";
 
 export interface ProjectBundle {
   project: { id: string; owner: string; repository: string };
@@ -58,6 +58,7 @@ const count = (n: number, singular: string, plural?: string) =>
 
 export function summarize(
   data: Pick<WorkspaceSummary, "bundles" | "teams" | "bots" >,
+  now?: number,
 ): WorkspaceSummary {
   const taskById = new Map<string, Task>();
   for (const bundle of data.bundles) {
@@ -87,7 +88,10 @@ export function summarize(
       }
     }
     for (const approval of bundle.approvals) {
-      if (approval.decision === "pending" || !approval.decision) {
+      // An expired, undecided approval can no longer be decided (the API
+      // answers 410), so it is not actionable and must not be surfaced as a
+      // pending decision.
+      if (approvalIsPending(approval, now)) {
         pendingApprovals.push({ approval, projectName: name });
       }
     }
@@ -365,7 +369,7 @@ export function ExecutionRollup({
             </div>
             <div className="flex items-center gap-2">
               <CountChip tone="info" n={counts.running}>running</CountChip>
-              <CountChip tone="bad" n={counts.blocked}>awaiting approval</CountChip>
+              <CountChip tone="bad" n={counts.blocked}>blocked</CountChip>
               <CountChip tone="warn" n={counts.queued}>queued</CountChip>
               <span className="text-[var(--faint)] transition-transform group-hover:translate-x-0.5" aria-hidden>→</span>
             </div>

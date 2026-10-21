@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import { toast } from "sonner";
 import { api, ApiError } from "./api";
-import { notifyError } from "./app";
+import { notifyError, navigate } from "./app";
 import type { ChatMessage, ChatThread, Teammate } from "./types";
 import { AttentionBanner, ExecutionRollup, useWorkspaceSummary } from "./views-home";
 import {
@@ -51,6 +51,9 @@ export function ConversationView({
         : Promise.resolve({ providers: [] }),
     [resolvedProjectId],
   );
+  // The Command Center resume list spans every project the owner owns, so a
+  // conversation started in another workspace is still reachable from here.
+  const recentThreads = useAsync(() => api.listRecentThreads(20), []);
   const [activeId, setActiveId] = useState<string | null>(initialThreadId ?? null);
   const [search, setSearch] = useState("");
   const [showNew, setShowNew] = useState(false);
@@ -72,11 +75,13 @@ export function ConversationView({
       toast.success(
         decision === "denied" ? "Rejected" : decision === "approved_forever" ? "Approved forever" : "Approved once",
       );
-      summary.reload();
     } catch (err) {
       notifyError(err);
     } finally {
       setDecideBusy(false);
+      // Refresh either way: a decision that failed (the approval may have
+      // expired) must not leave a dead row on the banner.
+      summary.reload();
     }
   };
 
@@ -189,26 +194,66 @@ export function ConversationView({
             <CommandCenter
               summary={summary}
               projectId={resolvedProjectId}
-              threads={threads.data?.threads ?? []}
+              recentThreads={recentThreads.data?.threads ?? []}
               providers={providers.data?.providers ?? []}
               onNewChat={() => setShowNew(true)}
               onThreadCreated={(threadId) => {
                 setActiveId(threadId);
                 onSetActiveThread?.(threadId);
               }}
+              onOpenThread={(thread) => {
+                setActiveId(thread.id);
+                onSetActiveThread?.(thread.id);
+                if (thread.project_id !== resolvedProjectId) {
+                  // The conversation lives in another workspace: switch the
+                  // context so its messages, files and provider come from
+                  // there rather than from the workspace we are looking at.
+                  navigate(`#/chat/${thread.project_id}`);
+                }
+              }}
               refreshProviders={() => providers.reload()}
-              refreshThreads={() => threads.reload()}
+              refreshThreads={() => recentThreads.reload()}
             />
           ) : (
-            <EmptyState
-              title="Select a conversation"
-              hint="Pick a recent chat or start a new one."
-              action={
-                <Button variant="primary" onClick={() => setShowNew(true)}>
-                  New chat
-                </Button>
-              }
-            />
+            <div className="flex flex-1 flex-col items-center overflow-y-auto">
+              <EmptyState
+                title="Select a conversation"
+                hint="Pick a recent chat or start a new one."
+                action={
+                  <Button variant="primary" onClick={() => setShowNew(true)}>
+                    New chat
+                  </Button>
+                }
+              />
+              {/* The conversation rail is hidden below md, so without this the
+                  list of existing conversations is unreachable on a narrow
+                  screen. It is the same list, shown here instead. */}
+              {(threads.data?.threads ?? []).length > 0 ? (
+                <div className="mb-6 w-full max-w-[420px] overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)] md:hidden">
+                  {(threads.data?.threads ?? []).map((t, index) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => {
+                        setActiveId(t.id);
+                        onSetActiveThread?.(t.id);
+                      }}
+                      aria-label={`Resume: ${t.title || "Untitled"}`}
+                      className={`flex w-full items-baseline justify-between gap-3 px-4 py-2.5 text-left transition-colors hover:bg-[var(--surface-2)] ${
+                        index > 0 ? "border-t border-[var(--border-dim)]" : ""
+                      }`}
+                    >
+                      <span className="truncate text-[var(--step-minus-1)] text-[var(--text)]">
+                        {t.title || "Untitled"}
+                      </span>
+                      <span className="mono shrink-0 text-[var(--step-minus-2)] text-[var(--faint)]">
+                        {relativeTime(t.created_at)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
           )}
         </section>
       </div>
@@ -1045,20 +1090,23 @@ function ContextPanel({
 
 function CommandCenter({
   projectId,
-  threads,
+  recentThreads,
   providers,
   summary,
   onNewChat,
   onThreadCreated,
+  onOpenThread,
   refreshProviders,
   refreshThreads,
 }: {
   projectId: string;
-  threads: ChatThread[];
+  /** Recent conversations across every project the owner owns. */
+  recentThreads: ChatThread[];
   providers: { id: string; name: string; kind: string }[];
   summary: ReturnType<typeof useWorkspaceSummary>;
   onNewChat: () => void;
   onThreadCreated: (threadId: string) => void;
+  onOpenThread: (thread: ChatThread) => void;
   refreshProviders?: () => void;
   refreshThreads?: () => void;
 }) {
@@ -1115,9 +1163,15 @@ function CommandCenter({
     abortRef.current?.abort();
   };
 
-  const sorted = [...threads].sort(
+  // The resume list spans every project the owner owns, so a conversation
+  // started elsewhere is still one click away from here.
+  const sorted = [...recentThreads].sort(
     (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
   );
+  const projectLabel = (id: string) => {
+    const bundle = summary.data?.summary.bundles.find((b) => b.project.id === id);
+    return bundle?.project.repository || "workspace";
+  };
 
   return (
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
@@ -1299,7 +1353,7 @@ function CommandCenter({
             {summary.data ? (
               <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
                 {summary.data.summary.runningTasks} running · {summary.data.summary.queuedTasks} queued ·{" "}
-                {summary.data.summary.blockedTasks} awaiting approval
+                {summary.data.summary.blockedTasks} blocked
               </span>
             ) : null}
           </div>
@@ -1309,10 +1363,17 @@ function CommandCenter({
           />
         </section>
 
-        {/* Recent conversations */}
+        {/* Recent conversations, across every workspace the owner owns. The
+            scope is spelled out because the conversation rail beside this
+            panel lists only the current workspace's conversations. */}
         <section>
-          <div className="mb-2 flex items-center justify-between">
-            <SectionLabel>Recent conversations</SectionLabel>
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <div className="flex items-baseline gap-2">
+              <SectionLabel>Recent conversations</SectionLabel>
+              <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
+                across all workspaces
+              </span>
+            </div>
             {sorted.length > 0 && refreshThreads ? (
               <Button variant="ghost" onClick={() => void refreshThreads()}>
                 Refresh
@@ -1328,7 +1389,7 @@ function CommandCenter({
                 <button
                   key={t.id}
                   type="button"
-                  onClick={() => onThreadCreated(t.id)}
+                  onClick={() => onOpenThread(t)}
                   aria-label={`Resume: ${t.title || "Untitled"}`}
                   className={`flex w-full items-baseline justify-between gap-3 px-4 py-2.5 text-left transition-colors hover:bg-[var(--surface-2)] ${
                     index > 0 ? "border-t border-[var(--border-dim)]" : ""
@@ -1337,6 +1398,11 @@ function CommandCenter({
                   <span className="truncate text-[var(--step-minus-1)] text-[var(--text)]">
                     {t.title || "Untitled"}
                   </span>
+                  {t.project_id !== projectId ? (
+                    <span className="mono shrink-0 text-[var(--step-minus-2)] text-[var(--faint)]">
+                      {projectLabel(t.project_id)}
+                    </span>
+                  ) : null}
                   <span className="mono shrink-0 text-[var(--step-minus-2)] text-[var(--faint)]">
                     {relativeTime(t.created_at)}
                   </span>

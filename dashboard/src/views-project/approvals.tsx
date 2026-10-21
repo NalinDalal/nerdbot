@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { api } from "../api";
 import { notifyError } from "../app";
 import { Approval } from "../types";
-import { Button, CARD_SHELL, EmptyState, ErrorState, LoadingState, PILL_SHELL, ShortId, StatusBadge, TABLE_TD, TABLE_TH, useAsync } from "../components";
+import { Button, CARD_SHELL, EmptyState, ErrorState, LoadingState, PILL_SHELL, ShortId, StatusBadge, TABLE_TD, TABLE_TH, approvalIsPending, useAsync } from "../components";
 export function ApprovalsTab({ projectId }: { projectId: string }) {
   // Merge project-wide approvals with per-run ones: legacy rows may have an
   // empty project_id, so the project query alone can miss them.
@@ -21,8 +21,10 @@ export function ApprovalsTab({ projectId }: { projectId: string }) {
   }, [projectId]);
 
   // Poll while anything awaits a decision so bot requests show up unprompted.
+  // Only genuinely actionable approvals count: an expired one can never be
+  // decided, so polling for it would spin forever.
   useEffect(() => {
-    const pendingCount = (inbox.data ?? []).filter((a) => a.decision === "pending").length;
+    const pendingCount = (inbox.data ?? []).filter((a) => approvalIsPending(a)).length;
     if (!pendingCount) return;
     const t = setInterval(inbox.reload, 8000);
     return () => clearInterval(t);
@@ -41,8 +43,16 @@ export function ApprovalsTab({ projectId }: { projectId: string }) {
   };
 
   const rows = inbox.data ?? [];
-  const pending = rows.filter((approval) => approval.decision === "pending");
-  const decided = rows.filter((approval) => approval.decision !== "pending");
+  // Actionable: still pending and not past its expiry.
+  const pending = rows.filter((approval) => approvalIsPending(approval));
+  // Dead: never decided and past its expiry. The API answers 410 for these,
+  // so they are shown as history, never as a decision to make.
+  const expired = rows.filter(
+    (approval) => !approvalIsPending(approval) && (approval.decision ?? "pending") === "pending",
+  );
+  const expiredIds = new Set(expired.map((approval) => approval.id));
+  const decided = rows.filter((approval) => (approval.decision ?? "pending") !== "pending");
+  const history = [...decided, ...expired];
 
   return (
     <div>
@@ -101,9 +111,9 @@ export function ApprovalsTab({ projectId }: { projectId: string }) {
       ) : (
         <EmptyState title="Inbox empty" hint="No pending approvals. Decided ones stay queryable per run." />
       )}
-      {decided.length > 0 ? (
+      {history.length > 0 ? (
         <>
-          <h2>Decided</h2>
+          <h2>Decision history</h2>
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
@@ -116,7 +126,7 @@ export function ApprovalsTab({ projectId }: { projectId: string }) {
                 </tr>
               </thead>
               <tbody>
-                {decided.map((approval) => (
+                {history.map((approval) => (
                   <tr className="transition-colors hover:bg-[var(--surface-2)]" key={approval.id}>
                     <td className={TABLE_TD}>
                       <ShortId id={approval.id} />
@@ -124,7 +134,9 @@ export function ApprovalsTab({ projectId }: { projectId: string }) {
                     <td className={TABLE_TD}>{approval.action}</td>
                     <td className={TABLE_TD}>{approval.requester}</td>
                     <td className={TABLE_TD}>
-                      <StatusBadge status={approval.decision} />
+                      <StatusBadge
+                        status={expiredIds.has(approval.id) ? "expired" : approval.decision}
+                      />
                     </td>
                     <td className="text-[var(--muted)]">
                       {approval.executed_at ? new Date(approval.executed_at).toLocaleString() : "—"}
