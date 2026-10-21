@@ -18,7 +18,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 # Environment variables that must never reach child processes or stored output.
 _NEVER_EXPORT = ("NERDBOT_SECRET_KEY", "NERDBOT_SECRET_KEY_PREVIOUS", "NERDBOT_TOKEN")
@@ -85,7 +85,11 @@ class RuntimeAdapter(Protocol):
     name: str
 
     def start_run(
-        self, command: str, workspace: Path, timeout_s: float = 60.0
+        self,
+        command: str,
+        workspace: Path,
+        timeout_s: float = 60.0,
+        context: Any | None = None,
     ) -> RunResult: ...  # pragma: no cover
 
 
@@ -94,7 +98,14 @@ class LocalRuntimeAdapter:
 
     name = "local"
 
-    def start_run(self, command: str, workspace: Path, timeout_s: float = 60.0) -> RunResult:
+    def start_run(
+        self,
+        command: str,
+        workspace: Path,
+        timeout_s: float = 60.0,
+        context: Any | None = None,
+    ) -> RunResult:
+        del context  # shell execution is context-free
         if not command.strip():
             raise ExecutionError("empty command")
         check_command(command)

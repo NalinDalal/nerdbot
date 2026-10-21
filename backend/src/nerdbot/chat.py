@@ -14,7 +14,15 @@ from typing import Any
 import httpx
 
 from . import store
-from .models import ChatThread, MemoryEntry, Provider, ProviderKind, ProviderStatus
+from .models import (
+    ChatThread,
+    MemoryEntry,
+    Provider,
+    ProviderKind,
+    ProviderStatus,
+    TaskStatus,
+    TeammateStatus,
+)
 from .providers import (
     ProviderAuthenticationError,
     ProviderConfigurationError,
@@ -36,15 +44,16 @@ SYSTEM_PROMPT = (
 
 
 def resolve_chat_provider(
-    conn: sqlite3.Connection, project_id: str, thread: ChatThread
+    conn: sqlite3.Connection, project_id: str, thread: ChatThread | None = None
 ) -> Provider | None:
     """Explicit thread provider, else capable default, else None (fail closed).
 
     Default preference: an active openai-compatible provider with resolvable
     credentials, falling back to an active mock provider so first-run works
-    with zero setup. Local providers cannot chat.
+    with zero setup. Local providers cannot chat. ``thread=None`` skips the
+    explicit-provider leg (used by thread-less flows like decomposition).
     """
-    if thread.provider_id is not None:
+    if thread is not None and thread.provider_id is not None:
         provider = store.get_provider(conn, thread.provider_id)
         if provider is None or provider.project_id != project_id:
             raise ValueError("thread provider must belong to the same project")
@@ -83,8 +92,67 @@ def recall_context(conn: sqlite3.Connection, project_id: str) -> list[MemoryEntr
 def build_messages(
     conn: sqlite3.Connection, project_id: str, thread: ChatThread
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Assemble provider messages + provenance records for recalled memory."""
+    """Assemble provider messages + provenance records for recalled memory.
+
+    Project context (name, task and teammate counts) is prepended so the
+    assistant can answer questions about the workspace instead of claiming it
+    cannot see it. Recalled memory and thread summaries follow as untrusted
+    context with provenance.
+    """
     messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    project_ctx = _project_context(conn, project_id)
+    if project_ctx:
+        messages.append({"role": "system", "content": project_ctx})
+    messages, provenance = _frame_recalled(conn, project_id, messages, exclude_id=thread.id)
+    history = store.list_messages(conn, thread.id, limit=HISTORY_WINDOW)
+    for message in history:
+        messages.append({"role": message.role, "content": message.content})
+    return messages, provenance
+
+
+def build_planning_messages(
+    conn: sqlite3.Connection, project_id: str
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Thread-less variant for planning flows (decomposition): system prompt
+    plus recalled memory and every thread summary — no thread history."""
+    messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    project_ctx = _project_context(conn, project_id)
+    if project_ctx:
+        messages.append({"role": "system", "content": project_ctx})
+    return _frame_recalled(conn, project_id, messages, exclude_id="")
+
+
+def _project_context(
+    conn: sqlite3.Connection, project_id: str
+) -> str:
+    """Concise, read-only project context for the system prompt.
+
+    Never includes secrets, file contents, or untrusted user data. Surface
+    only counts and names the assistant can safely reference.
+    """
+    project = store.get_project(conn, project_id)
+    if project is None:
+        return ""
+    tasks = store.list_tasks_for_project(conn, project_id)
+    done = sum(1 for t in tasks if t.status == TaskStatus.DONE.value)
+    pending = sum(1 for t in tasks if t.status in (TaskStatus.PENDING.value, TaskStatus.READY.value, TaskStatus.RUNNING.value))
+    mates = store.list_teammates(conn, project_id)
+    active_mates = sum(1 for m in mates if m.status == TeammateStatus.ACTIVE.value)
+    lines = [
+        f"Project: {project.repository or project.id}",
+        f"Tasks: {len(tasks)} total ({done} done, {pending} in progress)",
+        f"Teammates: {len(mates)} ({active_mates} active)",
+    ]
+    return "Workspace context:\n" + "\n".join(lines)
+
+
+def _frame_recalled(
+    conn: sqlite3.Connection,
+    project_id: str,
+    messages: list[dict[str, Any]],
+    *,
+    exclude_id: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     memories = recall_context(conn, project_id)
     provenance: list[dict[str, Any]] = []
     lines: list[str] = []
@@ -93,15 +161,12 @@ def build_messages(
             {"id": entry.id, "source": entry.source, "confidence": entry.confidence}
         )
         lines.append(f"[{entry.source} · confidence {entry.confidence}] {entry.content}")
-    for other in store.list_thread_summaries(conn, project_id, exclude_id=thread.id):
+    for other in store.list_thread_summaries(conn, project_id, exclude_id=exclude_id):
         provenance.append({"id": other.id, "source": "thread-summary", "confidence": 1.0})
         title = other.title or other.id
         lines.append(f"[thread-summary {title}] {other.summary}")
     if lines:
         messages.append({"role": "system", "content": frame_untrusted("\n".join(lines))})
-    history = store.list_messages(conn, thread.id, limit=HISTORY_WINDOW)
-    for message in history:
-        messages.append({"role": message.role, "content": message.content})
     return messages, provenance
 
 

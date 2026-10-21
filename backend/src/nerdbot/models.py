@@ -48,6 +48,7 @@ class VerificationStatus(StrEnum):
 class Decision(StrEnum):
     PENDING = "pending"
     APPROVED = "approved"
+    APPROVED_FOREVER = "approved_forever"
     DENIED = "denied"
 
 
@@ -55,6 +56,16 @@ class TeammateStatus(StrEnum):
     ACTIVE = "active"
     DISABLED = "disabled"
     ARCHIVED = "archived"
+
+
+class DelegationStatus(StrEnum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    DECLINED = "declined"
+    CANCELLED = "cancelled"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    TIMED_OUT = "timed_out"
 
 
 class Project(BaseModel):
@@ -88,6 +99,58 @@ class Task(BaseModel):
     issue_id: str | None = None
     branch: str = ""
     workspace_path: str = ""
+    board_id: str = ""
+    parent_task_id: str = ""
+
+
+class BoardStatus(StrEnum):
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
+class Board(BaseModel):
+    """A workspace container: a board owns tasks and teammates (bots), belongs
+    to one project/workspace, and can exchange messages with other boards
+    over the response channel."""
+    id: str
+    owner: str
+    name: str
+    description: str = ""
+    project_id: str = ""
+    team_id: str | None = None
+    status: BoardStatus = BoardStatus.ACTIVE
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+class BoardMemberRole(StrEnum):
+    MEMBER = "member"
+    LEAD = "lead"
+
+
+# The roles a board membership may carry. The dashboard renders this list from
+# the server, so the UI can never offer a role the backend would reject.
+BOARD_MEMBER_ROLES: tuple[str, ...] = tuple(role.value for role in BoardMemberRole)
+
+
+class BoardMember(BaseModel):
+    """A teammate (bot) that belongs to a board, with a role."""
+    id: str
+    board_id: str
+    teammate_id: str
+    role: str = BoardMemberRole.MEMBER.value
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+class BoardMessage(BaseModel):
+    """A board-to-board message over the response channel."""
+    id: str
+    board_id: str  # originating board
+    to_board_id: str | None = None  # target board (null = post to own board feed)
+    from_teammate_id: str | None = None
+    to_teammate_id: str | None = None  # direct message to one teammate (null = board feed)
+    content: str
+    kind: str = "message"  # message | handoff | notice | delegation
+    created_at: datetime = Field(default_factory=_utcnow)
 
 
 class Run(BaseModel):
@@ -128,7 +191,9 @@ class Artifact(BaseModel):
 
 class Approval(BaseModel):
     id: str
-    run_id: str
+    run_id: str = ""
+    board_id: str | None = None
+    project_id: str = ""
     action: str
     requester: str
     decision: Decision = Decision.PENDING
@@ -137,6 +202,7 @@ class Approval(BaseModel):
     consumed_at: datetime | None = None
     task_id: str | None = None
     digest: str | None = None
+    executed_at: datetime | None = None
 
 
 class ChatThread(BaseModel):
@@ -296,3 +362,61 @@ class PRPackage(BaseModel):
     patch_artifact_id: str = ""
     digest: str = ""
     created_at: datetime = Field(default_factory=_utcnow)
+
+
+class Team(BaseModel):
+    """A fleet grouping under one owner: projects and/or bots around a purpose.
+
+    A team is the single grouping abstraction in NerdBot. It may contain
+    projects (workspaces) and teammates (bots) — see :class:`TeamMember`.
+    Boards are separate: they are per-project workspace containers for tasks.
+    """
+
+    id: str
+    owner: str
+    name: str = ""
+    description: str = ""
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+class TeamMember(BaseModel):
+    """One membership row: either a project or a teammate inside a team.
+
+    Exactly one of ``project_id`` / ``teammate_id`` is non-empty. The dual
+    shape keeps a single grouping model instead of introducing a parallel
+    'board-of-bots' abstraction. Rows created before bot membership existed
+    always carry a ``project_id``.
+    """
+
+    id: str
+    team_id: str
+    project_id: str = ""
+    teammate_id: str = ""
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+class Delegation(BaseModel):
+    """A handoff of a task from one teammate to another, bounded by depth.
+
+    The lifecycle is: ``pending`` → ``accepted`` | ``declined`` (the
+    delegatee's decision) → ``completed`` | ``failed`` (the delegatee's
+    actual result) or ``cancelled`` | ``timed_out`` (the delegator's or the
+    deadline's decision). ``pending`` never resolves to a success on its own.
+    """
+
+    id: str
+    task_id: str
+    from_teammate_id: str
+    to_teammate_id: str
+    reason: str = ""
+    status: DelegationStatus = DelegationStatus.PENDING
+    depth: int = 1
+    created_at: datetime = Field(default_factory=_utcnow)
+    decided_at: datetime | None = None
+    child_task_id: str = ""  # task created for the delegatee (agent-driven delegation)
+    result: str = ""  # final result returned by the delegatee (response channel)
+    result_run_id: str = ""  # run that produced the result
+    finished_at: datetime | None = None
+    deadline_at: datetime | None = None  # after this, the delegation times out
+    scope: str = ""  # the bounded scope the delegator stated
+    attempts: int = 0  # how many times this objective was delegated

@@ -4,23 +4,33 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import threading
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import backup as backup_mod
+from . import boards as boards_mod
 from . import capabilities as capabilities_mod
 from . import chat as chat_mod
+from . import decomposition as decomposition_mod
+from . import delegation as delegation_mod
+from . import executor as executor_mod
+from . import fleet as fleet_mod
+from . import gates as gates_mod
 from . import knowledge as knowledge_mod
 from . import metrics as metrics_mod
 from . import notify as notify_mod
 from . import orchestrator, store
+from . import permissions as permissions_mod
 from . import providers as providers_impl
 from . import secrets as secrets_mod
 from . import workspace as workspace_mgr
@@ -35,18 +45,26 @@ from .integrations.github import (
     github_status,
 )
 from .models import (
+    BOARD_MEMBER_ROLES,
+    BoardMemberRole,
     Decision,
     Provider,
     ProviderKind,
     ProviderStatus,
     ReviewVerdict,
+    Teammate,
     TeammateStatus,
 )
 from .providers import (
     ProviderAuthenticationError,
     ProviderConfigurationError,
+    ProviderNetworkError,
+    ProviderProtocolError,
     ProviderRateLimitError,
+    ProviderTimeoutError,
+    ProviderToolError,
 )
+from .store import get_conn
 
 
 def _db_path() -> str:
@@ -57,12 +75,49 @@ def _data_dir() -> str:
     return os.environ.get("NERDBOT_DATA", ".nerdbot-data")
 
 
-def get_conn() -> Iterator[sqlite3.Connection]:
-    conn = store.connect(_db_path())
+def _run_wall_clock_s() -> float:
+    """Agent-run wall-clock budget, seconds (default 60).
+
+    A slow provider (e.g. a local model serving one request per turn) needs a
+    bigger budget; without this knob every such run hit the fixed 60s deadline
+    and failed with ``provider timed out`` before it could finish.
+    """
+    raw = os.environ.get("NERDBOT_RUN_TIMEOUT_S", "60")
     try:
-        yield conn
-    finally:
-        conn.close()
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError("NERDBOT_RUN_TIMEOUT_S must be a number of seconds") from exc
+    if value <= 0:
+        raise ValueError("NERDBOT_RUN_TIMEOUT_S must be positive")
+    return value
+
+
+def _provider_error_to_http(exc: Exception) -> HTTPException | None:
+    """Map typed model/provider failures to actionable HTTP statuses.
+
+    Model calls (chat, decomposition) can fail for reasons the caller must be
+    able to act on: missing configuration, bad credentials, rate limits,
+    timeouts, or an unreachable upstream. Without this mapping they escape as a
+    bare 500. Returns ``None`` for anything unrecognized so callers can let a
+    genuine bug surface as a 500 instead of disguising it as a provider fault.
+    """
+    if isinstance(exc, ProviderConfigurationError):
+        return HTTPException(status_code=400, detail=str(exc))
+    if isinstance(exc, ProviderAuthenticationError):
+        return HTTPException(status_code=401, detail=str(exc))
+    if isinstance(exc, ProviderRateLimitError):
+        return HTTPException(status_code=429, detail=str(exc))
+    if isinstance(
+        exc,
+        (
+            ProviderTimeoutError,
+            ProviderProtocolError,
+            ProviderNetworkError,
+            ProviderToolError,
+        ),
+    ):
+        return HTTPException(status_code=502, detail=str(exc))
+    return None
 
 
 class MemoryBody(BaseModel):
@@ -70,6 +125,29 @@ class MemoryBody(BaseModel):
     content: str
     source: str
     confidence: float = 0.5
+
+
+def _enforce_memory_scope(
+    conn: sqlite3.Connection, acting: Teammate | None, scope: str
+) -> None:
+    """Fail-closed memory isolation by teammate identity.
+
+    A teammate may always touch its own ``teammate:<id>`` scope, and the
+    shared ``project:<id>`` scope only when its ``memory_scope`` is
+    ``"project"``. Any other scope (another teammate's identity scope, or a
+    foreign project) is denied. The human owner (acting=None) is unrestricted.
+    """
+    del conn
+    if acting is None:
+        return
+    allowed = {f"teammate:{acting.id}"}
+    if acting.memory_scope == "project":
+        allowed.add(f"project:{acting.project_id}")
+    if scope not in allowed:
+        raise HTTPException(
+            status_code=403,
+            detail=f"teammate may not access memory scope {scope!r}",
+        )
 
 
 def create_app() -> FastAPI:
@@ -81,7 +159,35 @@ def create_app() -> FastAPI:
             app.state.restart_count = store.meta_incr(conn, "restart_count")
         finally:
             conn.close()
-        yield
+
+        # Optional autonomous executor loop: claims pending unowned tasks to
+        # available bots and runs them. Only active when NERDBOT_EXECUTOR=1.
+        _executor_stop = threading.Event()
+        _executor_thread: threading.Thread | None = None
+        if os.environ.get("NERDBOT_EXECUTOR", "0") == "1":
+            interval_s = float(os.environ.get("NERDBOT_EXECUTOR_INTERVAL_S", "10.0"))
+            data_dir = _data_dir()
+            timeout_s = float(os.environ.get("NERDBOT_EXECUTOR_TIMEOUT_S", "60.0"))
+            max_tasks = int(os.environ.get("NERDBOT_EXECUTOR_MAX_TASKS", "10"))
+            _executor_thread = threading.Thread(
+                target=executor_mod.sweep_loop,
+                kwargs={
+                    "interval_s": interval_s,
+                    "data_dir": data_dir,
+                    "timeout_s": timeout_s,
+                    "max_tasks": max_tasks,
+                    "stop_event": _executor_stop,
+                },
+                daemon=True,
+                name="nerdbot-executor",
+            )
+            _executor_thread.start()
+        try:
+            yield
+        finally:
+            _executor_stop.set()
+            if _executor_thread is not None:
+                _executor_thread.join(timeout=5.0)
 
     app = FastAPI(title="NerdBot Workspace", lifespan=lifespan)
 
@@ -90,6 +196,8 @@ def create_app() -> FastAPI:
         allow_origins=[
             "http://localhost:8080",
             "http://127.0.0.1:8080",
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
         ],
         allow_credentials=True,
         allow_methods=["*"],
@@ -171,9 +279,10 @@ def create_app() -> FastAPI:
         body: dict[str, Any],
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
     ) -> dict[str, Any]:
         require_project_owner(conn, project_id, principal)
-        mate = store.create_teammate(
+        mate = fleet_mod.create_teammate_service(
             conn,
             project_id,
             persona=str(body.get("persona", "")),
@@ -181,6 +290,8 @@ def create_app() -> FastAPI:
             capabilities=list(body.get("capabilities", [])),
             memory_scope=str(body.get("memory_scope", "project")),
             permissions=list(body.get("permissions", [])),
+            provider_id=body.get("provider_id") or None,
+            acting=acting,
         )
         return mate.model_dump(mode="json")
 
@@ -189,6 +300,12 @@ def create_app() -> FastAPI:
         if mate is None:
             raise HTTPException(status_code=404, detail="teammate not found")
         return mate.project_id
+
+    def _parent_payload(conn: sqlite3.Connection, parent_task_id: str) -> dict[str, Any] | None:
+        if not parent_task_id:
+            return None
+        parent = store.get_task(conn, parent_task_id)
+        return parent.model_dump(mode="json") if parent else None
 
     @app.get("/projects/{project_id}/teammates")
     def list_teammates(
@@ -218,26 +335,23 @@ def create_app() -> FastAPI:
         body: dict[str, Any],
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
     ) -> dict[str, Any]:
         require_project_owner(conn, _mate_project(conn, teammate_id), principal)
-        try:
-            mate = store.update_teammate(
-                conn,
-                teammate_id,
-                persona=body.get("persona"),
-                instructions=body.get("instructions"),
-                capabilities=body.get("capabilities"),
-                memory_scope=body.get("memory_scope"),
-                permissions=body.get("permissions"),
-                tool_policy=body.get("tool_policy"),
-                provider_id=body.get("provider_id"),
-                # provider_id: null is an explicit DETACH (absent = no change)
-                clear_provider=("provider_id" in body and body["provider_id"] is None),
-            )
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        updates: dict[str, Any] = {
+            "persona": body.get("persona"),
+            "instructions": body.get("instructions"),
+            "capabilities": body.get("capabilities"),
+            "memory_scope": body.get("memory_scope"),
+            "permissions": body.get("permissions"),
+            "tool_policy": body.get("tool_policy"),
+            "provider_id": body.get("provider_id"),
+            # provider_id: null is an explicit DETACH (absent = no change)
+            "clear_provider": ("provider_id" in body and body["provider_id"] is None),
+        }
+        mate = fleet_mod.update_teammate_service(
+            conn, teammate_id, updates, acting=acting
+        )
         return mate.model_dump(mode="json")
 
     @app.post("/teammates/{teammate_id}/disable")
@@ -245,12 +359,12 @@ def create_app() -> FastAPI:
         teammate_id: str,
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
     ) -> dict[str, Any]:
         require_project_owner(conn, _mate_project(conn, teammate_id), principal)
-        try:
-            mate = store.set_teammate_status(conn, teammate_id, TeammateStatus.DISABLED)
-        except (KeyError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        mate = fleet_mod.set_teammate_status_service(
+            conn, teammate_id, TeammateStatus.DISABLED, acting=acting
+        )
         return mate.model_dump(mode="json")
 
     @app.post("/teammates/{teammate_id}/archive")
@@ -258,13 +372,548 @@ def create_app() -> FastAPI:
         teammate_id: str,
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
     ) -> dict[str, Any]:
         require_project_owner(conn, _mate_project(conn, teammate_id), principal)
+        mate = fleet_mod.set_teammate_status_service(
+            conn, teammate_id, TeammateStatus.ARCHIVED, acting=acting
+        )
+        return mate.model_dump(mode="json")
+
+    # -- Teams -----------------------------------------------------------------
+
+    @app.post("/teams")
+    def create_team(
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        if acting is not None:
+            # Bot path: gated through the fleet service (team.create is
+            # default-deny + approval-gated unless tool_policy says "auto").
+            team = fleet_mod.create_team_service(
+                conn,
+                owner=principal,
+                name=str(body.get("name", "")),
+                description=str(body.get("description", "")),
+                project_id=str(body.get("project_id", "")),
+                member_ids=[str(m) for m in body.get("member_ids", []) or []],
+                project_member_ids=[str(m) for m in body.get("project_member_ids", []) or []],
+                acting=acting,
+            )
+            return team.model_dump(mode="json")
+        team = store.create_team(
+            conn,
+            owner=principal,
+            name=str(body.get("name", "")),
+            description=str(body.get("description", "")),
+        )
+        for member_id in body.get("member_ids", []) or []:
+            try:
+                store.add_teammate_to_team(conn, team.id, str(member_id))
+            except (KeyError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        for project_member_id in body.get("project_member_ids", []) or []:
+            try:
+                store.create_team_member(conn, team.id, str(project_member_id))
+            except (KeyError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return team.model_dump(mode="json")
+
+    @app.get("/teams")
+    def list_teams(
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        teams = [t.model_dump(mode="json") for t in store.list_teams(conn, principal)]
+        return {"teams": teams}
+
+    @app.get("/teams/{team_id}")
+    def get_team(
+        team_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        team = store.get_team(conn, team_id)
+        if team is None or team.owner != principal:
+            raise HTTPException(status_code=404, detail="team not found")
+        members = store.list_team_members(conn, team_id)
+        projects = store.list_projects_for_team(conn, team_id)
+        teammates = store.list_teammates_for_team(conn, team_id)
+        return {
+            "team": team.model_dump(mode="json"),
+            "projects": [p.model_dump(mode="json") for p in projects],
+            "teammates": [t.model_dump(mode="json") for t in teammates],
+            "members": [m.model_dump(mode="json") for m in members],
+        }
+
+    @app.post("/teams/{team_id}/teammates")
+    def add_team_teammate(
+        team_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        team = store.get_team(conn, team_id)
+        if team is None:
+            raise HTTPException(status_code=404, detail="team not found")
+        teammate_id = str(body.get("teammate_id", ""))
+        if not teammate_id:
+            raise HTTPException(status_code=400, detail="teammate_id is required")
+        if acting is not None:
+            member = fleet_mod.add_teammate_to_team_service(
+                conn, team_id, teammate_id, acting=acting
+            )
+            return member.model_dump(mode="json")
+        if team.owner != principal:
+            raise HTTPException(status_code=404, detail="team not found")
         try:
-            mate = store.set_teammate_status(conn, teammate_id, TeammateStatus.ARCHIVED)
+            member = store.add_teammate_to_team(conn, team_id, teammate_id)
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return mate.model_dump(mode="json")
+        return member.model_dump(mode="json")
+
+    @app.delete("/teams/{team_id}/teammates/{teammate_id}")
+    def remove_team_teammate(
+        team_id: str,
+        teammate_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        team = store.get_team(conn, team_id)
+        if team is None:
+            raise HTTPException(status_code=404, detail="team not found")
+        if acting is not None:
+            fleet_mod.remove_teammate_from_team_service(
+                conn, team_id, teammate_id, acting=acting
+            )
+            return {"removed": True}
+        if team.owner != principal:
+            raise HTTPException(status_code=404, detail="team not found")
+        store.remove_teammate_from_team(conn, team_id, teammate_id)
+        return {"removed": True}
+
+    @app.post("/teams/{team_id}/projects")
+    def add_team_project(
+        team_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        team = store.get_team(conn, team_id)
+        if team is None or team.owner != principal:
+            raise HTTPException(status_code=404, detail="team not found")
+        project_id = str(body.get("project_id", ""))
+        if not project_id:
+            raise HTTPException(status_code=400, detail="project_id is required")
+        try:
+            member = store.create_team_member(conn, team_id, project_id)
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return member.model_dump(mode="json")
+
+    @app.delete("/teams/{team_id}/projects/{project_id}")
+    def remove_team_project(
+        team_id: str,
+        project_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        team = store.get_team(conn, team_id)
+        if team is None or team.owner != principal:
+            raise HTTPException(status_code=404, detail="team not found")
+        store.remove_team_member(conn, team_id, project_id)
+        return {"removed": True}
+
+    # -- Boards (agent part) --------------------------------------------------
+
+    @app.post("/boards")
+    def create_board_endpoint(
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Any = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        project_id = str(body.get("project_id", ""))
+        if project_id:
+            require_project_owner(conn, project_id, principal)
+        try:
+            board = boards_mod.create_board_service(
+                conn,
+                owner=principal,
+                name=str(body.get("name", "")),
+                description=str(body.get("description", "")),
+                project_id=project_id,
+                team_id=body.get("team_id") or None,
+                acting=acting,
+            )
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return board.model_dump(mode="json")
+
+    @app.get("/boards")
+    def list_boards_endpoint(
+        project_id: str | None = None,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Any = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        boards = boards_mod.list_boards_for_actor(
+            conn,
+            owner=principal,
+            project_id=project_id,
+            acting=acting,
+        )
+        return {"boards": [b.model_dump(mode="json") for b in boards]}
+
+    @app.get("/boards/{board_id}")
+    def get_board_endpoint(
+        board_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Any = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        if acting is not None:
+            # Bot path: needs the board.read permission AND membership of the
+            # board (owner or member). Holding the permission alone is not
+            # enough to read a board the bot is not part of.
+            return boards_mod.read_board_service(conn, board_id, acting=acting)
+        board = store.get_board(conn, board_id)
+        if board is None:
+            raise HTTPException(status_code=404, detail="board not found")
+        require_project_owner(conn, board.project_id, principal)
+        return boards_mod.board_detail_with_members(conn, board_id)
+
+    @app.patch("/boards/{board_id}")
+    def update_board_endpoint(
+        board_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        board = store.get_board(conn, board_id)
+        if board is None:
+            raise HTTPException(status_code=404, detail="board not found")
+        require_project_owner(conn, board.project_id, principal)
+        try:
+            updated = store.update_board(
+                conn,
+                board_id,
+                name=body.get("name"),
+                description=body.get("description"),
+                team_id=body.get("team_id"),
+                status=None,
+            )
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return updated.model_dump(mode="json")
+
+    @app.delete("/boards/{board_id}")
+    def delete_board_endpoint(
+        board_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        board = store.get_board(conn, board_id)
+        if board is None:
+            raise HTTPException(status_code=404, detail="board not found")
+        require_project_owner(conn, board.project_id, principal)
+        if acting is not None:
+            # Bot path: board.delete is default-deny + digest-bound approval
+            # (unless tool_policy sets it to "auto").
+            try:
+                gates_mod.require(
+                    conn, acting, "board.delete", payload={"board_id": board_id}
+                )
+            except gates_mod.GateDenied as exc:
+                raise HTTPException(status_code=403, detail=str(exc)) from exc
+            except gates_mod.GateApprovalRequired as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "action requires owner approval",
+                        "approval": exc.approval.model_dump(mode="json"),
+                    },
+                ) from exc
+        try:
+            removed = boards_mod.delete_board_service(
+                conn,
+                board_id=board_id,
+                acting=acting,
+                require_approval=False,
+                approved_approval_id=None,
+            )
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return removed.model_dump(mode="json")
+
+    @app.post("/boards/{board_id}/members")
+    def add_board_member_endpoint(
+        board_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Any = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        board = store.get_board(conn, board_id)
+        if board is None:
+            raise HTTPException(status_code=404, detail="board not found")
+        require_project_owner(conn, board.project_id, principal)
+        teammate_id = str(body.get("teammate_id", ""))
+        role = str(body.get("role", BoardMemberRole.MEMBER.value))
+        try:
+            member = boards_mod.add_board_member_service(
+                conn, board_id=board_id, teammate_id=teammate_id, role=role, acting=acting
+            )
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return member.model_dump(mode="json")
+
+    @app.delete("/boards/{board_id}/members/{teammate_id}")
+    def remove_board_member_endpoint(
+        board_id: str,
+        teammate_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Any = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        board = store.get_board(conn, board_id)
+        if board is None:
+            raise HTTPException(status_code=404, detail="board not found")
+        require_project_owner(conn, board.project_id, principal)
+        try:
+            boards_mod.remove_board_member_service(
+                conn, board_id=board_id, teammate_id=teammate_id, acting=acting
+            )
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"removed": True}
+
+    @app.get("/boards/{board_id}/members")
+    def list_board_members_endpoint(
+        board_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        board = store.get_board(conn, board_id)
+        if board is None:
+            raise HTTPException(status_code=404, detail="board not found")
+        require_project_owner(conn, board.project_id, principal)
+        members = store.list_board_members(conn, board_id)
+        return {"members": [m.model_dump(mode="json") for m in members]}
+
+    @app.post("/boards/{board_id}/messages")
+    def create_board_message_endpoint(
+        board_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Any = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        board = store.get_board(conn, board_id)
+        if board is None:
+            raise HTTPException(status_code=404, detail="board not found")
+        require_project_owner(conn, board.project_id, principal)
+        to_board_id = body.get("to_board_id") or None
+        to_teammate_id = body.get("to_teammate_id") or None
+        kind = str(body.get("kind", "message"))
+        try:
+            message = boards_mod.create_board_message_service(
+                conn,
+                board_id=board_id,
+                content=str(body.get("content", "")),
+                to_board_id=to_board_id,
+                from_teammate_id=acting.id if acting else None,
+                to_teammate_id=to_teammate_id,
+                kind=kind,
+                acting=acting,
+            )
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return message.model_dump(mode="json")
+
+    @app.get("/boards/{board_id}/messages")
+    def list_board_messages_endpoint(
+        board_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        board = store.get_board(conn, board_id)
+        if board is None:
+            raise HTTPException(status_code=404, detail="board not found")
+        require_project_owner(conn, board.project_id, principal)
+        messages = store.list_board_messages(conn, board_id)
+        return {"messages": [m.model_dump(mode="json") for m in messages]}
+
+    @app.get("/boards/{board_id}/inbox")
+    def list_board_inbox_endpoint(
+        board_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        board = store.get_board(conn, board_id)
+        if board is None:
+            raise HTTPException(status_code=404, detail="board not found")
+        require_project_owner(conn, board.project_id, principal)
+        inbox = store.list_board_messages_to(conn, board_id)
+        return {"inbox": [m.model_dump(mode="json") for m in inbox]}
+
+    @app.post("/boards/{board_id}/approval-request")
+    def request_board_approval_endpoint(
+        board_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        board = store.get_board(conn, board_id)
+        if board is None:
+            raise HTTPException(status_code=404, detail="board not found")
+        require_project_owner(conn, board.project_id, principal)
+        try:
+            approval = boards_mod.request_board_approval(
+                conn,
+                board_id=board_id,
+                action=str(body.get("action", "board.mutate")),
+                requester=principal,
+                ttl_s=float(body.get("ttl_s", store.DEFAULT_APPROVAL_TTL_S)),
+            )
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return approval.model_dump(mode="json")
+
+    @app.post("/boards/{board_id}/decompose")
+    def decompose_board_endpoint(
+        board_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Any = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        """Plan-review flow: ``preview: true`` returns a side-effect-free plan
+        for the human to review; posting the reviewed ``plan`` back
+        materializes exactly that plan. The one-shot path (objective only)
+        plans and materializes in a single call.
+
+        Bot callers are gated here like every other mutating surface: the
+        decompose creates boards and tasks, so acting teammates need the
+        matching permissions (no HTTP escape hatch around the tool gates).
+        """
+        board = store.get_board(conn, board_id)
+        if board is None:
+            raise HTTPException(status_code=404, detail="board not found")
+        require_project_owner(conn, board.project_id, principal)
+        project_id = board.project_id
+        objective = str(body.get("objective", ""))
+        plan_payload = body.get("plan")
+        preview = bool(body.get("preview", False))
+        create_board = bool(body.get("create_board", True))
+        if plan_payload is None and not objective.strip():
+            raise HTTPException(status_code=400, detail="objective is required")
+
+        if acting is not None:
+            # Bot path: decompose creates a board + tasks — gate both.
+            try:
+                gates_mod.require(conn, acting, "task.create", payload={"source": "decompose"})
+                if create_board and not preview:
+                    gates_mod.require(conn, acting, "board.create", payload={"source": "decompose"})
+            except gates_mod.GateDenied as exc:
+                raise HTTPException(status_code=403, detail=str(exc)) from exc
+            except gates_mod.GateApprovalRequired as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "action requires owner approval",
+                        "approval": exc.approval.model_dump(mode="json"),
+                    },
+                ) from exc
+
+        # Review leg: plan only, create nothing.
+        if preview:
+            provider = decomposition_mod.resolve_provider(conn, project_id)
+            if provider is None:
+                raise HTTPException(
+                    status_code=400, detail="no provider available for decomposition"
+                )
+            try:
+                plan = decomposition_mod.plan_objective(conn, project_id, objective, provider)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except Exception as exc:
+                http_exc = _provider_error_to_http(exc)
+                if http_exc is None:
+                    raise
+                raise http_exc from exc
+            return {
+                "board": None,
+                "tasks": [],
+                "plan": plan.model_dump(),
+                "objective": objective,
+                "preview": True,
+            }
+
+        # Materialize leg: the exact plan the human reviewed, no second LLM call.
+        if plan_payload is not None:
+            try:
+                plan = decomposition_mod.Plan.model_validate(plan_payload)
+            except Exception as exc:  # pydantic validation
+                raise HTTPException(status_code=400, detail=f"invalid plan: {exc}") from exc
+            # Bounds, dependency order, and owner facts are re-checked against
+            # live state *before* anything is created: a reviewed plan whose
+            # facts went stale (a bot was archived) is rejected whole, never
+            # partially executed.
+            known = {
+                m.id
+                for m in store.list_all_teammates(conn)
+                if m.project_id == project_id and m.status == TeammateStatus.ACTIVE
+            }
+            problems = decomposition_mod.validate_plan(
+                plan,
+                project_id=project_id,
+                acting_teammate_id=acting.id if acting else "",
+                known_teammate_ids=known,
+            )
+            if problems:
+                raise HTTPException(
+                    status_code=400, detail=f"plan rejected: {'; '.join(problems)}"
+                )
+            return decomposition_mod.materialize_plan(
+                conn,
+                project_id,
+                plan,
+                objective=objective,
+                board_name=str(body.get("board_name", "")) or None,
+                create_board=create_board,
+                acting_teammate_id=acting.id if acting else None,
+            )
+
+        # One-shot: plan and materialize in a single call.
+        provider = decomposition_mod.resolve_provider(conn, project_id)
+        if provider is None:
+            raise HTTPException(
+                status_code=400, detail="no provider available for decomposition"
+            )
+        try:
+            result = decomposition_mod.decompose_objective(
+                conn,
+                project_id=project_id,
+                objective=objective,
+                provider=provider,
+                board_name=str(body.get("board_name", "")) or None,
+                create_board=create_board,
+                acting_teammate_id=acting.id if acting else None,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            http_exc = _provider_error_to_http(exc)
+            if http_exc is None:
+                raise
+            raise http_exc from exc
+        return result
 
     @app.post("/projects/{project_id}/tasks")
     def create_task(
@@ -300,7 +949,10 @@ def create_app() -> FastAPI:
         require_project_owner(conn, task.project_id, principal)
         try:
             run, result, artifact_id = orchestrator.schedule_run(
-                conn, task_id, data_dir=_data_dir()
+                conn,
+                task_id,
+                data_dir=_data_dir(),
+                timeout_s=_run_wall_clock_s(),
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -323,7 +975,9 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="task not found")
         require_project_owner(conn, task.project_id, principal)
         try:
-            run, result, artifact_id = orchestrator.retry_task(conn, task_id, data_dir=_data_dir())
+            run, result, artifact_id = orchestrator.retry_task(
+                conn, task_id, data_dir=_data_dir(), timeout_s=_run_wall_clock_s()
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
@@ -358,6 +1012,14 @@ def create_app() -> FastAPI:
             "issue": issue.model_dump(mode="json") if issue else None,
             "reviews": reviews,
             "pr_packages": packages,
+            "delegations": [
+                d.model_dump(mode="json")
+                for d in store.list_delegations_for_task(conn, task_id)
+            ],
+            "children": [
+                c.model_dump(mode="json") for c in store.list_child_tasks(conn, task_id)
+            ],
+            "parent": _parent_payload(conn, task.parent_task_id),
         }
 
     @app.post("/tasks/{task_id}/assign")
@@ -376,6 +1038,291 @@ def create_app() -> FastAPI:
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return updated.model_dump(mode="json")
+
+    # -- Delegations ------------------------------------------------------------
+
+    @app.post("/tasks/{task_id}/delegate")
+    def delegate_task(
+        task_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        task = store.get_task(conn, task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="task not found")
+        require_project_owner(conn, task.project_id, principal)
+        from_id = str(body.get("from_teammate_id", ""))
+        to_id = str(body.get("to_teammate_id", ""))
+        reason = str(body.get("reason", ""))
+        depth = int(body.get("depth", 1))
+        try:
+            delegation = store.create_delegation(
+                conn, task_id, from_id, to_id, reason=reason, depth=depth
+            )
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return delegation.model_dump(mode="json")
+
+    @app.get("/tasks/{task_id}/delegations")
+    def list_task_delegations(
+        task_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        task = store.get_task(conn, task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="task not found")
+        require_project_owner(conn, task.project_id, principal)
+        delegations = [
+            d.model_dump(mode="json") for d in store.list_delegations_for_task(conn, task_id)
+        ]
+        return {"delegations": delegations}
+
+    @app.post("/delegations/{delegation_id}/decide")
+    def decide_delegation(
+        delegation_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        """Accept or decline a delegation.
+
+        The delegatee decides for itself. The human owner may act on the
+        delegatee's behalf (for example when a bot has no model attached).
+        A delegation that already left ``pending`` is never re-decided.
+        """
+        delegation = store.get_delegation(conn, delegation_id)
+        if delegation is None:
+            raise HTTPException(status_code=404, detail="delegation not found")
+        task = store.get_task(conn, delegation.task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="task not found")
+        require_project_owner(conn, task.project_id, principal)
+        decision = str(body.get("decision", ""))
+        try:
+            updated = delegation_mod.respond(
+                conn,
+                delegation,
+                actor=acting,
+                decision=decision,
+                reason=str(body.get("reason", "")),
+            )
+        except delegation_mod.DelegationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return updated.model_dump(mode="json")
+
+    @app.post("/delegations/{delegation_id}/retry")
+    def retry_delegation(
+        delegation_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        """Re-delegate work that failed, was declined, or timed out.
+
+        Only the delegator may retry, and the number of attempts is bounded.
+        """
+        delegation = store.get_delegation(conn, delegation_id)
+        if delegation is None:
+            raise HTTPException(status_code=404, detail="delegation not found")
+        task = store.get_task(conn, delegation.task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="task not found")
+        require_project_owner(conn, task.project_id, principal)
+        requester = acting
+        if requester is None:
+            # Owner path: the delegator is the bot that sent it.
+            requester = store.get_teammate(conn, delegation.from_teammate_id)
+        if requester is None:
+            raise HTTPException(status_code=400, detail="the delegating bot no longer exists")
+        try:
+            retried = delegation_mod.retry(
+                conn,
+                delegation,
+                actor=requester,
+                to_teammate_id=body.get("to_teammate_id") or None,
+                timeout_s=float(body.get("timeout_s", delegation_mod.DEFAULT_DELEGATION_TIMEOUT_S) or 0),
+            )
+        except delegation_mod.DelegationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return retried.model_dump(mode="json")
+
+    @app.post("/delegations/{delegation_id}/cancel")
+    def cancel_delegation_endpoint(
+        delegation_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        """Cancel an in-flight delegation.
+
+        The human owner may cancel anything. A bot may cancel only the
+        delegations it sent or received — never somebody else's.
+        """
+        delegation = store.get_delegation(conn, delegation_id)
+        if delegation is None:
+            raise HTTPException(status_code=404, detail="delegation not found")
+        task = store.get_task(conn, delegation.task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="task not found")
+        require_project_owner(conn, task.project_id, principal)
+        try:
+            updated = store.cancel_delegation(
+                conn,
+                delegation_id,
+                actor_teammate_id=acting.id if acting else "",
+                reason=str(body.get("reason", "")),
+            )
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return updated.model_dump(mode="json")
+
+    @app.post("/tasks/{task_id}/cancel")
+    def cancel_task_endpoint(
+        task_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        """Cancel a task: it is blocked and its pending delegations are
+        cancelled so no bot picks it up afterwards."""
+        task = store.get_task(conn, task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="task not found")
+        require_project_owner(conn, task.project_id, principal)
+        if acting is not None and task.owner_teammate_id != acting.id:
+            raise HTTPException(
+                status_code=403, detail="only the task owner may cancel this task"
+            )
+        try:
+            updated = store.cancel_task(
+                conn,
+                task_id,
+                actor_teammate_id=acting.id if acting else "",
+                reason=str(body.get("reason", "")),
+            )
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return updated.model_dump(mode="json")
+
+    # -- Bot claim + teammate scope --------------------------------------------
+
+    @app.post("/tasks/{task_id}/claim")
+    def claim_task_endpoint(
+        task_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        task = store.get_task(conn, task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="task not found")
+        require_project_owner(conn, task.project_id, principal)
+        teammate_id = str(body.get("teammate_id", ""))
+        if not teammate_id:
+            raise HTTPException(status_code=400, detail="teammate_id is required")
+        try:
+            updated = store.claim_task(conn, task_id, teammate_id)
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return updated.model_dump(mode="json")
+
+    @app.get("/teammates")
+    def list_all_teammates(
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        mates = [
+            m.model_dump(mode="json") for m in store.list_all_teammates(conn)
+        ]
+        return {"teammates": mates}
+
+    @app.get("/teammates/{teammate_id}/tasks")
+    def list_teammate_tasks(
+        teammate_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        mate = store.get_teammate(conn, teammate_id)
+        if mate is None:
+            raise HTTPException(status_code=404, detail="teammate not found")
+        require_project_owner(conn, mate.project_id, principal)
+        tasks = [
+            t.model_dump(mode="json") for t in store.list_tasks_for_teammate(conn, teammate_id)
+        ]
+        return {"tasks": tasks}
+
+    @app.get("/teammates/{teammate_id}/runs")
+    def list_teammate_runs(
+        teammate_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        mate = store.get_teammate(conn, teammate_id)
+        if mate is None:
+            raise HTTPException(status_code=404, detail="teammate not found")
+        require_project_owner(conn, mate.project_id, principal)
+        runs = [
+            r.model_dump(mode="json") for r in store.list_runs_for_teammate(conn, teammate_id)
+        ]
+        return {"runs": runs}
+
+    @app.get("/teammates/{teammate_id}/teams")
+    def list_teammate_teams(
+        teammate_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """The teams this bot belongs to (membership never grants permissions)."""
+        mate = store.get_teammate(conn, teammate_id)
+        if mate is None:
+            raise HTTPException(status_code=404, detail="teammate not found")
+        require_project_owner(conn, mate.project_id, principal)
+        teams = [
+            t.model_dump(mode="json") for t in store.list_teams_for_teammate(conn, teammate_id)
+        ]
+        return {"teams": teams}
+
+    @app.get("/teammates/{teammate_id}/delegations")
+    def list_teammate_delegations(
+        teammate_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """Every delegation this bot sent or received, for the chain view."""
+        mate = store.get_teammate(conn, teammate_id)
+        if mate is None:
+            raise HTTPException(status_code=404, detail="teammate not found")
+        require_project_owner(conn, mate.project_id, principal)
+        delegations = [
+            d.model_dump(mode="json")
+            for d in store.list_delegations_for_teammate(conn, teammate_id)
+        ]
+        return {"delegations": delegations}
+
+    # -- Executor -------------------------------------------------------------
+
+    @app.post("/executor/sweep")
+    def executor_sweep_endpoint(
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        data_dir = _data_dir()
+        timeout_s = float(os.environ.get("NERDBOT_EXECUTOR_TIMEOUT_S", "60.0"))
+        max_tasks = int(os.environ.get("NERDBOT_EXECUTOR_MAX_TASKS", "10"))
+        results = executor_mod.sweep(
+            conn, data_dir=data_dir, timeout_s=timeout_s, max_tasks=max_tasks
+        )
+        return {"processed": len(results), "results": results}
 
     @app.patch("/tasks/{task_id}")
     def update_task(
@@ -738,8 +1685,10 @@ def create_app() -> FastAPI:
         body: MemoryBody,
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
     ) -> dict[str, Any]:
         _ = principal
+        _enforce_memory_scope(conn, acting, body.scope)
         entry = store.write_memory(conn, body.scope, body.content, body.source, body.confidence)
         return entry.model_dump(mode="json")
 
@@ -748,8 +1697,10 @@ def create_app() -> FastAPI:
         scope: str,
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
     ) -> dict[str, Any]:
         _ = principal
+        _enforce_memory_scope(conn, acting, scope)
         try:
             entries = store.recall_memory(conn, scope)
         except store.MemoryReadError as exc:
@@ -762,8 +1713,14 @@ def create_app() -> FastAPI:
         body: MemoryBody,
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
     ) -> dict[str, Any]:
         require_project_owner(conn, project_id, principal)
+        if acting is not None and acting.memory_scope != "project":
+            raise HTTPException(
+                status_code=403,
+                detail="acting teammate has no project memory scope",
+            )
         entry = store.write_memory(
             conn, f"project:{project_id}", body.content, body.source, body.confidence
         )
@@ -775,8 +1732,14 @@ def create_app() -> FastAPI:
         project_id: str,
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
     ) -> dict[str, Any]:
         require_project_owner(conn, project_id, principal)
+        if acting is not None and acting.memory_scope != "project":
+            raise HTTPException(
+                status_code=403,
+                detail="acting teammate has no project memory scope",
+            )
         try:
             entries = store.recall_memory(conn, f"project:{project_id}")
         except store.MemoryReadError as exc:
@@ -800,9 +1763,9 @@ def create_app() -> FastAPI:
         try:
             approval = store.request_approval(
                 conn,
-                run_id,
                 str(body.get("action", "")),
                 PRINCIPAL,
+                run_id=run_id,
                 ttl_s=float(body.get("ttl_s", store.DEFAULT_APPROVAL_TTL_S)),
             )
         except KeyError as exc:
@@ -1364,12 +2327,55 @@ def create_app() -> FastAPI:
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    # -- Home context ---------------------------------------------------------
+
+    @app.get("/home")
+    def get_home(
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """Resolve (or create on first access) the default Home project.
+
+        Home is a normal project owned by the principal, used as the default
+        context for project-free conversation. Resolving it here keeps
+        project-selection out of the UI while preserving server-side ownership
+        enforcement on every chat endpoint.
+        """
+        projects = store.list_projects(conn, principal)
+        home = next((p for p in projects if p.repository == "Home"), None)
+        if home is None:
+            home = store.create_project(
+                conn, owner=principal, repository="Home", config={}
+            )
+        return home.model_dump(mode="json")
+
     @app.get("/capabilities")
     def list_capabilities(
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
         _ = principal
         return {"capabilities": capabilities_mod.CAPABILITIES}
+
+    @app.get("/permissions")
+    def list_permissions(
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """The canonical permission catalogue.
+
+        The dashboard renders the permission editor from this list instead of
+        hard-coding permission names, so a permission the backend enforces can
+        never be missing from the UI (and the UI can never offer a name the
+        backend would reject). ``board_member_roles`` is the same contract for
+        board membership roles: the membership editor renders the server's
+        list, so it cannot offer a role the backend would reject.
+        """
+        _ = principal
+        return {
+            "permissions": permissions_mod.catalog(),
+            "admin_permissions": sorted(permissions_mod.ADMIN_PERMISSIONS),
+            "agent_permissions": sorted(permissions_mod.AGENT_PERMISSIONS),
+            "board_member_roles": list(BOARD_MEMBER_ROLES),
+        }
 
     # -- Chat threads ----------------------------------------------------------
 
@@ -1485,13 +2491,11 @@ def create_app() -> FastAPI:
         return thread, provider, messages, provenance
 
     def _chat_error_to_http(exc: Exception) -> HTTPException:
-        if isinstance(exc, ProviderConfigurationError):
-            return HTTPException(status_code=400, detail=str(exc))
-        if isinstance(exc, ProviderAuthenticationError):
-            return HTTPException(status_code=401, detail=str(exc))
-        if isinstance(exc, ProviderRateLimitError):
-            return HTTPException(status_code=429, detail=str(exc))
-        return HTTPException(status_code=502, detail=str(exc))
+        # Chat maps every failure to a status: unknowns are an upstream fault
+        # from the caller's perspective, not a server bug.
+        return _provider_error_to_http(exc) or HTTPException(
+            status_code=502, detail=str(exc)
+        )
 
     @app.post("/threads/{thread_id}/summarize")
     def summarize_thread_endpoint(
@@ -1569,6 +2573,161 @@ def create_app() -> FastAPI:
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(generate(), media_type="text/event-stream")
+
+    # -- Workspace surface (human UI) ------------------------------------------
+
+    @app.get("/projects")
+    def list_projects_endpoint(
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        projects = [p.model_dump(mode="json") for p in store.list_projects(conn, principal)]
+        return {"projects": projects}
+
+    @app.get("/projects/{project_id}/tasks")
+    def list_project_tasks(
+        project_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        tasks = [t.model_dump(mode="json") for t in store.list_tasks_for_project(conn, project_id)]
+        return {"tasks": tasks}
+
+    @app.get("/projects/{project_id}/messages")
+    def list_project_messages(
+        project_id: str,
+        to_teammate_id: str | None = None,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """Board feed for a project: every message on every board of the
+        project, optionally filtered to messages addressed to one teammate."""
+        require_project_owner(conn, project_id, principal)
+        messages: list[dict[str, Any]] = []
+        for board in store.list_boards(conn, project_id=project_id):
+            try:
+                rows = store.list_board_messages(conn, board.id)
+            except KeyError:
+                continue
+            for msg in rows:
+                if to_teammate_id and msg.to_teammate_id != to_teammate_id:
+                    continue
+                payload = msg.model_dump(mode="json")
+                payload["board_name"] = board.name
+                messages.append(payload)
+        messages.sort(key=lambda m: m.get("created_at", ""))
+        return {"messages": messages}
+
+    @app.get("/projects/{project_id}/approvals")
+    def list_project_approvals(
+        project_id: str,
+        decision: str | None = None,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        approvals = store.list_approvals_for_project(conn, project_id)
+        if decision:
+            approvals = [a for a in approvals if a.decision.value == decision]
+        return {"approvals": [a.model_dump(mode="json") for a in approvals]}
+
+    @app.get("/tasks/{task_id}/workspace/files")
+    def list_task_workspace_files(
+        task_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        task = store.get_task(conn, task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="task not found")
+        require_project_owner(conn, task.project_id, principal)
+        root = workspace_mgr.workspace_path_for_task(_data_dir(), task_id)
+        if not root.is_dir():
+            return {"files": [], "root": str(root)}
+        files: list[dict[str, Any]] = []
+        for path in sorted(root.rglob("*")):
+            if ".git" in path.parts:
+                continue
+            if path.is_file():
+                stat = path.stat()
+                files.append(
+                    {
+                        "path": str(path.relative_to(root)),
+                        "size": stat.st_size,
+                        "modified": stat.st_mtime,
+                    }
+                )
+        return {"files": files, "root": str(root)}
+
+    @app.get("/tasks/{task_id}/workspace/file")
+    def read_task_workspace_file(
+        task_id: str,
+        path: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        task = store.get_task(conn, task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="task not found")
+        require_project_owner(conn, task.project_id, principal)
+        root = workspace_mgr.workspace_path_for_task(_data_dir(), task_id)
+        target = (root / path).resolve()
+        if target != root and root not in target.parents:
+            raise HTTPException(status_code=400, detail="path escapes workspace")
+        if not target.is_file():
+            raise HTTPException(status_code=404, detail="file not found")
+        if target.stat().st_size > 1_000_000:
+            raise HTTPException(status_code=400, detail="file too large to display")
+        try:
+            content = target.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            raise HTTPException(status_code=400, detail="file is not text") from exc
+        return {"path": path, "content": content}
+
+    @app.get("/tasks/{task_id}/workspace/diff")
+    def task_workspace_diff(
+        task_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        task = store.get_task(conn, task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="task not found")
+        require_project_owner(conn, task.project_id, principal)
+        root = workspace_mgr.workspace_path_for_task(_data_dir(), task_id)
+        if not root.is_dir():
+            return {"diff": "", "exists": False}
+        try:
+            diff = workspace_mgr.workspace_diff(root)
+        except Exception as exc:  # git may be absent or repo corrupted
+            raise HTTPException(status_code=400, detail=f"diff failed: {exc}") from exc
+        return {"diff": diff, "exists": True}
+
+    @app.patch("/schedules/{schedule_id}")
+    def update_schedule_endpoint(
+        schedule_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        schedule = store.get_schedule(conn, schedule_id)
+        if schedule is None:
+            raise HTTPException(status_code=404, detail="schedule not found")
+        require_project_owner(conn, schedule.project_id, principal)
+        if "enabled" not in body:
+            raise HTTPException(status_code=400, detail="enabled is required")
+        try:
+            updated = store.set_schedule_enabled(conn, schedule_id, bool(body["enabled"]))
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return updated.model_dump(mode="json")
+
+    # Serve the built dashboard (SPA). Mounted last so all API routes above
+    # take precedence. Hash-routed frontend paths fall through to index.html.
+    _dist = Path(__file__).resolve().parents[3] / "dashboard" / "dist"
+    if _dist.is_dir():
+        app.mount("/", StaticFiles(directory=str(_dist), html=True), name="spa")
 
     return app
 

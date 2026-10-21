@@ -7,19 +7,30 @@ behind the same repository surface. All access goes through repositories.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import uuid
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from . import permissions as permissions_mod
 from .models import (
+    BOARD_MEMBER_ROLES,
     CHAT_ROLES,
     Approval,
     Artifact,
+    Board,
+    BoardMember,
+    BoardMemberRole,
+    BoardMessage,
+    BoardStatus,
     ChatMessage,
     ChatThread,
     Decision,
+    Delegation,
+    DelegationStatus,
     Event,
     Issue,
     KnowledgeChunk,
@@ -38,8 +49,10 @@ from .models import (
     Schedule,
     Task,
     TaskStatus,
+    Team,
     Teammate,
     TeammateStatus,
+    TeamMember,
     VerificationStatus,
 )
 
@@ -52,9 +65,9 @@ CREATE TABLE IF NOT EXISTS projects (
 CREATE TABLE IF NOT EXISTS teammates (
   id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
   persona TEXT NOT NULL DEFAULT '', instructions TEXT NOT NULL DEFAULT '',
-  capabilities TEXT NOT NULL DEFAULT '[]', memory_scope TEXT NOT NULL DEFAULT 'project',
+  capabilities TEXT NOT NULL DEFAULT '[]', memory_scope TEXT NOT NULL DEFAULT 'teammate',
   permissions TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'active',
-  tool_policy TEXT NOT NULL DEFAULT '{}'
+  tool_policy TEXT NOT NULL DEFAULT '{}', provider_id TEXT, created_at TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
@@ -160,6 +173,46 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages(thread_id);
+CREATE TABLE IF NOT EXISTS teams (
+  id TEXT PRIMARY KEY, owner TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS team_members (
+  id TEXT PRIMARY KEY, team_id TEXT NOT NULL REFERENCES teams(id),
+  project_id TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+  teammate_id TEXT NOT NULL DEFAULT '', UNIQUE(team_id, project_id, teammate_id)
+);
+CREATE TABLE IF NOT EXISTS delegations (
+  id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id),
+  from_teammate_id TEXT NOT NULL, to_teammate_id TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending',
+  depth INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, decided_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_team_members_team ON team_members(team_id);
+CREATE INDEX IF NOT EXISTS idx_team_members_project ON team_members(project_id);
+CREATE INDEX IF NOT EXISTS idx_delegations_task ON delegations(task_id);
+CREATE INDEX IF NOT EXISTS idx_delegations_status ON delegations(status);
+
+CREATE TABLE IF NOT EXISTS boards (
+  id TEXT PRIMARY KEY, owner TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '', project_id TEXT NOT NULL DEFAULT '',
+  team_id TEXT, status TEXT NOT NULL DEFAULT 'active',
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS board_members (
+  id TEXT PRIMARY KEY, board_id TEXT NOT NULL REFERENCES boards(id),
+  teammate_id TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'member',
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS board_messages (
+  id TEXT PRIMARY KEY, board_id TEXT NOT NULL REFERENCES boards(id),
+  to_board_id TEXT, from_teammate_id TEXT,
+  content TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL DEFAULT 'message',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_board_members_board ON board_members(board_id);
+CREATE INDEX IF NOT EXISTS idx_board_messages_board ON board_messages(board_id);
+CREATE INDEX IF NOT EXISTS idx_board_messages_to_board ON board_messages(to_board_id);
 """
 
 
@@ -200,6 +253,10 @@ TERMINAL_RUN_STATUSES = frozenset(
 )
 TERMINAL_TASK_STATUSES = frozenset({TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.BLOCKED})
 
+# A task may be retried a bounded number of times. Without a cap a task that
+# keeps failing can be retried forever, burning provider budget in a loop.
+MAX_TASK_RETRIES = 10
+
 
 class InvalidTransitionError(ValueError):
     """A state transition is not allowed by the deterministic state machine."""
@@ -218,15 +275,33 @@ class ApprovalDecidedError(ValueError):
 
 
 def connect(db_path: str | Path) -> sqlite3.Connection:
-    """Open the SQLite database, creating parent dirs and schema."""
+    """Open the SQLite database, creating parent dirs and schema.
+
+    ``check_same_thread=False``: FastAPI may run a sync dependency (which
+    opens the connection) and the sync endpoint that consumes it in different
+    threadpool threads. Each connection is per-request and never shared
+    across requests, so cross-thread use of one connection is safe.
+    """
     path = Path(db_path)
     if str(path) != ":memory:":
         path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path))
+    conn = sqlite3.connect(str(path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
     _migrate(conn)
     return conn
+
+
+def _db_path() -> str:
+    return os.environ.get("NERDBOT_DB", "nerdbot.db")
+
+
+def get_conn() -> Iterator[sqlite3.Connection]:
+    conn = connect(_db_path())
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 _PHASE2_COLUMNS: dict[str, list[tuple[str, str]]] = {
@@ -284,6 +359,49 @@ _PHASE9_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "notifications": [("last_error", "TEXT NOT NULL DEFAULT ''")],
 }
 
+_PHASE10_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "teammates": [("created_at", "TEXT NOT NULL DEFAULT ''")]
+}
+
+_PHASE11_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "tasks": [("board_id", "TEXT NOT NULL DEFAULT ''")],
+    "approvals": [("board_id", "TEXT")],
+}
+
+_PHASE12_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "tasks": [("parent_task_id", "TEXT NOT NULL DEFAULT ''")],
+    "delegations": [
+        ("child_task_id", "TEXT NOT NULL DEFAULT ''"),
+        ("result", "TEXT NOT NULL DEFAULT ''"),
+        ("result_run_id", "TEXT NOT NULL DEFAULT ''"),
+        ("finished_at", "TEXT"),
+    ],
+    "board_messages": [("to_teammate_id", "TEXT")],
+    "approvals": [("executed_at", "TEXT")],
+}
+
+_PHASE13_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    # Gate approvals created outside a run (HTTP acting path) need a direct
+    # project link so the owner can find and decide them.
+    "approvals": [("project_id", "TEXT NOT NULL DEFAULT ''")],
+}
+
+_PHASE14_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    # Teams can group bots as well as projects: one membership table, two
+    # optional id columns. Legacy rows keep their project_id and gain ''.
+    "team_members": [("teammate_id", "TEXT NOT NULL DEFAULT ''")],
+}
+
+_PHASE15_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    # Agent-driven delegation lifecycle: a deadline the delegator sets, the
+    # bounded scope it stated, and how many times the objective was retried.
+    "delegations": [
+        ("deadline_at", "TEXT"),
+        ("scope", "TEXT NOT NULL DEFAULT ''"),
+        ("attempts", "INTEGER NOT NULL DEFAULT 0"),
+    ],
+}
+
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Idempotent migrations for databases created by older schemas."""
@@ -291,7 +409,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # REPLACE an earlier phase's columns for the same table).
     phases: dict[str, list[tuple[str, str]]] = {}
     for phase in (_PHASE2_COLUMNS, _PHASE3_COLUMNS, _PHASE4_COLUMNS, _PHASE5_COLUMNS,
-                  _PHASE6_COLUMNS, _PHASE7_COLUMNS, _PHASE8_COLUMNS, _PHASE9_COLUMNS):
+                  _PHASE6_COLUMNS, _PHASE7_COLUMNS, _PHASE8_COLUMNS, _PHASE9_COLUMNS,
+                  _PHASE10_COLUMNS, _PHASE11_COLUMNS, _PHASE12_COLUMNS, _PHASE13_COLUMNS,
+                  _PHASE14_COLUMNS, _PHASE15_COLUMNS):
         for table, columns in phase.items():
             phases.setdefault(table, []).extend(columns)
     for table, columns in phases.items():
@@ -374,16 +494,30 @@ def create_project(
     return project
 
 
-def get_project(conn: sqlite3.Connection, project_id: str) -> Project | None:
-    row = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
-    if row is None:
-        return None
+def _project_from_row(row: sqlite3.Row) -> Project:
     return Project(
         id=row["id"],
         owner=row["owner"],
         repository=row["repository"],
         config=json.loads(row["config"]),
     )
+
+
+def get_project(conn: sqlite3.Connection, project_id: str) -> Project | None:
+    row = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if row is None:
+        return None
+    return _project_from_row(row)
+
+
+def list_projects(conn: sqlite3.Connection, owner: str | None = None) -> list[Project]:
+    if owner is not None:
+        rows = conn.execute(
+            "SELECT * FROM projects WHERE owner = ? ORDER BY rowid", (owner,)
+        ).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM projects ORDER BY rowid").fetchall()
+    return [_project_from_row(row) for row in rows]
 
 
 # -- Teammates --------------------------------------------------------------
@@ -400,6 +534,9 @@ def create_teammate(
 ) -> Teammate:
     if get_project(conn, project_id) is None:
         raise KeyError(f"unknown project {project_id}")
+    unknown = permissions_mod.unknown_permissions(permissions or [])
+    if unknown:
+        raise ValueError(f"unknown permission(s): {unknown}")
     mate = Teammate(
         id=new_id("tm"),
         project_id=project_id,
@@ -476,6 +613,14 @@ def update_teammate(
     mate = get_teammate(conn, teammate_id)
     if mate is None:
         raise KeyError(f"unknown teammate {teammate_id}")
+    if permissions is not None:
+        unknown = permissions_mod.unknown_permissions(permissions)
+        if unknown:
+            raise ValueError(f"unknown permission(s): {unknown}")
+    if tool_policy is not None:
+        unknown = permissions_mod.unknown_permissions(tool_policy.keys())
+        if unknown:
+            raise ValueError(f"unknown permission(s) in tool_policy: {unknown}")
     if persona is not None:
         mate.persona = persona
     if instructions is not None:
@@ -531,6 +676,186 @@ def set_teammate_status(
     return mate
 
 
+# -- Teams --------------------------------------------------------------------
+
+
+def create_team(
+    conn: sqlite3.Connection, owner: str, name: str = "", description: str = ""
+) -> Team:
+    team_id = new_id("tm_team")
+    conn.execute(
+        "INSERT INTO teams (id, owner, name, description, created_at)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (team_id, owner, name, description, _now_iso()),
+    )
+    conn.commit()
+    record_event(conn, "", "team", team_id, "team.created")
+    return Team(id=team_id, owner=owner, name=name, description=description)
+
+
+def list_teams(conn: sqlite3.Connection, owner: str) -> list[Team]:
+    rows = conn.execute(
+        "SELECT * FROM teams WHERE owner = ? ORDER BY created_at", (owner,)
+    ).fetchall()
+    return [_team_from_row(r) for r in rows]
+
+
+def get_team(conn: sqlite3.Connection, team_id: str) -> Team | None:
+    row = conn.execute("SELECT * FROM teams WHERE id = ?", (team_id,)).fetchone()
+    if row is None:
+        return None
+    return _team_from_row(row)
+
+
+def create_team_member(
+    conn: sqlite3.Connection, team_id: str, project_id: str
+) -> TeamMember:
+    """Add a project to a team.
+
+    Retained for backward compatibility. The ``owner`` check is relaxed to
+    accept any project the team owner owns; a project may belong to several
+    teams of the same owner.
+    """
+    team = get_team(conn, team_id)
+    if team is None:
+        raise KeyError(f"unknown team {team_id}")
+    project = get_project(conn, project_id)
+    if project is None or project.owner != team.owner:
+        raise ValueError("project must belong to the team owner")
+    member_id = new_id("tm_member")
+    conn.execute(
+        "INSERT INTO team_members (id, team_id, project_id, teammate_id, created_at)"
+        " VALUES (?, ?, ?, '', ?)",
+        (member_id, team_id, project_id, _now_iso()),
+    )
+    conn.commit()
+    record_event(conn, project_id, "team_member", member_id, "team_member.created")
+    return TeamMember(
+        id=member_id, team_id=team_id, project_id=project_id, teammate_id=""
+    )
+
+
+def add_teammate_to_team(
+    conn: sqlite3.Connection, team_id: str, teammate_id: str
+) -> TeamMember:
+    """Add a bot (teammate) to a team.
+
+    The bot must belong to a project owned by the team owner. Idempotent:
+    adding the same bot twice returns the existing membership row.
+    """
+    team = get_team(conn, team_id)
+    if team is None:
+        raise KeyError(f"unknown team {team_id}")
+    mate = get_teammate(conn, teammate_id)
+    if mate is None:
+        raise ValueError(f"unknown teammate {teammate_id}")
+    project = get_project(conn, mate.project_id)
+    if project is None or project.owner != team.owner:
+        raise ValueError("teammate's project must belong to the team owner")
+    existing = conn.execute(
+        "SELECT * FROM team_members WHERE team_id = ? AND teammate_id = ?",
+        (team_id, teammate_id),
+    ).fetchone()
+    if existing is not None:
+        return _team_member_from_row(existing)
+    member_id = new_id("tm_member")
+    conn.execute(
+        "INSERT INTO team_members (id, team_id, project_id, teammate_id, created_at)"
+        " VALUES (?, ?, '', ?, ?)",
+        (member_id, team_id, teammate_id, _now_iso()),
+    )
+    conn.commit()
+    record_event(conn, mate.project_id, "team_member", member_id, "team_member.created")
+    return TeamMember(
+        id=member_id, team_id=team_id, project_id="", teammate_id=teammate_id
+    )
+
+
+def remove_teammate_from_team(
+    conn: sqlite3.Connection, team_id: str, teammate_id: str
+) -> None:
+    conn.execute(
+        "DELETE FROM team_members WHERE team_id = ? AND teammate_id = ?",
+        (team_id, teammate_id),
+    )
+    conn.commit()
+
+
+def list_teammates_for_team(
+    conn: sqlite3.Connection, team_id: str
+) -> list[Teammate]:
+    rows = conn.execute(
+        "SELECT t.* FROM teammates t JOIN team_members tm ON tm.teammate_id = t.id"
+        " WHERE tm.team_id = ? ORDER BY t.created_at", (team_id,)
+    ).fetchall()
+    return [_teammate_from_row(r) for r in rows]
+
+
+def list_teams_for_teammate(
+    conn: sqlite3.Connection, teammate_id: str
+) -> list[Team]:
+    rows = conn.execute(
+        "SELECT t.* FROM teams t JOIN team_members tm ON tm.team_id = t.id"
+        " WHERE tm.teammate_id = ? ORDER BY t.created_at", (teammate_id,)
+    ).fetchall()
+    return [_team_from_row(r) for r in rows]
+
+
+def list_team_members(conn: sqlite3.Connection, team_id: str) -> list[TeamMember]:
+    rows = conn.execute(
+        "SELECT * FROM team_members WHERE team_id = ? ORDER BY created_at", (team_id,)
+    ).fetchall()
+    return [_team_member_from_row(r) for r in rows]
+
+
+def list_projects_for_team(
+    conn: sqlite3.Connection, team_id: str
+) -> list[Project]:
+    rows = conn.execute(
+        "SELECT p.* FROM projects p JOIN team_members tm ON tm.project_id = p.id"
+        " WHERE tm.team_id = ? AND tm.project_id != '' ORDER BY p.id", (team_id,)
+    ).fetchall()
+    return [_project_from_row(r) for r in rows]
+
+
+def list_teams_for_project(
+    conn: sqlite3.Connection, project_id: str
+) -> list[Team]:
+    rows = conn.execute(
+        "SELECT t.* FROM teams t JOIN team_members tm ON tm.team_id = t.id"
+        " WHERE tm.project_id = ? AND tm.project_id != '' ORDER BY t.created_at", (project_id,)
+    ).fetchall()
+    return [_team_from_row(r) for r in rows]
+
+
+def remove_team_member(
+    conn: sqlite3.Connection, team_id: str, project_id: str
+) -> None:
+    conn.execute(
+        "DELETE FROM team_members WHERE team_id = ? AND project_id = ?",
+        (team_id, project_id),
+    )
+    conn.commit()
+
+
+def _team_from_row(row: sqlite3.Row) -> Team:
+    return Team(
+        id=row["id"], owner=row["owner"], name=row["name"] or "",
+        description=row["description"] or "",
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def _team_member_from_row(row: sqlite3.Row) -> TeamMember:
+    keys = row.keys()
+    return TeamMember(
+        id=row["id"], team_id=row["team_id"],
+        project_id=row["project_id"] or "",
+        teammate_id=(row["teammate_id"] or "") if "teammate_id" in keys else "",
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
 # -- Tasks ------------------------------------------------------------------
 
 
@@ -542,6 +867,8 @@ def create_task(
     dependencies: list[str] | None = None,
     command: str = "",
     issue_id: str | None = None,
+    board_id: str = "",
+    parent_task_id: str = "",
 ) -> Task:
     if get_project(conn, project_id) is None:
         raise KeyError(f"unknown project {project_id}")
@@ -560,6 +887,21 @@ def create_task(
         issue = get_issue(conn, issue_id)
         if issue is None or issue.project_id != project_id:
             raise ValueError("issue must belong to the same project")
+    if board_id:
+        board = get_board(conn, board_id)
+        if board is None:
+            raise KeyError(f"unknown board {board_id}")
+        if board.project_id != project_id:
+            raise ValueError("board must belong to the same project")
+    if parent_task_id:
+        parent = get_task(conn, parent_task_id)
+        if parent is None or parent.project_id != project_id:
+            raise ValueError("parent task must belong to the same project")
+        depth = task_chain_depth(conn, parent_task_id)
+        if depth >= MAX_TASK_CHAIN_DEPTH:
+            raise ValueError(
+                f"delegation depth limit reached (max {MAX_TASK_CHAIN_DEPTH} nested tasks)"
+            )
     task = Task(
         id=new_id("tsk"),
         project_id=project_id,
@@ -569,11 +911,13 @@ def create_task(
         dependencies=deps,
         command=command,
         issue_id=issue_id,
+        board_id=board_id,
+        parent_task_id=parent_task_id,
     )
     conn.execute(
         "INSERT INTO tasks (id, project_id, description, status, owner_teammate_id,"
-        " dependencies, command, issue_id, branch, workspace_path)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " dependencies, command, issue_id, branch, workspace_path, board_id, parent_task_id)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             task.id,
             task.project_id,
@@ -585,11 +929,40 @@ def create_task(
             task.issue_id,
             task.branch,
             task.workspace_path,
+            task.board_id,
+            task.parent_task_id,
         ),
     )
     conn.commit()
     record_event(conn, project_id, "task", task.id, "task.created")
     return task
+
+
+MAX_TASK_CHAIN_DEPTH = 5
+
+
+def task_chain_depth(conn: sqlite3.Connection, task_id: str) -> int:
+    """Number of ancestors above ``task_id`` (0 for a root task). Cycle-safe."""
+    depth = 0
+    seen: set[str] = set()
+    current = task_id
+    while current and current not in seen:
+        seen.add(current)
+        row = conn.execute(
+            "SELECT parent_task_id FROM tasks WHERE id = ?", (current,)
+        ).fetchone()
+        if row is None or not row["parent_task_id"]:
+            break
+        depth += 1
+        current = row["parent_task_id"]
+    return depth
+
+
+def list_child_tasks(conn: sqlite3.Connection, task_id: str) -> list[Task]:
+    rows = conn.execute(
+        "SELECT * FROM tasks WHERE parent_task_id = ? ORDER BY rowid", (task_id,)
+    ).fetchall()
+    return [_task_from_row(r) for r in rows]
 
 
 def _task_from_row(row: sqlite3.Row) -> Task:
@@ -607,6 +980,8 @@ def _task_from_row(row: sqlite3.Row) -> Task:
         workspace_path=row["workspace_path"]
         if "workspace_path" in keys and row["workspace_path"]
         else "",
+        board_id=row["board_id"] if "board_id" in keys else "",
+        parent_task_id=row["parent_task_id"] if "parent_task_id" in keys and row["parent_task_id"] else "",
     )
 
 
@@ -622,6 +997,55 @@ def list_tasks_for_project(conn: sqlite3.Connection, project_id: str) -> list[Ta
         "SELECT * FROM tasks WHERE project_id = ? ORDER BY rowid", (project_id,)
     ).fetchall()
     return [_task_from_row(r) for r in rows]
+
+
+def list_pending_unowned_tasks(
+    conn: sqlite3.Connection,
+) -> list[Task]:
+    """All pending tasks with no owner, oldest first — the executor's input."""
+    rows = conn.execute(
+        "SELECT * FROM tasks WHERE status = ? AND owner_teammate_id IS NULL ORDER BY rowid",
+        (TaskStatus.PENDING.value,),
+    ).fetchall()
+    return [_task_from_row(r) for r in rows]
+
+
+def requeue_unblocked_tasks(conn: sqlite3.Connection) -> list[Task]:
+    """Return dependency-blocked tasks to the executor's queue.
+
+    A task that was blocked *only because its dependencies were not done yet*
+    becomes claimable again once those dependencies are done: the BLOCKED →
+    PENDING transition is recorded and an audit event notes why. Scope guard:
+    only unowned, parent-less tasks are re-queued — a delegation child that
+    its delegatee declined stays blocked, and a task an owner holds is never
+    taken away from that owner.
+    """
+    rows = conn.execute(
+        "SELECT * FROM tasks WHERE status = ? AND owner_teammate_id IS NULL",
+        (TaskStatus.BLOCKED.value,),
+    ).fetchall()
+    requeued: list[Task] = []
+    for row in rows:
+        task = _task_from_row(row)
+        if task.parent_task_id:
+            continue
+        if task.dependencies:
+            unfinished = [
+                dep_id
+                for dep_id in task.dependencies
+                if (dep := get_task(conn, dep_id)) is None
+                or dep.status != TaskStatus.DONE
+            ]
+            if unfinished:
+                continue
+        set_task_status(conn, task.id, TaskStatus.PENDING)
+        record_event(
+            conn, task.project_id, "task", task.id, "task.requeued.dependencies-satisfied"
+        )
+        refreshed = get_task(conn, task.id)
+        if refreshed is not None:
+            requeued.append(refreshed)
+    return requeued
 
 
 def set_task_workspace(
@@ -721,6 +1145,810 @@ def assign_task_owner(conn: sqlite3.Connection, task_id: str, teammate_id: str |
     record_event(conn, task.project_id, "task", task_id, "task.assigned")
     task.owner_teammate_id = teammate_id
     return task
+
+
+def claim_task(
+    conn: sqlite3.Connection, task_id: str, teammate_id: str
+) -> Task:
+    task = get_task(conn, task_id)
+    if task is None:
+        raise KeyError(f"unknown task {task_id}")
+    if task.status != TaskStatus.PENDING:
+        raise ValueError(f"task is {task.status.value}, not pending")
+    if task.owner_teammate_id is not None:
+        raise ValueError("task already has an owner")
+    mate = get_teammate(conn, teammate_id)
+    if mate is None or mate.project_id != task.project_id:
+        raise ValueError("teammate must belong to the same project")
+    if mate.status != TeammateStatus.ACTIVE:
+        raise ValueError(f"teammate {teammate_id} is {mate.status.value}, not active")
+    conn.execute(
+        "UPDATE tasks SET owner_teammate_id = ?, status = ? WHERE id = ?",
+        (teammate_id, TaskStatus.READY.value, task_id),
+    )
+    conn.commit()
+    record_event(conn, task.project_id, "task", task_id, "task.claimed")
+    task.owner_teammate_id = teammate_id
+    task.status = TaskStatus.READY
+    return task
+
+
+def list_all_teammates(conn: sqlite3.Connection) -> list[Teammate]:
+    rows = conn.execute("SELECT * FROM teammates ORDER BY created_at").fetchall()
+    return [_teammate_from_row(r) for r in rows]
+
+
+def list_tasks_for_teammate(
+    conn: sqlite3.Connection, teammate_id: str
+) -> list[Task]:
+    rows = conn.execute(
+        "SELECT * FROM tasks WHERE owner_teammate_id = ? ORDER BY id",
+        (teammate_id,),
+    ).fetchall()
+    return [_task_from_row(r) for r in rows]
+
+
+def list_runs_for_teammate(
+    conn: sqlite3.Connection, teammate_id: str
+) -> list[Run]:
+    rows = conn.execute(
+        "SELECT r.* FROM runs r JOIN tasks t ON r.task_id = t.id"
+        " WHERE t.owner_teammate_id = ? ORDER BY r.started_at DESC",
+        (teammate_id,),
+    ).fetchall()
+    return [_run_from_row(r) for r in rows]
+
+
+# -- Delegations -------------------------------------------------------------
+
+
+def create_delegation(
+    conn: sqlite3.Connection,
+    task_id: str,
+    from_teammate_id: str,
+    to_teammate_id: str,
+    reason: str = "",
+    depth: int = 1,
+    child_task_id: str = "",
+    auto_accept: bool = False,
+    deadline_at: datetime | None = None,
+    scope: str = "",
+    attempts: int = 0,
+) -> Delegation:
+    task = get_task(conn, task_id)
+    if task is None:
+        raise KeyError(f"unknown task {task_id}")
+    from_mate = get_teammate(conn, from_teammate_id)
+    to_mate = get_teammate(conn, to_teammate_id)
+    if from_mate is None or from_mate.project_id != task.project_id:
+        raise ValueError("from teammate must belong to the same project")
+    if to_mate is None or to_mate.project_id != task.project_id:
+        raise ValueError("to teammate must belong to the same project")
+    if from_mate.status != TeammateStatus.ACTIVE:
+        raise ValueError(f"from teammate {from_teammate_id} is not active")
+    if to_mate.status != TeammateStatus.ACTIVE:
+        raise ValueError(f"to teammate {to_teammate_id} is not active")
+    # Bound delegation depth and detect cycles.
+    existing = list_delegations_for_task(conn, task_id)
+    if depth > 5:
+        raise ValueError("delegation depth limit (5) exceeded")
+    chain = {d.to_teammate_id for d in existing}
+    chain.add(to_teammate_id)
+    if from_teammate_id in chain:
+        raise ValueError("delegation cycle detected")
+    del_id = new_id("del")
+    if child_task_id:
+        child = get_task(conn, child_task_id)
+        if child is None or child.parent_task_id != task_id:
+            raise ValueError("child task must reference this task as parent")
+    status = DelegationStatus.ACCEPTED if auto_accept else DelegationStatus.PENDING
+    conn.execute(
+        "INSERT INTO delegations (id, task_id, from_teammate_id, to_teammate_id,"
+        " reason, status, depth, created_at, child_task_id, decided_at,"
+        " deadline_at, scope, attempts)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (del_id, task_id, from_teammate_id, to_teammate_id, reason,
+         status.value, depth, _now_iso(), child_task_id,
+         _now_iso() if auto_accept else None,
+         deadline_at.isoformat() if deadline_at else None, scope, attempts),
+    )
+    conn.commit()
+    record_event(conn, task.project_id, "delegation", del_id, "delegation.created")
+    return Delegation(
+        id=del_id, task_id=task_id, from_teammate_id=from_teammate_id,
+        to_teammate_id=to_teammate_id, reason=reason, status=status,
+        depth=depth, child_task_id=child_task_id,
+        decided_at=datetime.now(UTC) if auto_accept else None,
+        deadline_at=deadline_at, scope=scope, attempts=attempts,
+    )
+
+
+def list_delegations_for_task(
+    conn: sqlite3.Connection, task_id: str
+) -> list[Delegation]:
+    rows = conn.execute(
+        "SELECT * FROM delegations WHERE task_id = ? ORDER BY created_at", (task_id,)
+    ).fetchall()
+    return [_delegation_from_row(r) for r in rows]
+
+
+def get_delegation(conn: sqlite3.Connection, delegation_id: str) -> Delegation | None:
+    row = conn.execute(
+        "SELECT * FROM delegations WHERE id = ?", (delegation_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    return _delegation_from_row(row)
+
+
+def decide_delegation(
+    conn: sqlite3.Connection,
+    delegation_id: str,
+    decision: str,
+    reason: str = "",
+) -> Delegation:
+    """Record the delegatee's decision on a pending delegation.
+
+    ``accepted`` hands the work over; ``declined`` refuses it and blocks the
+    child task so no bot picks it up afterwards. A delegation that already
+    left the pending state is never re-decided.
+    """
+    del_ = get_delegation(conn, delegation_id)
+    if del_ is None:
+        raise KeyError(f"unknown delegation {delegation_id}")
+    if del_.status != DelegationStatus.PENDING:
+        raise ValueError(f"delegation already {del_.status.value}")
+    if decision not in ("accepted", "declined"):
+        raise ValueError("decision must be 'accepted' or 'declined'")
+    status = DelegationStatus.ACCEPTED if decision == "accepted" else DelegationStatus.DECLINED
+    conn.execute(
+        "UPDATE delegations SET status = ?, decided_at = ? WHERE id = ?",
+        (status.value, _now_iso(), delegation_id),
+    )
+    conn.commit()
+    task = get_task(conn, del_.task_id)
+    if status == DelegationStatus.ACCEPTED and task is not None and not del_.child_task_id:
+        # Human-facing delegation: reassign the parent task. Agent-driven
+        # delegations already created a dedicated child task; the parent stays
+        # with the delegator so results can flow back.
+        assign_task_owner(conn, del_.task_id, del_.to_teammate_id)
+    if status == DelegationStatus.DECLINED and del_.child_task_id:
+        # The delegatee refused the work: block the child so no executor picks
+        # it up, and record why for the delegator.
+        child = get_task(conn, del_.child_task_id)
+        if child is not None and child.status in (
+            TaskStatus.PENDING, TaskStatus.READY, TaskStatus.RUNNING,
+        ):
+            set_task_status(conn, child.id, TaskStatus.BLOCKED)
+        note = (reason or "").strip()
+        if note:
+            conn.execute(
+                "UPDATE delegations SET reason = ? WHERE id = ?",
+                ((del_.reason + f" | declined: {note}").strip(), delegation_id),
+            )
+            conn.commit()
+    record_event(
+        conn, task.project_id if task else "", "delegation", delegation_id,
+        f"delegation.{decision}",
+    )
+    del_.status = status
+    del_.decided_at = datetime.now(UTC)
+    if status == DelegationStatus.DECLINED and reason:
+        del_.reason = (del_.reason + f" | declined: {reason}").strip()
+    return del_
+
+
+def list_delegations_to_teammate(
+    conn: sqlite3.Connection, teammate_id: str
+) -> list[Delegation]:
+    """Delegations addressed TO this teammate (work it was handed)."""
+    rows = conn.execute(
+        "SELECT * FROM delegations WHERE to_teammate_id = ? ORDER BY created_at",
+        (teammate_id,),
+    ).fetchall()
+    return [_delegation_from_row(r) for r in rows]
+
+
+def list_delegations_for_teammate(
+    conn: sqlite3.Connection, teammate_id: str
+) -> list[Delegation]:
+    """Every delegation this teammate is part of — sent or received.
+
+    The delegation chain view needs both ends: the delegator follows the work
+    it handed out, the delegatee follows the work it was handed.
+    """
+    rows = conn.execute(
+        "SELECT * FROM delegations WHERE from_teammate_id = ? OR to_teammate_id = ?"
+        " ORDER BY created_at",
+        (teammate_id, teammate_id),
+    ).fetchall()
+    return [_delegation_from_row(r) for r in rows]
+
+
+def _delegation_from_row(row: sqlite3.Row) -> Delegation:
+    keys = row.keys()
+    return Delegation(
+        id=row["id"], task_id=row["task_id"],
+        from_teammate_id=row["from_teammate_id"], to_teammate_id=row["to_teammate_id"],
+        reason=row["reason"] or "", status=DelegationStatus(row["status"]),
+        depth=row["depth"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+        decided_at=datetime.fromisoformat(row["decided_at"]) if row["decided_at"] else None,
+        child_task_id=row["child_task_id"] if "child_task_id" in keys and row["child_task_id"] else "",
+        result=row["result"] if "result" in keys and row["result"] else "",
+        result_run_id=row["result_run_id"] if "result_run_id" in keys and row["result_run_id"] else "",
+        finished_at=datetime.fromisoformat(row["finished_at"])
+        if "finished_at" in keys and row["finished_at"]
+        else None,
+        deadline_at=datetime.fromisoformat(row["deadline_at"])
+        if "deadline_at" in keys and row["deadline_at"]
+        else None,
+        scope=row["scope"] if "scope" in keys and row["scope"] else "",
+        attempts=int(row["attempts"]) if "attempts" in keys and row["attempts"] else 0,
+    )
+
+
+def delegations_by_child_task(
+    conn: sqlite3.Connection, child_task_id: str
+) -> list[Delegation]:
+    """Delegations whose child task is ``child_task_id`` (the response channel)."""
+    rows = conn.execute(
+        "SELECT * FROM delegations WHERE child_task_id = ? ORDER BY created_at",
+        (child_task_id,),
+    ).fetchall()
+    return [_delegation_from_row(r) for r in rows]
+
+
+def finalize_delegation_result(
+    conn: sqlite3.Connection,
+    delegation_id: str,
+    result: str,
+    result_run_id: str = "",
+    failed: bool = False,
+) -> Delegation:
+    """Write a child task's result back to its delegation (response channel)."""
+    del_ = get_delegation(conn, delegation_id)
+    if del_ is None:
+        raise KeyError(f"unknown delegation {delegation_id}")
+    if del_.status in (
+        DelegationStatus.COMPLETED,
+        DelegationStatus.FAILED,
+        DelegationStatus.CANCELLED,
+        DelegationStatus.DECLINED,
+        DelegationStatus.TIMED_OUT,
+    ):
+        return del_  # already finalized (idempotent)
+    status = DelegationStatus.FAILED if failed else DelegationStatus.COMPLETED
+    conn.execute(
+        "UPDATE delegations SET status = ?, result = ?, result_run_id = ?,"
+        " finished_at = ? WHERE id = ?",
+        (status.value, result, result_run_id, _now_iso(), delegation_id),
+    )
+    conn.commit()
+    task = get_task(conn, del_.task_id)
+    record_event(
+        conn, task.project_id if task else "", "delegation", delegation_id,
+        f"delegation.{'failed' if failed else 'completed'}",
+    )
+    del_.status = status
+    del_.result = result
+    del_.result_run_id = result_run_id
+    del_.finished_at = datetime.now(UTC)
+    return del_
+
+
+def expire_delegation(
+    conn: sqlite3.Connection,
+    delegation_id: str,
+    *,
+    reason: str = "",
+) -> Delegation:
+    """Time out a delegation whose deadline has passed (idempotent).
+
+    A timed-out delegation is terminal and is never reported as a success:
+    the child task is blocked so it is not picked up afterwards, and a late
+    result cannot overwrite the timeout.
+    """
+    del_ = get_delegation(conn, delegation_id)
+    if del_ is None:
+        raise KeyError(f"unknown delegation {delegation_id}")
+    if del_.status in (
+        DelegationStatus.COMPLETED,
+        DelegationStatus.FAILED,
+        DelegationStatus.CANCELLED,
+        DelegationStatus.DECLINED,
+        DelegationStatus.TIMED_OUT,
+    ):
+        return del_  # already terminal (idempotent)
+    note = reason or "deadline passed"
+    conn.execute(
+        "UPDATE delegations SET status = ?, decided_at = ?, finished_at = ?,"
+        " reason = ? WHERE id = ?",
+        (
+            DelegationStatus.TIMED_OUT.value,
+            _now_iso(),
+            _now_iso(),
+            (del_.reason + f" | timed out: {note}").strip(),
+            delegation_id,
+        ),
+    )
+    conn.commit()
+    if del_.child_task_id:
+        child = get_task(conn, del_.child_task_id)
+        if child is not None and child.status in (
+            TaskStatus.PENDING, TaskStatus.READY, TaskStatus.RUNNING,
+        ):
+            set_task_status(conn, child.id, TaskStatus.BLOCKED)
+    task = get_task(conn, del_.task_id)
+    record_event(
+        conn,
+        task.project_id if task else "",
+        "delegation",
+        delegation_id,
+        "delegation.timed_out",
+    )
+    del_.status = DelegationStatus.TIMED_OUT
+    del_.decided_at = datetime.now(UTC)
+    del_.finished_at = datetime.now(UTC)
+    del_.reason = (del_.reason + f" | timed out: {note}").strip()
+    return del_
+
+
+def cancel_delegation(
+    conn: sqlite3.Connection,
+    delegation_id: str,
+    *,
+    actor_teammate_id: str = "",
+    reason: str = "",
+) -> Delegation:
+    """Cancel a delegation and stop its child task (idempotent).
+
+    Only the delegator or the delegatee may cancel a delegation. A cancelled
+    delegation is terminal: a child task that has not started is blocked so
+    the executor never picks it up, and a late result cannot overwrite the
+    cancellation.
+
+    Every other terminal outcome (completed, failed, declined, timed out) is
+    left exactly as it is: a refusal stays a refusal, a timeout stays a
+    timeout, and neither is rewritten into a cancellation.
+    """
+    del_ = get_delegation(conn, delegation_id)
+    if del_ is None:
+        raise KeyError(f"unknown delegation {delegation_id}")
+    if del_.status in (
+        DelegationStatus.COMPLETED,
+        DelegationStatus.FAILED,
+        DelegationStatus.CANCELLED,
+        DelegationStatus.DECLINED,
+        DelegationStatus.TIMED_OUT,
+    ):
+        return del_  # already terminal (idempotent)
+    if actor_teammate_id and actor_teammate_id not in (
+        del_.from_teammate_id,
+        del_.to_teammate_id,
+    ):
+        raise ValueError(
+            "only the delegator or the delegatee may cancel a delegation"
+        )
+    conn.execute(
+        "UPDATE delegations SET status = ?, decided_at = ? WHERE id = ?",
+        (DelegationStatus.CANCELLED.value, _now_iso(), delegation_id),
+    )
+    conn.commit()
+    if del_.child_task_id:
+        child = get_task(conn, del_.child_task_id)
+        if child is not None and child.status in (
+            TaskStatus.PENDING, TaskStatus.READY, TaskStatus.RUNNING,
+        ):
+            set_task_status(conn, child.id, TaskStatus.BLOCKED)
+    task = get_task(conn, del_.task_id)
+    record_event(
+        conn,
+        task.project_id if task else "",
+        "delegation",
+        delegation_id,
+        "delegation.cancelled",
+    )
+    del_.status = DelegationStatus.CANCELLED
+    del_.decided_at = datetime.now(UTC)
+    del_.reason = (del_.reason + (f" | cancelled: {reason}" if reason else "")).strip()
+    return del_
+
+
+def cancel_task(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    actor_teammate_id: str = "",
+    reason: str = "",
+) -> Task:
+    """Cancel a task: block it and cancel its pending delegations.
+
+    A task that already reached a terminal state (done/failed) is left
+    alone — cancellation never rewrites a finished result.
+    """
+    task = get_task(conn, task_id)
+    if task is None:
+        raise KeyError(f"unknown task {task_id}")
+    if task.status in (TaskStatus.DONE, TaskStatus.FAILED):
+        return task
+    for delegation in list_delegations_for_task(conn, task_id):
+        if delegation.status in (
+            DelegationStatus.PENDING,
+            DelegationStatus.ACCEPTED,
+        ):
+            cancel_delegation(
+                conn,
+                delegation.id,
+                actor_teammate_id=actor_teammate_id,
+                reason=reason or f"task {task_id} cancelled",
+            )
+    if task.status in (TaskStatus.PENDING, TaskStatus.READY, TaskStatus.RUNNING):
+        set_task_status(conn, task_id, TaskStatus.BLOCKED)
+    refreshed = get_task(conn, task_id)
+    assert refreshed is not None
+    return refreshed
+
+
+def list_runnable_delegated_tasks(conn: sqlite3.Connection) -> list[tuple[Task, Delegation]]:
+    """Pending child tasks owned by an active teammate with a provider, paired
+    with the delegation that created them. Executor sweep phase-2.
+
+    Both ``pending`` and ``accepted`` delegations qualify: a ``pending`` one
+    is the delegatee's turn to decide (accept or decline), an ``accepted`` one
+    is work that is ready to be executed.
+    """
+    rows = conn.execute(
+        """
+        SELECT t.id AS task_id, d.id AS delegation_id
+        FROM delegations d
+        JOIN tasks t ON t.id = d.child_task_id
+        JOIN teammates m ON m.id = t.owner_teammate_id
+        JOIN providers p ON p.id = m.provider_id
+        WHERE d.status IN (?, ?) AND t.status = ? AND m.status = ? AND p.status = ?
+        ORDER BY d.created_at
+        """,
+        (DelegationStatus.ACCEPTED.value, DelegationStatus.PENDING.value,
+         TaskStatus.PENDING.value, TeammateStatus.ACTIVE.value,
+         ProviderStatus.ACTIVE.value),
+    ).fetchall()
+    out: list[tuple[Task, Delegation]] = []
+    for row in rows:
+        task = get_task(conn, row["task_id"])
+        delegation = get_delegation(conn, row["delegation_id"])
+        if task is not None and delegation is not None:
+            out.append((task, delegation))
+    return out
+
+
+# -- Boards --------------------------------------------------------------------
+
+
+def _board_from_row(row: sqlite3.Row) -> Board:
+    keys = row.keys()
+    return Board(
+        id=row["id"],
+        owner=row["owner"],
+        name=row["name"] or "",
+        description=row["description"] or "",
+        project_id=row["project_id"] if "project_id" in keys else "",
+        team_id=row["team_id"] if "team_id" in keys else None,
+        status=BoardStatus(row["status"] if "status" in keys and row["status"] else "active"),
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def create_board(
+    conn: sqlite3.Connection,
+    owner: str,
+    name: str,
+    description: str = "",
+    project_id: str = "",
+    team_id: str | None = None,
+) -> Board:
+    if project_id and get_project(conn, project_id) is None:
+        raise KeyError(f"unknown project {project_id}")
+    if team_id is not None:
+        team = get_team(conn, team_id)
+        if team is None:
+            raise KeyError(f"unknown team {team_id}")
+        if project_id and team.owner != owner:
+            raise ValueError("team must belong to the board owner")
+    board = Board(
+        id=new_id("brd"),
+        owner=owner,
+        name=name or "Unnamed board",
+        description=description,
+        project_id=project_id,
+        team_id=team_id,
+    )
+    conn.execute(
+        "INSERT INTO boards (id, owner, name, description, project_id, team_id, status,"
+        " created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            board.id,
+            board.owner,
+            board.name,
+            board.description,
+            board.project_id,
+            board.team_id,
+            board.status.value,
+            board.created_at.isoformat(),
+        ),
+    )
+    conn.commit()
+    record_event(conn, board.project_id or "", "board", board.id, "board.created")
+    return board
+
+
+def get_board(conn: sqlite3.Connection, board_id: str) -> Board | None:
+    row = conn.execute("SELECT * FROM boards WHERE id = ?", (board_id,)).fetchone()
+    if row is None:
+        return None
+    return _board_from_row(row)
+
+
+def list_boards(
+    conn: sqlite3.Connection,
+    owner: str | None = None,
+    project_id: str | None = None,
+) -> list[Board]:
+    where = []
+    params: list[Any] = []
+    if owner is not None:
+        where.append("owner = ?")
+        params.append(owner)
+    if project_id is not None:
+        where.append("project_id = ?")
+        params.append(project_id)
+    sql = "SELECT * FROM boards"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY rowid"
+    rows = conn.execute(sql, params).fetchall()
+    return [_board_from_row(r) for r in rows]
+
+
+def update_board(
+    conn: sqlite3.Connection,
+    board_id: str,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    team_id: str | None = None,
+    status: BoardStatus | None = None,
+) -> Board:
+    board = get_board(conn, board_id)
+    if board is None:
+        raise KeyError(f"unknown board {board_id}")
+    if name is not None:
+        board.name = name
+    if description is not None:
+        board.description = description
+    if team_id is not None:
+        board.team_id = team_id
+    if status is not None:
+        board.status = status
+    conn.execute(
+        "UPDATE boards SET name = ?, description = ?, team_id = ?, status = ? WHERE id = ?",
+        (board.name, board.description, board.team_id, board.status.value, board_id),
+    )
+    conn.commit()
+    record_event(conn, board.project_id, "board", board_id, "board.updated")
+    return board
+
+
+def delete_board(conn: sqlite3.Connection, board_id: str) -> Board:
+    board = get_board(conn, board_id)
+    if board is None:
+        raise KeyError(f"unknown board {board_id}")
+    conn.execute("DELETE FROM board_members WHERE board_id = ?", (board_id,))
+    conn.execute("DELETE FROM board_messages WHERE board_id = ?", (board_id,))
+    conn.execute("DELETE FROM boards WHERE id = ?", (board_id,))
+    conn.commit()
+    record_event(conn, board.project_id, "board", board_id, "board.deleted")
+    return board
+
+
+def create_board_member(
+    conn: sqlite3.Connection,
+    board_id: str,
+    teammate_id: str,
+    role: str = BoardMemberRole.MEMBER.value,
+) -> BoardMember:
+    board = get_board(conn, board_id)
+    if board is None:
+        raise KeyError(f"unknown board {board_id}")
+    mate = get_teammate(conn, teammate_id)
+    if mate is None:
+        raise KeyError(f"unknown teammate {teammate_id}")
+    if mate.project_id != board.project_id:
+        raise ValueError("teammate must belong to the board's project")
+    if mate.status != TeammateStatus.ACTIVE:
+        raise ValueError(f"teammate {teammate_id} is not active")
+    if role not in BOARD_MEMBER_ROLES:
+        # The dashboard renders the role list from the server, so a role the
+        # backend does not know can never be offered — and if one arrives
+        # anyway it is rejected instead of stored as dead weight.
+        raise ValueError(
+            f"role must be one of {', '.join(BOARD_MEMBER_ROLES)}; got {role!r}"
+        )
+    member = BoardMember(
+        id=new_id("brd_mem"),
+        board_id=board_id,
+        teammate_id=teammate_id,
+        role=role,
+    )
+    conn.execute(
+        "INSERT INTO board_members (id, board_id, teammate_id, role, created_at)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (member.id, member.board_id, member.teammate_id, member.role,
+         member.created_at.isoformat()),
+    )
+    conn.commit()
+    record_event(conn, board.project_id, "board_member", member.id, "board_member.created")
+    return member
+
+
+def list_board_members(
+    conn: sqlite3.Connection, board_id: str
+) -> list[BoardMember]:
+    if get_board(conn, board_id) is None:
+        raise KeyError(f"unknown board {board_id}")
+    rows = conn.execute(
+        "SELECT * FROM board_members WHERE board_id = ? ORDER BY rowid", (board_id,)
+    ).fetchall()
+    return [
+        BoardMember(
+            id=r["id"], board_id=r["board_id"], teammate_id=r["teammate_id"],
+            role=r["role"],
+            created_at=datetime.fromisoformat(r["created_at"]),
+        )
+        for r in rows
+    ]
+
+
+def actor_can_access_board(
+    conn: sqlite3.Connection, board_id: str, teammate_id: str
+) -> bool:
+    """True when ``teammate_id`` may read ``board_id`` (owns it or is a member).
+
+    Single source of truth for bot-side board access, shared by
+    ``list_boards_for_actor`` (filtering) and the agent board-read tool
+    (enforcement). A board the actor neither owns nor belongs to is invisible:
+    both the board row and its messages/members stay out of reach.
+    """
+    board = get_board(conn, board_id)
+    if board is None:
+        return False
+    if board.owner == teammate_id:
+        return True
+    return any(
+        m.teammate_id == teammate_id for m in list_board_members(conn, board_id)
+    )
+
+
+def remove_board_member(conn: sqlite3.Connection, board_id: str, teammate_id: str) -> None:
+    if get_board(conn, board_id) is None:
+        raise KeyError(f"unknown board {board_id}")
+    conn.execute(
+        "DELETE FROM board_members WHERE board_id = ? AND teammate_id = ?",
+        (board_id, teammate_id),
+    )
+    conn.commit()
+
+
+def _board_message_from_row(row: sqlite3.Row) -> BoardMessage:
+    keys = row.keys()
+    return BoardMessage(
+        id=row["id"],
+        board_id=row["board_id"],
+        to_board_id=row["to_board_id"],
+        from_teammate_id=row["from_teammate_id"],
+        to_teammate_id=row["to_teammate_id"]
+        if "to_teammate_id" in keys and row["to_teammate_id"]
+        else None,
+        content=row["content"] or "",
+        kind=row["kind"] or "message",
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def create_board_message(
+    conn: sqlite3.Connection,
+    board_id: str,
+    content: str,
+    *,
+    to_board_id: str | None = None,
+    from_teammate_id: str | None = None,
+    to_teammate_id: str | None = None,
+    kind: str = "message",
+) -> BoardMessage:
+    board = get_board(conn, board_id)
+    if board is None:
+        raise KeyError(f"unknown board {board_id}")
+    if to_board_id is not None and get_board(conn, to_board_id) is None:
+        raise KeyError(f"unknown target board {to_board_id}")
+    if from_teammate_id is not None:
+        mate = get_teammate(conn, from_teammate_id)
+        if mate is None:
+            raise KeyError(f"unknown teammate {from_teammate_id}")
+    if to_teammate_id is not None:
+        mate = get_teammate(conn, to_teammate_id)
+        if mate is None:
+            raise KeyError(f"unknown teammate {to_teammate_id}")
+    message = BoardMessage(
+        id=new_id("brd_msg"),
+        board_id=board_id,
+        to_board_id=to_board_id,
+        from_teammate_id=from_teammate_id,
+        to_teammate_id=to_teammate_id,
+        content=content,
+        kind=kind,
+    )
+    conn.execute(
+        "INSERT INTO board_messages (id, board_id, to_board_id, from_teammate_id,"
+        " to_teammate_id, content, kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            message.id, message.board_id, message.to_board_id,
+            message.from_teammate_id, message.to_teammate_id, message.content,
+            message.kind, message.created_at.isoformat(),
+        ),
+    )
+    conn.commit()
+    record_event(conn, board.project_id, "board_message", message.id, "board_message.created")
+    return message
+
+
+def list_board_messages(
+    conn: sqlite3.Connection, board_id: str
+) -> list[BoardMessage]:
+    if get_board(conn, board_id) is None:
+        raise KeyError(f"unknown board {board_id}")
+    rows = conn.execute(
+        "SELECT * FROM board_messages WHERE board_id = ? ORDER BY rowid", (board_id,)
+    ).fetchall()
+    return [_board_message_from_row(r) for r in rows]
+
+
+def list_board_messages_to(
+    conn: sqlite3.Connection, to_board_id: str
+) -> list[BoardMessage]:
+    if get_board(conn, to_board_id) is None:
+        raise KeyError(f"unknown board {to_board_id}")
+    rows = conn.execute(
+        "SELECT * FROM board_messages WHERE to_board_id = ? ORDER BY rowid",
+        (to_board_id,),
+    ).fetchall()
+    return [_board_message_from_row(r) for r in rows]
+
+
+def list_messages_for_teammate(
+    conn: sqlite3.Connection,
+    teammate_id: str,
+    *,
+    board_id: str | None = None,
+    limit: int = 50,
+) -> list[BoardMessage]:
+    """Messages addressed directly to ``teammate_id`` (the agent inbox).
+
+    Restricted to one board when ``board_id`` is given. Returns the newest
+    ``limit`` messages, oldest first."""
+    if board_id is not None:
+        if get_board(conn, board_id) is None:
+            raise KeyError(f"unknown board {board_id}")
+        rows = conn.execute(
+            "SELECT * FROM board_messages WHERE to_teammate_id = ? AND board_id = ?"
+            " ORDER BY rowid DESC LIMIT ?",
+            (teammate_id, board_id, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM board_messages WHERE to_teammate_id = ?"
+            " ORDER BY rowid DESC LIMIT ?",
+            (teammate_id, limit),
+        ).fetchall()
+    return [_board_message_from_row(r) for r in reversed(rows)]
 
 
 # -- Runs -------------------------------------------------------------------
@@ -991,6 +2219,7 @@ def _approval_from_row(row: sqlite3.Row) -> Approval:
     return Approval(
         id=row["id"],
         run_id=row["run_id"],
+        project_id=row["project_id"] if "project_id" in keys else "",
         action=row["action"],
         requester=row["requester"],
         decision=Decision(row["decision"]),
@@ -1003,6 +2232,9 @@ def _approval_from_row(row: sqlite3.Row) -> Approval:
         else None,
         task_id=row["task_id"] if "task_id" in keys else None,
         digest=row["digest"] if "digest" in keys else None,
+        executed_at=datetime.fromisoformat(row["executed_at"])
+        if "executed_at" in keys and row["executed_at"]
+        else None,
     )
 
 
@@ -1014,27 +2246,48 @@ def _approval_project(conn: sqlite3.Connection, run_id: str) -> str | None:
     return row["project_id"] if row else None
 
 
+def _approval_project_by_board(conn: sqlite3.Connection, board_id: str) -> str | None:
+    row = conn.execute(
+        "SELECT project_id FROM boards WHERE id = ?", (board_id,)
+    ).fetchone()
+    return row["project_id"] if row else None
+
+
 def approval_project(conn: sqlite3.Connection, approval_id: str) -> str | None:
-    """Resolve the owning project of an approval (exactly one, via its run)."""
+    """Resolve the owning project of an approval (via its run, board, or
+    direct project link)."""
     approval = get_approval(conn, approval_id)
     if approval is None:
         return None
-    return _approval_project(conn, approval.run_id)
+    if approval.run_id:
+        project = _approval_project(conn, approval.run_id)
+        if project:
+            return project
+    if approval.board_id:
+        return _approval_project_by_board(conn, approval.board_id)
+    if approval.project_id:
+        return approval.project_id
+    return None
 
 
 def purge_expired_approvals(conn: sqlite3.Connection, project_id: str) -> int:
     """Delete expired, still-undecided approvals for one project.
 
-    Decided approvals are never removed. Returns the purged count.
+    Reaches gate approvals (project-linked, no run), board-linked approvals,
+    and run-linked approvals of this project's tasks. Decided approvals are
+    never removed. Returns the purged count.
     """
     now = datetime.now(UTC).isoformat()
     rows = conn.execute(
-        "SELECT approvals.id FROM approvals JOIN runs ON approvals.run_id = runs.id"
-        " JOIN tasks ON runs.task_id = tasks.id"
-        " WHERE tasks.project_id = ? AND approvals.decision = 'pending'"
+        "SELECT DISTINCT approvals.id FROM approvals"
+        " LEFT JOIN runs ON approvals.run_id = runs.id"
+        " LEFT JOIN tasks ON runs.task_id = tasks.id"
+        " LEFT JOIN boards ON approvals.board_id = boards.id"
+        " WHERE (tasks.project_id = ? OR boards.project_id = ? OR approvals.project_id = ?)"
+        " AND approvals.decision = 'pending'"
         " AND approvals.consumed_at IS NULL"
         " AND approvals.expires_at IS NOT NULL AND approvals.expires_at <= ?",
-        (project_id, now),
+        (project_id, project_id, project_id, now),
     ).fetchall()
     for row in rows:
         conn.execute("DELETE FROM approvals WHERE id = ?", (row["id"],))
@@ -1049,19 +2302,25 @@ DEFAULT_APPROVAL_TTL_S = 600.0
 
 def request_approval(
     conn: sqlite3.Connection,
-    run_id: str,
     action: str,
     requester: str,
+    run_id: str = "",
+    board_id: str | None = None,
     ttl_s: float = DEFAULT_APPROVAL_TTL_S,
     task_id: str | None = None,
     digest: str | None = None,
+    project_id: str = "",
 ) -> Approval:
-    if conn.execute("SELECT id FROM runs WHERE id = ?", (run_id,)).fetchone() is None:
+    if run_id and conn.execute("SELECT id FROM runs WHERE id = ?", (run_id,)).fetchone() is None:
         raise KeyError(f"unknown run {run_id}")
+    if board_id is not None and conn.execute("SELECT id FROM boards WHERE id = ?", (board_id,)).fetchone() is None:
+        raise KeyError(f"unknown board {board_id}")
     now = datetime.now(UTC)
     approval = Approval(
         id=new_id("apr"),
         run_id=run_id,
+        board_id=board_id,
+        project_id=project_id,
         action=action,
         requester=requester,
         expires_at=now + timedelta(seconds=ttl_s),
@@ -1069,11 +2328,14 @@ def request_approval(
         digest=digest,
     )
     conn.execute(
-        "INSERT INTO approvals (id, run_id, action, requester, decision, decided_at,"
-        " expires_at, consumed_at, task_id, digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO approvals (id, run_id, board_id, project_id, action, requester, decision,"
+        " decided_at, expires_at, consumed_at, task_id, digest)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             approval.id,
             approval.run_id,
+            approval.board_id,
+            approval.project_id,
             approval.action,
             approval.requester,
             approval.decision.value,
@@ -1085,17 +2347,24 @@ def request_approval(
         ),
     )
     conn.commit()
-    project_id = _approval_project(conn, run_id)
-    if project_id is not None:
-        record_event(conn, project_id, "approval", approval.id, "approval.requested")
+    resolved = approval_project(conn, approval.id)
+    if resolved is not None:
+        record_event(conn, resolved, "approval", approval.id, "approval.requested")
     return approval
 
 
 def list_approvals_for_task(conn: sqlite3.Connection, task_id: str) -> list[Approval]:
+    """Approvals belonging to a task: run-linked (from its runs), directly
+    task-linked, or board-linked where the task lives on that board."""
     rows = conn.execute(
-        "SELECT approvals.* FROM approvals JOIN runs ON approvals.run_id = runs.id"
-        " WHERE runs.task_id = ? ORDER BY approvals.rowid",
-        (task_id,),
+        "SELECT DISTINCT approvals.* FROM approvals"
+        " LEFT JOIN runs ON approvals.run_id = runs.id"
+        " LEFT JOIN tasks ON runs.task_id = tasks.id"
+        " WHERE tasks.id = ? OR approvals.task_id = ?"
+        " OR (approvals.board_id != '' AND approvals.board_id ="
+        " (SELECT board_id FROM tasks WHERE id = ?))"
+        " ORDER BY approvals.rowid",
+        (task_id, task_id, task_id),
     ).fetchall()
     return [_approval_from_row(r) for r in rows]
 
@@ -1123,18 +2392,106 @@ def decide_approval(conn: sqlite3.Connection, approval_id: str, decision: Decisi
     if approval.expires_at is not None and datetime.now(UTC) > approval.expires_at:
         raise ApprovalExpiredError(f"approval {approval_id} expired at {approval.expires_at}")
     decided_at = _now_iso()
+    forever = decision == Decision.APPROVED_FOREVER
     conn.execute(
-        "UPDATE approvals SET decision = ?, decided_at = ?, consumed_at = ? WHERE id = ?",
-        (decision.value, decided_at, decided_at, approval_id),
+        "UPDATE approvals SET decision = ?, decided_at = ?, consumed_at = ?, expires_at = ? WHERE id = ?",
+        (
+            decision.value,
+            decided_at,
+            None if forever else decided_at,
+            None if forever else (approval.expires_at.isoformat() if approval.expires_at else None),
+            approval_id,
+        ),
     )
     conn.commit()
-    project_id = _approval_project(conn, approval.run_id)
+    project_id = approval_project(conn, approval_id)
     if project_id is not None:
-        record_event(conn, project_id, "approval", approval_id, f"approval.{decision.value}")
+        record_event(
+            conn,
+            project_id,
+            "approval",
+            approval_id,
+            f"approval.{decision.value}",
+        )
     approval.decision = decision
     approval.decided_at = datetime.fromisoformat(decided_at)
-    approval.consumed_at = datetime.fromisoformat(decided_at)
+    approval.consumed_at = None if forever else datetime.fromisoformat(decided_at)
+    approval.expires_at = None if forever else approval.expires_at
     return approval
+
+
+def list_approvals_for_project(
+    conn: sqlite3.Connection, project_id: str
+) -> list[Approval]:
+    """Every approval reachable from a project: via runs-of-tasks, via boards,
+    or via the direct project link (gate approvals outside a run)."""
+    rows = conn.execute(
+        "SELECT DISTINCT approvals.* FROM approvals"
+        " LEFT JOIN runs ON approvals.run_id = runs.id"
+        " LEFT JOIN tasks ON runs.task_id = tasks.id"
+        " LEFT JOIN boards ON approvals.board_id = boards.id"
+        " WHERE tasks.project_id = ? OR boards.project_id = ?"
+        " OR approvals.project_id = ?"
+        " ORDER BY approvals.rowid",
+        (project_id, project_id, project_id),
+    ).fetchall()
+    return [_approval_from_row(r) for r in rows]
+
+
+def find_approved_action(
+    conn: sqlite3.Connection, action: str, digest: str
+) -> Approval | None:
+    """An approved, unexecuted, unexpired approval for an exact action digest.
+
+    One-use is bound at execution time (``executed_at``): deciding marks the
+    approval decided (``consumed_at``), the gate consumes it exactly once when
+    the action actually runs."""
+    now = datetime.now(UTC).isoformat()
+    rows = conn.execute(
+        "SELECT * FROM approvals WHERE action = ? AND digest = ? AND decision IN ('approved', 'approved_forever')"
+        " AND executed_at IS NULL AND (expires_at IS NULL OR expires_at > ?)"
+        " ORDER BY rowid DESC",
+        (action, digest, now),
+    ).fetchall()
+    return _approval_from_row(rows[0]) if rows else None
+
+
+def mark_approval_executed(
+    conn: sqlite3.Connection, approval_id: str, run_id: str = ""
+) -> Approval:
+    """Mark an approved action as executed (binds it to the run that used it).
+
+    Forever approvals are not consumed: they remain available for reuse.
+    """
+    approval = get_approval(conn, approval_id)
+    if approval is None:
+        raise KeyError(f"unknown approval {approval_id}")
+    if approval.decision not in (Decision.APPROVED, Decision.APPROVED_FOREVER):
+        raise ApprovalDecidedError(f"approval {approval_id} is not approved")
+    if approval.decision == Decision.APPROVED_FOREVER:
+        return approval
+    conn.execute(
+        "UPDATE approvals SET executed_at = ?, run_id = COALESCE(NULLIF(?, ''), run_id)"
+        " WHERE id = ?",
+        (_now_iso(), run_id, approval_id),
+    )
+    conn.commit()
+    approval.executed_at = datetime.now(UTC)
+    if run_id:
+        approval.run_id = run_id
+    return approval
+
+
+def set_task_board(conn: sqlite3.Connection, task_id: str, board_id: str) -> Task:
+    if get_task(conn, task_id) is None:
+        raise KeyError(f"unknown task {task_id}")
+    if board_id and get_board(conn, board_id) is None:
+        raise KeyError(f"unknown board {board_id}")
+    conn.execute("UPDATE tasks SET board_id = ? WHERE id = ?", (board_id, task_id))
+    conn.commit()
+    task = get_task(conn, task_id)
+    assert task is not None
+    return task
 
 
 def list_events(conn: sqlite3.Connection, project_id: str) -> list[Event]:

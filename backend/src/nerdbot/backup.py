@@ -83,9 +83,11 @@ def build_manifest(conn: sqlite3.Connection, project_id: str) -> dict[str, Any]:
             ).fetchall()
         elif table == "approvals":
             rows = conn.execute(
-                "SELECT approvals.* FROM approvals JOIN runs ON approvals.run_id = runs.id"
-                " JOIN tasks ON runs.task_id = tasks.id WHERE tasks.project_id = ?",
-                (project_id,),
+                "SELECT DISTINCT approvals.* FROM approvals"
+                " JOIN runs ON approvals.run_id = runs.id"
+                " JOIN tasks ON runs.task_id = tasks.id WHERE tasks.project_id = ?"
+                " UNION SELECT * FROM approvals WHERE project_id = ? AND run_id = ''",
+                (project_id, project_id),
             ).fetchall()
         elif table == "projects":
             rows = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchall()
@@ -218,6 +220,7 @@ _IMPORT_COLUMNS: dict[str, frozenset[str]] = {
             "status",
             "tool_policy",
             "provider_id",
+            "created_at",
         }
     ),
     "issues": frozenset(
@@ -276,6 +279,8 @@ _IMPORT_COLUMNS: dict[str, frozenset[str]] = {
             "issue_id",
             "branch",
             "workspace_path",
+            "board_id",
+            "parent_task_id",
         }
     ),
 }

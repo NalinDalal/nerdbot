@@ -19,9 +19,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from . import agent_context as agent_context_mod
 from . import store, workspace
 from .models import (
     Approval,
+    DelegationStatus,
     Issue,
     PRPackage,
     Review,
@@ -67,6 +69,12 @@ def schedule_run(
     task = store.get_task(conn, task_id)
     if task is None:
         raise KeyError(f"unknown task {task_id}")
+    if task.status == TaskStatus.DONE:
+        # Refuse before create_run: a leaked ``running``-marked run under a
+        # finished task would consume the retry budget and poison recovery.
+        raise ValueError(
+            f"task {task_id} is done; use retry to run it again"
+        )
     if task.owner_teammate_id is not None:
         owner = store.get_teammate(conn, task.owner_teammate_id)
         if owner is not None and owner.status != TeammateStatus.ACTIVE:
@@ -112,6 +120,15 @@ def schedule_run(
     run.status = RunStatus.RUNNING
     store.set_task_status(conn, task_id, TaskStatus.RUNNING)
 
+    # Assemble the full agent context (identity, memory, inbox, delegations)
+    # and bind it to this run. Adapters that ignore it fall back to raw command.
+    owner = None
+    if task.owner_teammate_id is not None:
+        owner = store.get_teammate(conn, task.owner_teammate_id)
+    ctx = agent_context_mod.build(conn, task, owner)
+    ctx.data_dir = data_dir
+    ctx.run_id = run.id
+
     if not dependencies_satisfied(conn, task):
         store.finish_run(conn, run.id, RunStatus.BLOCKED, None, "dependencies not satisfied")
         run.status = RunStatus.BLOCKED
@@ -125,12 +142,13 @@ def schedule_run(
         store.set_task_workspace(conn, task_id, workspace.branch_name_for_task(task_id), str(ws))
     started = time.monotonic()
     try:
-        result = active.start_run(task.command, ws, timeout_s=timeout_s)
+        result = active.start_run(task.command, ws, timeout_s=timeout_s, context=ctx)
     except BlockedError as exc:
         store.finish_run(conn, run.id, RunStatus.BLOCKED, None, f"blocked: {exc.reason}")
         run.status = RunStatus.BLOCKED
         run.output_excerpt = f"blocked: {exc.reason}"
         store.set_task_status(conn, task_id, TaskStatus.BLOCKED)
+        _finalize_child_delegation(conn, task, run, f"blocked: {exc.reason}", failed=True)
         return run, None, None
     except ExecutionError as exc:
         failed = _record_test_log(
@@ -149,6 +167,7 @@ def schedule_run(
         run.status = RunStatus.FAILED
         run.output_excerpt = str(exc)
         store.set_task_status(conn, task_id, TaskStatus.FAILED)
+        _finalize_child_delegation(conn, task, run, str(exc), failed=True)
         return run, None, failed
     except Exception as exc:  # explicit failure, never silent success
         message = f"unexpected runtime error: {type(exc).__name__}: {exc}"
@@ -156,10 +175,48 @@ def schedule_run(
         run.status = RunStatus.FAILED
         run.output_excerpt = message
         store.set_task_status(conn, task_id, TaskStatus.FAILED)
+        _finalize_child_delegation(conn, task, run, message, failed=True)
         return run, None, None
 
     duration_s = time.monotonic() - started
     ok = result.exit_code == 0
+    current = store.get_task(conn, task_id)
+    blocked_during_run = current is not None and current.status == TaskStatus.BLOCKED
+    if blocked_during_run:
+        # The task was blocked while the run was in flight — the delegatee
+        # declined the delegation, or it was cancelled. That decision owns the
+        # outcome: the run's output must not be recorded as a success.
+        note = "task was blocked during the run (declined or cancelled)"
+        store.finish_run(
+            conn,
+            run.id,
+            RunStatus.FAILED,
+            result.exit_code,
+            note,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            duration_s=duration_s,
+        )
+        run.status = RunStatus.FAILED
+        run.exit_code = result.exit_code
+        run.output_excerpt = note
+        run.stdout = result.stdout
+        run.stderr = result.stderr
+        run.duration_s = duration_s
+        _finalize_child_delegation(conn, task, run, note, failed=True)
+        artifact_id = _record_test_log(
+            conn,
+            task_id,
+            run,
+            ws,
+            data_dir,
+            exit_code=result.exit_code,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            duration_s=duration_s,
+            passed=False,
+        )
+        return run, result, artifact_id
     store.finish_run(
         conn,
         run.id,
@@ -178,6 +235,10 @@ def schedule_run(
     run.duration_s = duration_s
     store.set_task_status(conn, task_id, TaskStatus.DONE if ok else TaskStatus.FAILED)
 
+    _finalize_child_delegation(
+        conn, task, run, result.output, failed=not ok
+    )
+
     artifact_id = _record_test_log(
         conn,
         task_id,
@@ -195,6 +256,55 @@ def schedule_run(
     if transcript:
         _record_transcript(conn, task_id, run, data_dir, transcript, turns)
     return run, result, artifact_id
+
+
+def _finalize_child_delegation(
+    conn: sqlite3.Connection,
+    task: Task,
+    run: Run,
+    result_text: str,
+    *,
+    failed: bool,
+) -> None:
+    """Write a child task's outcome back to its delegations (response channel).
+
+    Idempotent per delegation; also posts a targeted board message to the
+    delegator's inbox so the result is visible without polling the record.
+    """
+    if not task.parent_task_id:
+        return
+    delegations = store.delegations_by_child_task(conn, task.id)
+    if not delegations:
+        return
+    bounded = (result_text or "").strip()[:4000]
+    for delegation in delegations:
+        if delegation.status == DelegationStatus.PENDING:
+            # The delegatee finished the run without accepting the delegation.
+            # The work may be fine, but the hand-off was never agreed, so the
+            # delegation is a failure rather than a silent success.
+            bounded = (
+                "the delegatee finished the run without accepting the delegation\n"
+                + bounded
+            )
+            failed = True
+        store.finalize_delegation_result(
+            conn, delegation.id, bounded, result_run_id=run.id, failed=failed
+        )
+        parent = store.get_task(conn, delegation.task_id)
+        if parent is None or not parent.board_id:
+            continue
+        outcome = "failed" if failed else "completed"
+        try:
+            store.create_board_message(
+                conn,
+                parent.board_id,
+                content=f"Delegated task {task.id} {outcome}.\n{bounded}",
+                from_teammate_id=task.owner_teammate_id,
+                to_teammate_id=delegation.from_teammate_id,
+                kind="delegation",
+            )
+        except (KeyError, ValueError):
+            continue  # the channel message is convenience; the record is canonical
 
 
 def _record_transcript(
@@ -260,7 +370,9 @@ def retry_task(
 ) -> tuple[Run, RunResult | None, str | None]:
     """Retry a task by creating a NEW run for the SAME task (no duplication).
 
-    Only tasks in a terminal state (done/failed/blocked) may be retried.
+    Only tasks in a terminal state (done/failed/blocked) may be retried, and
+    only up to ``store.MAX_TASK_RETRIES`` times: a task that keeps failing
+    cannot be retried forever.
     """
     task = store.get_task(conn, task_id)
     if task is None:
@@ -270,6 +382,11 @@ def retry_task(
             f"task {task_id} is {task.status.value}; only terminal tasks may be retried"
         )
     before = len(store.list_runs_for_task(conn, task_id))
+    if before >= store.MAX_TASK_RETRIES:
+        raise ValueError(
+            f"task {task_id} has been attempted {before} times;"
+            f" retry limit ({store.MAX_TASK_RETRIES}) reached"
+        )
     store.set_task_status(conn, task_id, TaskStatus.PENDING)
     out = schedule_run(conn, task_id, adapter=adapter, data_dir=data_dir, timeout_s=timeout_s)
     after = len(store.list_runs_for_task(conn, task_id))
@@ -557,9 +674,9 @@ def request_package_approval(
         raise ValueError(f"task {task_id} has no runs; cannot bind approval")
     return store.request_approval(
         conn,
-        run.id,
         "pr-package.merge-ready",
         requester,
+        run_id=run.id,
         ttl_s=ttl_s,
         task_id=task_id,
         digest=package.digest,

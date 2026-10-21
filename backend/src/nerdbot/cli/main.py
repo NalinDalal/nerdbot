@@ -19,7 +19,7 @@ def cli() -> None:
 
 @cli.command("run")
 @click.option("--host", default="127.0.0.1", show_default=True)
-@click.option("--port", default=8088, show_default=True, type=int)
+@click.option("--port", default=8080, show_default=True, type=int)
 def run(host: str, port: int) -> None:
     """Run the API server (primary workflow)."""
     from nerdbot.auth import token_status
@@ -165,3 +165,50 @@ def ingest_issue(
     finally:
         conn.close()
     click.echo(issue.id)
+
+
+@cli.command("executor-sweep")
+@click.option("--quiet", is_flag=True, help="Print one summary line only.")
+@click.option(
+    "--timeout-s", default=60.0, show_default=True, type=float,
+    help="Per-run wall-clock budget.",
+)
+@click.option(
+    "--max-tasks", default=10, show_default=True, type=int,
+    help="Max tasks to claim and run in this sweep.",
+)
+def executor_sweep(quiet: bool, timeout_s: float, max_tasks: int) -> None:
+    """Claim pending unowned tasks to available bots and run them.
+
+    One sweep: oldest pending task without an owner is claimed by an active
+    teammate in the same project who has a model provider attached and is not
+    already busy, then executed in an isolated workspace. Intended to be wired
+    to OS cron, or run manually.
+    """
+    from nerdbot import executor as executor_mod
+    from nerdbot import store
+
+    db = os.environ.get("NERDBOT_DB", "nerdbot.db")
+    data_dir = os.environ.get("NERDBOT_DATA", ".nerdbot-data")
+    try:
+        conn = store.connect(db)
+    except OSError as exc:
+        raise click.ClickException(f"cannot open database {db!r}: {exc}") from exc
+    try:
+        results = executor_mod.sweep(
+            conn, data_dir=data_dir, timeout_s=timeout_s, max_tasks=max_tasks
+        )
+    finally:
+        conn.close()
+    for row in results:
+        suffix = ""
+        if row.get("reason"):
+            suffix = f" reason={row['reason']}"
+        if not quiet:
+            click.echo(
+                f"{row['task_id']} bot={row.get('bot_id','-')} run={row.get('run_id','-')} "
+                f"status={row['status']}{suffix}"
+            )
+    click.echo(f"executor-sweep: {len(results)} tasks processed")
+    if any(r["status"] in ("run_error", "claim_failed") for r in results):
+        raise click.exceptions.Exit(1)

@@ -128,11 +128,12 @@ def _parse_tool_calls(message: dict[str, Any]) -> list[dict[str, Any]]:
 class OpenAICompatibleAdapter:
     """Bounded agent loop over OpenAI-style /chat/completions with tools.
 
-    Synchronous, matching ``RuntimeAdapter``. The loop: user prompt (the task
-    command) → provider w/ workspace tools → execute chosen tools locally →
-    tool results back as untrusted text → repeat until no tool calls, the turn
-    cap, or a failure threshold. Max-turn exhaustion is a failure, never a
-    silent partial result.
+    Synchronous, matching ``RuntimeAdapter``. The loop: system context (the
+    assembled AgentContext when provided) + user prompt → provider w/ tools →
+    execute chosen tools locally (workspace tools via agent_tools, app tools
+    via app_tools with server-side permission gates) → tool results back as
+    untrusted text → repeat until no tool calls, the turn cap, or a failure
+    threshold. Max-turn exhaustion is a failure, never a silent partial result.
     """
 
     name = "openai-compatible"
@@ -174,14 +175,32 @@ class OpenAICompatibleAdapter:
             raise ProviderConfigurationError("timeout_s must be positive")
         return base_url.rstrip("/"), model, api_key, max_turns, timeout
 
-    def start_run(self, command: str, workspace: Path, timeout_s: float = 60.0) -> RunResult:
+    def start_run(
+        self,
+        command: str,
+        workspace: Path,
+        timeout_s: float = 60.0,
+        context: Any | None = None,
+    ) -> RunResult:
         if not command.strip():
             raise ExecutionError("empty command")
         base_url, model, api_key, max_turns, request_timeout = self._settings()
         deadline = time.monotonic() + timeout_s
         per_call_timeout = min(request_timeout, max(timeout_s / (max_turns + 1), 1.0))
-        messages: list[dict[str, Any]] = [{"role": "user", "content": command}]
-        transcript: list[dict[str, Any]] = [{"role": "user", "content": command}]
+        messages: list[dict[str, Any]] = []
+        transcript: list[dict[str, Any]] = []
+        system_message = str(getattr(context, "system_message", "")) if context is not None else ""
+        if system_message:
+            messages.append({"role": "system", "content": system_message})
+            transcript.append({"role": "system", "content": system_message})
+        prompt = command
+        if system_message:
+            # The system message already carries task facts; keep the user
+            # message as the execution instruction.
+            prompt = f"Execute your task now.\n\nTask instruction:\n{command}"
+        messages.append({"role": "user", "content": prompt})
+        transcript.append({"role": "user", "content": prompt})
+        tools = self._tools_for(context)
         consecutive_failures = 0
         turns = 0
         client = httpx.Client(
@@ -194,7 +213,7 @@ class OpenAICompatibleAdapter:
                 if time.monotonic() >= deadline:
                     raise ProviderTimeoutError("agent loop wall-clock budget expired")
                 turns += 1
-                data = self._authed_post(client, api_key, model, messages)
+                data = self._authed_post(client, api_key, model, messages, tools)
                 message = self._first_message(data)
                 transcript.append({"role": "assistant", "content": message.get("content") or ""})
                 calls = _parse_tool_calls(message)
@@ -205,11 +224,8 @@ class OpenAICompatibleAdapter:
                     if time.monotonic() >= deadline:
                         raise ProviderTimeoutError("agent loop wall-clock budget expired")
                     try:
-                        result = agent_tools.execute_tool(
-                            workspace,
-                            call["name"],
-                            call["arguments"],
-                            transport=self._transport,
+                        result = self._execute_one(
+                            workspace, call["name"], call["arguments"], context
                         )
                         consecutive_failures = 0
                     except (
@@ -247,12 +263,51 @@ class OpenAICompatibleAdapter:
         finally:
             client.close()
 
+    def _tools_for(self, context: Any | None) -> list[dict[str, Any]]:
+        """Workspace tools always; app tools only for an acting teammate,
+        filtered to its granted permissions (fail-closed)."""
+        from . import app_tools
+
+        tools = agent_tools.tool_schemas()
+        if context is not None and getattr(context, "teammate", None) is not None:
+            granted = set(context.allowed_permissions)
+            tools = tools + app_tools.app_tool_schemas(granted)
+        return tools
+
+    def _execute_one(
+        self,
+        workspace: Path,
+        name: str,
+        arguments: dict[str, Any],
+        context: Any | None,
+    ) -> str:
+        from . import app_tools
+
+        if name in app_tools.APP_TOOL_NAMES:
+            if context is None or getattr(context, "teammate", None) is None:
+                raise ValueError(f"tool {name!r} requires an acting teammate")
+            return app_tools.execute_app_tool(
+                context,
+                name,
+                arguments,
+                data_dir=getattr(context, "data_dir", "."),
+                run_id=getattr(context, "run_id", ""),
+                workspace_path=str(workspace),
+            )
+        return agent_tools.execute_tool(
+            workspace,
+            name,
+            arguments,
+            transport=self._transport,
+        )
+
     def _authed_post(
         self,
         client: httpx.Client,
         api_key: str,
         model: str,
         messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         # Key is attached to single request objects only, never client state.
         last_error: Exception | None = None
@@ -263,7 +318,7 @@ class OpenAICompatibleAdapter:
                 json={
                     "model": model,
                     "messages": messages,
-                    "tools": agent_tools.tool_schemas(),
+                    "tools": tools if tools is not None else agent_tools.tool_schemas(),
                     "tool_choice": "auto",
                 },
                 headers={"Authorization": f"Bearer {api_key}"},
@@ -327,8 +382,14 @@ class MockRuntimeAdapter:
 
     name = "mock"
 
-    def start_run(self, command: str, workspace: Path, timeout_s: float = 60.0) -> RunResult:
-        _ = (workspace, timeout_s)
+    def start_run(
+        self,
+        command: str,
+        workspace: Path,
+        timeout_s: float = 60.0,
+        context: Any | None = None,
+    ) -> RunResult:
+        _ = (workspace, timeout_s, context)
         if not command.strip():
             raise ExecutionError("empty command")
         output = f"[mock provider] would execute: {command.strip()}"

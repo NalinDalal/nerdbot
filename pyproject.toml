@@ -56,6 +56,7 @@ ignore = ["E501"]
 [tool.ruff.lint.per-file-ignores]
 # FastAPI's Depends() in defaults is the framework's standard DI idiom.
 "backend/src/nerdbot/api.py" = ["B008"]
+"backend/src/nerdbot/boards.py" = ["B008"]
 # sqlite3.Row is tuple-like: `in` tests values, so `.keys()` is required.
 "backend/src/nerdbot/store.py" = ["SIM118"]
 
