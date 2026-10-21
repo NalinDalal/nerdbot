@@ -132,8 +132,18 @@ grandchild alive after cancel: False
 RESULT: PASS
 ```
 
-The run was stopped **40 ms** after the cancel, and the backgrounded
-grandchild was gone — the whole process group died, not just the shell.
+That transcript is the **original observed run**: the run was stopped
+**40 ms** after the cancel, and the backgrounded grandchild was gone —
+the whole process group died, not just the shell. The 40 ms is a
+measurement, not a guarantee. Subsequent runs of the same check measured
+**0.01 s to 0.06 s**, each one passing. The implementation detail that
+bounds the reaction time is the runtime's 50 ms poll interval (§6), which
+is a separate fact from the figures measured above.
+
+The check leaves nothing behind: it removes its temporary directory and
+kills any surviving test grandchild process in a `finally` block, so a
+run that fails part-way cleans up after itself the same way a passing
+one does.
 
 ## 5. Acceptance against the original criteria
 
@@ -185,4 +195,6 @@ Dashboard: `api.ts`, `components.tsx`, `types.ts`, `views-task.tsx`.
 Tests: `test_agent_tools.py` (+2), `test_board_member_gates.py` (new, 9),
 `test_run_cancellation.py` (new, 10).
 Docs: `decisions/0009-shell-tool-approval-policy.md` (new).
-Tooling: `scripts/live_cancel_check.py` (new — reproducible live check).
+Tooling: `scripts/live_cancel_check.py` (new — reproducible live check;
+it removes its temporary directory and terminates any surviving test
+grandchild process, including when the check fails part-way).
