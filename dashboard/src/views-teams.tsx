@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api } from "./api";
 import { notifyError } from "./app";
-import type { Task } from "./types";
+import type { BotFace, Task } from "./types";
 import {
   EmptyState,
   ErrorState,
@@ -148,20 +148,28 @@ interface RollupEntry {
   blocked: number;
   done: number;
   failed: number;
-  handoffs: Array<{ fromId: string; fromPersona: string; toId: string; toPersona: string; child: Task }>;
+  handoffs: Array<{
+    fromId: string;
+    fromPersona: string;
+    fromFace: BotFace | null;
+    toId: string;
+    toPersona: string;
+    toFace: BotFace | null;
+    child: Task;
+  }>;
 }
 
 /** Aggregate the tasks owned by the team's bots. Handoffs (agent-to-agent
  *  delegation) are visible as child tasks: a child's parent owner is "from",
  *  the child's owner is "to". */
 function teamRollup(
-  members: Array<{ id: string; persona: string; tasks: Task[] }>,
+  members: Array<{ id: string; persona: string; face: BotFace | null; tasks: Task[] }>,
 ): RollupEntry {
   const entry: RollupEntry = { running: 0, queued: 0, blocked: 0, done: 0, failed: 0, handoffs: [] };
-  const ownerByTaskId = new Map<string, { id: string; persona: string }>();
+  const ownerByTaskId = new Map<string, { id: string; persona: string; face: BotFace | null }>();
   for (const member of members) {
     for (const task of member.tasks) {
-      ownerByTaskId.set(task.id, { id: member.id, persona: member.persona });
+      ownerByTaskId.set(task.id, { id: member.id, persona: member.persona, face: member.face });
     }
   }
   const tally = taskTally(members.flatMap((member) => member.tasks));
@@ -178,8 +186,10 @@ function teamRollup(
           entry.handoffs.push({
             fromId: parent.id,
             fromPersona: parent.persona,
+            fromFace: parent.face,
             toId: member.id,
             toPersona: member.persona,
+            toFace: member.face,
             child: task,
           });
         }
@@ -219,6 +229,7 @@ export function TeamDetailView({
       mats.map(async (bot) => ({
         id: bot.id,
         persona: bot.persona || "Unnamed bot",
+        face: bot.face ?? null,
         tasks: (await api.teammateTasks(bot.id).then((r) => r.tasks).catch(() => [])) as Task[],
       })),
     );
@@ -284,14 +295,14 @@ export function TeamDetailView({
                     Agent-to-agent handoffs
                   </div>
                   <div className="mt-1.5 flex flex-col gap-1.5">
-                    {rollup.handoffs.map(({ fromPersona, toPersona, child }) => (
+                    {rollup.handoffs.map(({ fromPersona, fromFace, toPersona, toFace, child }) => (
                       <div
                         key={`${child.id}`}
                         className="flex flex-wrap items-center gap-2 rounded-lg bg-[var(--surface-2)] px-3 py-2 text-[var(--step-minus-1)]"
                       >
-                        <BotChip persona={fromPersona} id={fromPersona} status="done" />
+                        <BotChip persona={fromPersona} id={fromPersona} status="done" face={fromFace} />
                         <span className="text-[var(--faint)]" aria-hidden>→</span>
-                        <BotChip persona={toPersona} id={toPersona} status={child.status} />
+                        <BotChip persona={toPersona} id={toPersona} status={child.status} face={toFace} />
                         <span className="text-[var(--muted)]">delegated:</span>
                         <span className="truncate text-[var(--text-soft)]">{child.description}</span>
                         <span className="ml-auto flex items-center gap-2">
@@ -334,7 +345,7 @@ export function TeamDetailView({
                 }`}
               >
                 <div className="min-w-0 flex-1">
-                  <BotChip persona={bot.persona || "Unnamed bot"} id={bot.id} status={bot.status} />
+                  <BotChip persona={bot.persona || "Unnamed bot"} id={bot.id} status={bot.status} face={bot.face} />
                   <div className="mt-1 truncate text-[var(--step-minus-2)] text-[var(--faint)]" title={bot.instructions || ""}>
                     {bot.instructions?.slice(0, 110) || "No instructions"}
                   </div>

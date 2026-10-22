@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from . import faces as faces_mod
 from . import permissions as permissions_mod
 from .models import (
     BOARD_MEMBER_ROLES,
@@ -26,6 +27,7 @@ from .models import (
     BoardMemberRole,
     BoardMessage,
     BoardStatus,
+    BotFace,
     ChatMessage,
     ChatThread,
     Decision,
@@ -67,7 +69,8 @@ CREATE TABLE IF NOT EXISTS teammates (
   persona TEXT NOT NULL DEFAULT '', instructions TEXT NOT NULL DEFAULT '',
   capabilities TEXT NOT NULL DEFAULT '[]', memory_scope TEXT NOT NULL DEFAULT 'teammate',
   permissions TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'active',
-  tool_policy TEXT NOT NULL DEFAULT '{}', provider_id TEXT, created_at TEXT NOT NULL DEFAULT ''
+  tool_policy TEXT NOT NULL DEFAULT '{}', provider_id TEXT, created_at TEXT NOT NULL DEFAULT '',
+  face TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
@@ -459,6 +462,13 @@ _PHASE17_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "tasks": [("blocked_reason", "TEXT NOT NULL DEFAULT ''")],
 }
 
+_PHASE18_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    # A bot's face: the body shape, the colour and the resting expression
+    # the owner picked when they set the bot up. Empty means "not chosen",
+    # which reads back as the default face.
+    "teammates": [("face", "TEXT NOT NULL DEFAULT ''")],
+}
+
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Idempotent migrations for databases created by older schemas."""
@@ -468,7 +478,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     for phase in (_PHASE2_COLUMNS, _PHASE3_COLUMNS, _PHASE4_COLUMNS, _PHASE5_COLUMNS,
                   _PHASE6_COLUMNS, _PHASE7_COLUMNS, _PHASE8_COLUMNS, _PHASE9_COLUMNS,
                   _PHASE10_COLUMNS, _PHASE11_COLUMNS, _PHASE12_COLUMNS, _PHASE13_COLUMNS,
-                  _PHASE14_COLUMNS, _PHASE15_COLUMNS, _PHASE16_COLUMNS, _PHASE17_COLUMNS):
+                  _PHASE14_COLUMNS, _PHASE15_COLUMNS, _PHASE16_COLUMNS, _PHASE17_COLUMNS,
+                  _PHASE18_COLUMNS):
         for table, columns in phase.items():
             phases.setdefault(table, []).extend(columns)
     for table, columns in phases.items():
@@ -612,6 +623,7 @@ def create_teammate(
     capabilities: list[str] | None = None,
     memory_scope: str = "project",
     permissions: list[str] | None = None,
+    face: dict[str, str] | None = None,
 ) -> Teammate:
     if get_project(conn, project_id) is None:
         raise KeyError(f"unknown project {project_id}")
@@ -626,10 +638,11 @@ def create_teammate(
         capabilities=capabilities or [],
         memory_scope=memory_scope,
         permissions=permissions or [],
+        face=BotFace(**faces_mod.merge_face(face or {})),
     )
     conn.execute(
         "INSERT INTO teammates (id, project_id, persona, instructions, capabilities,"
-        " memory_scope, permissions) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        " memory_scope, permissions, face) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (
             mate.id,
             mate.project_id,
@@ -638,6 +651,7 @@ def create_teammate(
             json.dumps(mate.capabilities),
             mate.memory_scope,
             json.dumps(mate.permissions),
+            json.dumps(mate.face.model_dump(mode="json")),
         ),
     )
     conn.commit()
@@ -660,7 +674,33 @@ def _teammate_from_row(row: sqlite3.Row) -> Teammate:
         if "tool_policy" in keys and row["tool_policy"]
         else {},
         provider_id=row["provider_id"] if "provider_id" in keys else None,
+        face=_face_from_row(row),
     )
+
+
+def _face_from_row(row: sqlite3.Row) -> BotFace:
+    """Read a bot's face.
+
+    An empty column means the bot predates the face, or that the owner never
+    picked one: either way it reads back as the default face, so the
+    dashboard always has a face to draw.
+    """
+    keys = row.keys()
+    raw = row["face"] if "face" in keys else ""
+    if not raw:
+        return BotFace(**faces_mod.default_face())
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return BotFace(**faces_mod.default_face())
+    if not isinstance(data, dict):
+        return BotFace(**faces_mod.default_face())
+    try:
+        return BotFace(**faces_mod.validate_face(data))
+    except faces_mod.FaceError:
+        # A face the catalogue no longer knows is a face nobody can draw:
+        # the default is the honest answer.
+        return BotFace(**faces_mod.default_face())
 
 
 def get_teammate(conn: sqlite3.Connection, teammate_id: str) -> Teammate | None:
@@ -688,6 +728,7 @@ def update_teammate(
     tool_policy: dict[str, Any] | None = None,
     provider_id: str | None = None,
     clear_provider: bool = False,
+    face: dict[str, str] | None = None,
 ) -> Teammate:
     """``clear_provider=True`` explicitly detaches the model (PATCH with
     ``provider_id: null``); a param of None alone means "no change"."""
@@ -714,6 +755,8 @@ def update_teammate(
         mate.permissions = permissions
     if tool_policy is not None:
         mate.tool_policy = tool_policy
+    if face is not None:
+        mate.face = BotFace(**faces_mod.merge_face(face))
     if clear_provider:
         mate.provider_id = None
     elif provider_id is not None:
@@ -725,7 +768,8 @@ def update_teammate(
         mate.provider_id = provider_id
     conn.execute(
         "UPDATE teammates SET persona = ?, instructions = ?, capabilities = ?,"
-        " memory_scope = ?, permissions = ?, tool_policy = ?, provider_id = ? WHERE id = ?",
+        " memory_scope = ?, permissions = ?, tool_policy = ?, provider_id = ?, face = ?"
+        " WHERE id = ?",
         (
             mate.persona,
             mate.instructions,
@@ -734,6 +778,7 @@ def update_teammate(
             json.dumps(mate.permissions),
             json.dumps(mate.tool_policy),
             mate.provider_id,
+            json.dumps(mate.face.model_dump(mode="json")),
             mate.id,
         ),
     )

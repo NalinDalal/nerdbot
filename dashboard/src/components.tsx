@@ -2,7 +2,9 @@ import { cloneElement, isValidElement, useEffect, useRef, useState, useId } from
 import type { ReactElement } from "react";
 import type { ReactNode } from "react";
 import { api, describeError } from "./api";
+import { BotAvatar } from "./bot/BotAvatar";
 import type { Permission, Task } from "./types";
+import type { BotFace as BotFaceSpec } from "./types";
 
 export function StatusBadge({
   status,
@@ -352,35 +354,71 @@ export function StatusDot({
   );
 }
 
-/** Compact identity chip for bots — avatar-ish initials + live status. */
+/** A bot's face.
+ *
+ *  The face the owner picked when they set the bot up: a body shape, a
+ *  colour and a resting expression, drawn as an SVG by the bot engine in
+ *  `src/bot/`. Nothing is loaded and nothing is derived from the bot id —
+ *  two bots look different because their owner said so.
+ *
+ *  A live bot is a whole screen of faces, so the small ones draw a single
+ *  frame: twenty animation loops on one page is a page that janks.
+ */
+export function BotFace({
+  face,
+  size = 28,
+  status,
+  className = "",
+}: {
+  face?: BotFaceSpec | null;
+  size?: number;
+  status?: string;
+  className?: string;
+}) {
+  const tone = status ? statusTone(status) : "neutral";
+  const ring =
+    tone === "ok"
+      ? "var(--accent)"
+      : tone === "bad"
+        ? "var(--danger)"
+        : tone === "warn"
+          ? "var(--warn)"
+          : tone === "info"
+            ? "var(--info)"
+            : "var(--faint)";
+  return (
+    <span
+      className={`relative inline-flex shrink-0 items-center justify-center ${className}`}
+      style={{ width: size, height: size }}
+      aria-hidden
+    >
+      <BotAvatar face={face} size={size} />
+      {status ? (
+        <span
+          className="absolute -bottom-0.5 -right-0.5 rounded-full ring-2 ring-[var(--surface)]"
+          style={{ width: size * 0.26, height: size * 0.26, background: ring }}
+        />
+      ) : null}
+    </span>
+  );
+}
+
 export function BotChip({
   persona,
   id,
   status,
+  face,
   size = "sm",
 }: {
   persona: string;
   id: string;
   status: string;
+  face?: BotFaceSpec | null;
   size?: "sm" | "md";
 }) {
-  const initials = persona
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((word) => word[0])
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
-  const tone = statusTone(status);
-  const dotColor =
-    tone === "ok" ? "bg-[var(--accent)]" : tone === "bad" ? "bg-[var(--danger)]" : tone === "warn" ? "bg-[var(--warn)]" : tone === "info" ? "bg-[var(--info)]" : "bg-[var(--faint)]";
-  const box = size === "md" ? "h-7 w-7 text-[10px]" : "h-6 w-6 text-[9px]";
   return (
     <span className="inline-flex items-center gap-2 min-w-0">
-      <span className={`relative inline-flex shrink-0 items-center justify-center rounded-md bg-[var(--surface-3)] font-semibold text-[var(--text-soft)] ${box}`}>
-        {initials || "?"}
-        <span className={`absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full ${dotColor} ring-2 ring-[var(--surface)]`} />
-      </span>
+      <BotFace face={face} size={size === "md" ? 36 : 28} status={status} />
       <span className="truncate text-[var(--step-minus-1)] text-[var(--text-soft)]" title={id}>
         {persona || "Unnamed"}
       </span>

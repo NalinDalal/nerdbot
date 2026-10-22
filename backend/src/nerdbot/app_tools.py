@@ -27,6 +27,7 @@ from . import agent_context as agent_context_mod
 from . import boards, fleet, gates, orchestrator, store
 from . import decomposition as decomposition_mod
 from . import delegation as delegation_mod
+from . import faces as faces_mod
 from .agent_context import AgentContext
 from .agent_tools import truncate_output
 from .models import (
@@ -429,6 +430,15 @@ def app_tool_schemas(permissions: frozenset[str] | set[str]) -> list[dict[str, A
                     "provider_id": {
                         "type": "string",
                         "description": "model provider id from this workspace (optional)",
+                    },
+                    "face": {
+                        "type": "object",
+                        "description": "the new bot's face: shape, color and expression",
+                        "properties": {
+                            "shape": {"type": "string"},
+                            "color": {"type": "string"},
+                            "expression": {"type": "string"},
+                        },
                     },
                 },
                 ["persona"],
@@ -858,6 +868,10 @@ def _dispatch(
     if name == "create_teammate":
         memory_scope = str(args.get("memory_scope", "") or "").strip()
         try:
+            face = _face_arg(args.get("face"))
+        except ValueError as exc:
+            return f"tool error: {exc}"
+        try:
             new_mate = fleet.create_teammate_service(
                 conn,
                 task.project_id,
@@ -866,6 +880,7 @@ def _dispatch(
                 permissions=[str(p) for p in args.get("permissions", []) or []],
                 memory_scope=memory_scope if memory_scope in ("project", "private") else "project",
                 provider_id=_opt_str(args.get("provider_id")),
+                face=face,
                 acting=mate,
             )
         except HTTPException as exc:
@@ -889,6 +904,14 @@ def _dispatch(
         provider_id = _opt_str(args.get("provider_id"))
         if provider_id is not None:
             updates["provider_id"] = provider_id
+        if args.get("face") is not None:
+            try:
+                face = _face_arg(args.get("face"))
+            except ValueError as exc:
+                return f"tool error: {exc}"
+            if face is None:
+                return "tool error: face must be an object with shape, color and expression"
+            updates["face"] = face
         if not updates:
             return "tool error: nothing to update"
         try:
@@ -1386,3 +1409,17 @@ def _opt_str(value: Any) -> str | None:
     if isinstance(value, str) and value.strip():
         return value.strip()
     return None
+
+
+def _face_arg(value: Any) -> dict[str, str] | None:
+    """Read a face out of a tool's arguments.
+
+    Returns None when there is no face to apply, and raises ValueError when
+    there is one the catalogue does not know — a face nobody can draw is not
+    something to store and hope for.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("face must be an object with shape, color and expression")
+    return faces_mod.validate_face(value)

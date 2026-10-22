@@ -58,6 +58,11 @@ class TeammateCreate(_Body):
     memory_scope: str | None = None
     permissions: list[str] | None = None
     provider_id: str | None = None
+    # The face: {shape, color, expression}. Kept as a plain dict so the
+    # catalogue check stays in the handler and keeps its 400 response — a
+    # face the catalogue does not know is a bad request, not a malformed
+    # body.
+    face: dict[str, Any] | None = None
 
 
 class ThreadCreate(_Body):

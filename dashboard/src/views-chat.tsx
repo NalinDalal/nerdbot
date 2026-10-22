@@ -9,6 +9,7 @@ import {
   ErrorState,
   LoadingState,
   Modal,
+  BotFace,
   Button,
   Field,
   StatusBadge,
@@ -1060,12 +1061,15 @@ function ContextPanel({
                   key={mate.id}
                   className="flex items-center justify-between gap-2 rounded-lg border border-[var(--border)] px-3 py-2"
                 >
-                  <div className="min-w-0">
-                    <div className="truncate text-[var(--step-minus-1)] font-medium text-[var(--text)]">
-                      {mate.persona || mate.id}
-                    </div>
-                    <div className="mono truncate text-[var(--step-minus-2)] text-[var(--faint)]">
-                      {mate.instructions?.slice(0, 80) || ""}
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <BotFace face={mate.face} size={32} />
+                    <div className="min-w-0">
+                      <div className="truncate text-[var(--step-minus-1)] font-medium text-[var(--text)]">
+                        {mate.persona || mate.id}
+                      </div>
+                      <div className="mono truncate text-[var(--step-minus-2)] text-[var(--faint)]">
+                        {mate.instructions?.slice(0, 80) || ""}
+                      </div>
                     </div>
                   </div>
                   <Button variant="primary" onClick={() => onSelectBot(mate.id)}>

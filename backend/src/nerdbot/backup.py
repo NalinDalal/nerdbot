@@ -151,7 +151,7 @@ def validate_manifest(manifest: dict[str, Any]) -> list[str]:
 HISTORY_TABLES = frozenset({"runs", "artifacts", "reviews", "pr_packages", "approvals", "events"})
 
 _JSON_COLUMNS: dict[str, frozenset[str]] = {
-    "teammates": frozenset({"capabilities", "permissions", "tool_policy"}),
+    "teammates": frozenset({"capabilities", "permissions", "tool_policy", "face"}),
     "tasks": frozenset({"dependencies"}),
     "memories": frozenset(),
     "issues": frozenset({"acceptance_criteria", "labels"}),
@@ -221,6 +221,7 @@ _IMPORT_COLUMNS: dict[str, frozenset[str]] = {
             "tool_policy",
             "provider_id",
             "created_at",
+            "face",
         }
     ),
     "issues": frozenset(

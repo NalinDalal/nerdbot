@@ -1,6 +1,9 @@
 import { useState } from "react";
 import { ApiError, api } from "./api";
 import { describeError, notifyError } from "./app";
+import { FacePicker } from "./bot/FacePicker";
+import { DEFAULT_FACE, normalizeFace, SHAPE_LABELS, COLOR_LABELS, EXPRESSION_LABELS, type BotFace as FaceChoice } from "./bot/face";
+import { BotAvatar } from "./bot/BotAvatar";
 import type { Board, BoardMember, MemoryEntry, Project, Provider, Run, Task, Teammate } from "./types";
 import {
   EmptyState,
@@ -52,6 +55,9 @@ export function BotDetailView({
   const [taskDescription, setTaskDescription] = useState("");
   const [taskCommand, setTaskCommand] = useState("");
   const [createTaskBusy, setCreateTaskBusy] = useState(false);
+  const [showFace, setShowFace] = useState(false);
+  const [faceDraft, setFaceDraft] = useState<FaceChoice>(DEFAULT_FACE);
+  const [faceBusy, setFaceBusy] = useState(false);
 
   const addMemory = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -115,6 +121,25 @@ export function BotDetailView({
   const unclaimed = taskList.find((t) => t.status === "pending" && !t.owner_teammate_id);
   const openCount = taskList.filter((t) => !["done", "failed", "cancelled"].includes(t.status)).length;
 
+  /** Open the face editor on the bot's current face, not on the default. */
+  const openFaceEditor = () => {
+    setFaceDraft(normalizeFace(mate.face));
+    setShowFace(true);
+  };
+
+  const saveFace = async () => {
+    setFaceBusy(true);
+    try {
+      await api.patchTeammate(teammateId, { face: faceDraft });
+      setShowFace(false);
+      all.reload();
+    } catch (err) {
+      notifyError(err);
+    } finally {
+      setFaceBusy(false);
+    }
+  };
+
   return (
     <Page>
       <PageHeader
@@ -145,6 +170,23 @@ export function BotDetailView({
           {openCount} open task{openCount === 1 ? "" : "s"} · {runList.length} runs
         </span>
       </div>
+
+      <section className="mb-6 flex flex-wrap items-center gap-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+        <BotAvatar
+          face={mate.face}
+          size={96}
+          animated
+          follow
+          label={`The face of ${mate.persona || "this bot"}`}
+        />
+        <div className="min-w-0 flex-1">
+          <SectionLabel className="mb-1">Face</SectionLabel>
+          <p className="mb-3 max-w-[52ch] text-[var(--step-minus-1)] text-[var(--muted)]">
+            The face this bot wears wherever it appears. It is yours to change.
+          </p>
+          <Button onClick={openFaceEditor}>Change face</Button>
+        </div>
+      </section>
 
       {mate.instructions ? (
         <section className="mb-6 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
@@ -343,6 +385,18 @@ export function BotDetailView({
           <EmptyState title="No memories" hint="Save a note this bot will recall in future runs." />
         )}
       </section>
+
+      {showFace ? (
+        <Modal title="Change face" onClose={() => setShowFace(false)}>
+          <FacePicker value={faceDraft} onChange={setFaceDraft} compact />
+          <div className="mt-5 flex items-center justify-end gap-2">
+            <Button onClick={() => setShowFace(false)}>Cancel</Button>
+            <Button variant="primary" onClick={() => void saveFace()} disabled={faceBusy}>
+              {faceBusy ? "Saving…" : "Save face"}
+            </Button>
+          </div>
+        </Modal>
+      ) : null}
     </Page>
   );
 }
@@ -605,7 +659,9 @@ export function BotsView() {
   const all = useAsync(() => api.listAllTeammates(), []);
   const projects = useAsync(() => api.listProjects(), []);
   const catalogue = usePermissionCatalogue();
-  const [step, setStep] = useState<"identity" | "model" | "permissions" | "memory" | "review">(
+  const [step, setStep] = useState<
+    "identity" | "face" | "model" | "permissions" | "memory" | "review"
+  >(
     "identity",
   );
   const [showCreate, setShowCreate] = useState(false);
@@ -617,6 +673,7 @@ export function BotsView() {
   const [providerId, setProviderId] = useState("");
   const [selectedPerms, setSelectedPerms] = useState<string[]>([]);
   const [memoryScope, setMemoryScope] = useState("project");
+  const [face, setFace] = useState<FaceChoice>(DEFAULT_FACE);
 
   // give-work draft (delegate a task to a specific bot from the fleet directory)
   const [giveWorkMateId, setGiveWorkMateId] = useState("");
@@ -666,7 +723,8 @@ export function BotsView() {
 
   const back = () => {
     if (step === "identity") setStep("identity");
-    else if (step === "model") setStep("identity");
+    else if (step === "face") setStep("identity");
+    else if (step === "model") setStep("face");
     else if (step === "permissions") setStep("model");
     else if (step === "memory") setStep("permissions");
     else if (step === "review") setStep("memory");
@@ -675,6 +733,8 @@ export function BotsView() {
   const next = () => {
     if (step === "identity") {
       if (!persona.trim()) return;
+      setStep("face");
+    } else if (step === "face") {
       setStep("model");
     } else if (step === "model") {
       setStep("permissions");
@@ -699,6 +759,7 @@ export function BotsView() {
         permissions: selectedPerms,
         memory_scope: memoryScope,
         provider_id: providerId || undefined,
+        face,
       });
       setShowCreate(false);
       setPid("");
@@ -707,6 +768,7 @@ export function BotsView() {
       setProviderId("");
       setSelectedPerms([]);
       setMemoryScope("project");
+      setFace(DEFAULT_FACE);
       setStep("identity");
       all.reload();
       projects.reload();
@@ -771,7 +833,7 @@ export function BotsView() {
     return tasks.some((t) => t.status === "running");
   }).length;
 
-  const steps = ["identity", "model", "permissions", "memory", "review"] as const;
+  const steps = ["identity", "face", "model", "permissions", "memory", "review"] as const;
   const stepIndex = steps.indexOf(step);
 
   return (
@@ -843,6 +905,16 @@ export function BotsView() {
                     className={`${FORM_INPUT} resize-y`}
                   />
                 </Field>
+              </>
+            )}
+            {step === "face" && (
+              <>
+                <p className="max-w-[46ch] text-[var(--step-minus-1)] text-[var(--muted)]">
+                  The face is the bot&apos;s own: it shows up wherever the bot does, so a fleet
+                  is scannable by face alone. It is yours to choose, and you can change it
+                  later.
+                </p>
+                <FacePicker value={face} onChange={setFace} compact />
               </>
             )}
             {step === "model" && (
@@ -940,24 +1012,33 @@ export function BotsView() {
               </Field>
             )}
             {step === "review" && (
-              <dl className="flex flex-col gap-1.5 text-[var(--step-minus-1)]">
-                {[
-                  ["Project", projList.find((p) => p.id === pid)?.repository || pid],
-                  ["Persona / name", persona],
-                  ["Instructions", instructions || "—"],
-                  ["Model provider", provList.find((pr) => pr.id === providerId)?.name || "(none — default)"],
-                  ["Permissions", selectedPerms.length > 0 ? selectedPerms.join(", ") : "— none —"],
-                  ["Memory scope", memoryScope],
-                ].map(([key, value]) => (
-                  <div
-                    key={key}
-                    className="flex items-baseline justify-between gap-4 border-b border-[var(--border-dim)] pb-1.5 last:border-0"
-                  >
-                    <dt className="shrink-0 text-[var(--faint)]">{key}</dt>
-                    <dd className="truncate text-right text-[var(--text-soft)]">{value}</dd>
-                  </div>
-                ))}
-              </dl>
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center gap-3">
+                  <BotAvatar face={face} size={64} label="The face this bot will wear" />
+                  <p className="text-[var(--step-minus-1)] text-[var(--muted)]">
+                    This is the face the bot will wear. You can change it at any time.
+                  </p>
+                </div>
+                <dl className="flex flex-col gap-1.5 text-[var(--step-minus-1)]">
+                  {[
+                    ["Project", projList.find((p) => p.id === pid)?.repository || pid],
+                    ["Persona / name", persona],
+                    ["Instructions", instructions || "—"],
+                    ["Face", `${SHAPE_LABELS[face.shape]} · ${COLOR_LABELS[face.color]} · ${EXPRESSION_LABELS[face.expression]}`],
+                    ["Model provider", provList.find((pr) => pr.id === providerId)?.name || "(none — default)"],
+                    ["Permissions", selectedPerms.length > 0 ? selectedPerms.join(", ") : "— none —"],
+                    ["Memory scope", memoryScope],
+                  ].map(([key, value]) => (
+                    <div
+                      key={key}
+                      className="flex items-baseline justify-between gap-4 border-b border-[var(--border-dim)] pb-1.5 last:border-0"
+                    >
+                      <dt className="shrink-0 text-[var(--faint)]">{key}</dt>
+                      <dd className="truncate text-right text-[var(--text-soft)]">{value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </div>
             )}
 
             <div className="mt-2 flex items-center justify-between gap-3">
@@ -974,6 +1055,7 @@ export function BotsView() {
                     setProviderId("");
                     setSelectedPerms([]);
                     setMemoryScope("project");
+                    setFace(DEFAULT_FACE);
                     setStep("identity");
                   }}
                 >
@@ -1033,7 +1115,7 @@ export function BotsView() {
                     className="align-top transition-colors hover:bg-[var(--surface-2)]"
                   >
                     <td className={TABLE_TD}>
-                      <BotChip persona={mate.persona || "Unnamed bot"} id={mate.id} status={liveStatus} />
+                      <BotChip persona={mate.persona || "Unnamed bot"} id={mate.id} status={liveStatus} face={mate.face} />
                       <div className="mt-0.5 truncate pl-8 text-[var(--step-minus-2)] text-[var(--faint)]">
                         {projectOf(mate.project_id)} · {tasks.length} task{tasks.length === 1 ? "" : "s"}
                       </div>
@@ -1165,6 +1247,7 @@ export function BotsView() {
 function stepName(s: string): string {
   const names: Record<string, string> = {
     identity: "Identity & role",
+    face: "Face",
     model: "Model provider",
     permissions: "Tools & permissions",
     memory: "Memory & scope",

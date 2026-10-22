@@ -29,6 +29,7 @@ def create_teammate_service(
     memory_scope: str = "project",
     permissions: list[str] | None = None,
     provider_id: str | None = None,
+    face: dict[str, str] | None = None,
     acting: Teammate | None = None,
 ) -> Teammate:
     if acting is not None:
@@ -73,6 +74,7 @@ def create_teammate_service(
             capabilities=capabilities,
             memory_scope=memory_scope,
             permissions=permissions,
+            face=face,
         )
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -298,7 +298,7 @@ export function TaskDetailView({
         <SectionLabel className="mb-2">Owner</SectionLabel>
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
           {owner ? (
-            <BotChip persona={owner.persona || "bot"} id={owner.id} status={owner.status} />
+            <BotChip persona={owner.persona || "bot"} id={owner.id} status={owner.status} face={owner.face} />
           ) : (
             <span className="text-[var(--step-minus-1)] text-[var(--muted)]">
               Unassigned — pick a bot to own this task.

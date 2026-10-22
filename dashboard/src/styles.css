@@ -33,6 +33,15 @@
   --faint: #79899a;
   --ring: rgba(46, 158, 107, 0.35);
 
+  /* Bot faces — the plate a face is drawn on. The eyes of a bot are holes
+     punched through its body, so the plate is what shows in them, and the
+     palette holds both a near-black and a near-white body: the plate is
+     therefore the opposite of the body, and it does not change with the
+     theme (a face is a portrait, and a portrait medallion reads the same
+     way in both). Mirrors PLATE_LIGHT / PLATE_DARK in src/bot/face.ts. */
+  --face-plate-light: #f2f3f2;
+  --face-plate-dark: #0c1116;
+
   /* Semantic colors */
   --accent: #2e9e6b;
   --accent-dim: rgba(46, 158, 107, 0.10);

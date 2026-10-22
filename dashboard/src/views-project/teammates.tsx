@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { api, describeError } from "../api";
 import { notifyError } from "../app";
+import { FacePicker } from "../bot/FacePicker";
+import { DEFAULT_FACE, normalizeFace, type BotFace as FaceChoice } from "../bot/face";
 import { Provider, Teammate as TeammateT } from "../types";
-import { Button, CARD_SHELL, ERROR_BOX, EmptyState, ErrorState, Field, LoadingState, Modal, PILL_SHELL, StatusBadge, useAsync, usePermissionCatalogue } from "../components";
+import { BotFace, Button, CARD_SHELL, ERROR_BOX, EmptyState, ErrorState, Field, LoadingState, Modal, PILL_SHELL, StatusBadge, useAsync, usePermissionCatalogue } from "../components";
 export function TeammatesTab({ projectId }: { projectId: string }) {
   const list = useAsync(() => api.listTeammates(projectId), [projectId]);
   const providers = useAsync(() => api.listProviders(projectId), [projectId]);
@@ -65,6 +67,8 @@ function BotCard({
 }) {
   const [showAttach, setShowAttach] = useState(false);
   const [showPerms, setShowPerms] = useState(false);
+  const [showFace, setShowFace] = useState(false);
+  const [faceDraft, setFaceDraft] = useState<FaceChoice>(DEFAULT_FACE);
   const catalogue = usePermissionCatalogue();
   const act = async (fn: () => Promise<unknown>) => {
     try {
@@ -79,15 +83,26 @@ function BotCard({
   return (
     <div className={CARD_SHELL}>
       <div className="flex items-center gap-3" style={{ justifyContent: "space-between" }}>
-        <div>
-          <strong>{mate.persona || "Unnamed bot"}</strong>{" "}
-          <span className="mono text-[var(--muted)]">{mate.id}</span> <StatusBadge status={mate.status} />
+        <div className="flex items-center gap-2.5">
+          <BotFace face={mate.face} size={32} />
+          <div>
+            <strong>{mate.persona || "Unnamed bot"}</strong>{" "}
+            <span className="mono text-[var(--muted)]">{mate.id}</span> <StatusBadge status={mate.status} />
+          </div>
         </div>
         <div className="flex items-center gap-3">
           <Button onClick={() => setShowAttach(true)}>
             {attached ? "Switch model" : "Attach model"}
           </Button>
           <Button onClick={() => setShowPerms(true)}>Permissions</Button>
+          <Button
+            onClick={() => {
+              setFaceDraft(normalizeFace(mate.face));
+              setShowFace(true);
+            }}
+          >
+            Face
+          </Button>
           <Button onClick={() => void act(() => api.disableTeammate(mate.id))}>Disable</Button>
           <Button onClick={() => void act(() => api.archiveTeammate(mate.id))}>Archive</Button>
         </div>
@@ -173,6 +188,23 @@ function BotCard({
               ))}
             </div>
           )}
+        </Modal>
+      ) : null}
+      {showFace ? (
+        <Modal title={`Face of ${mate.persona || mate.id}`} onClose={() => setShowFace(false)}>
+          <FacePicker value={faceDraft} onChange={setFaceDraft} compact />
+          <div className="mt-4 flex items-center justify-end gap-2">
+            <Button onClick={() => setShowFace(false)}>Cancel</Button>
+            <Button
+              variant="primary"
+              onClick={() => {
+                setShowFace(false);
+                void act(() => api.patchTeammate(mate.id, { face: faceDraft }));
+              }}
+            >
+              Save face
+            </Button>
+          </div>
         </Modal>
       ) : null}
       {showPerms ? (
@@ -312,6 +344,7 @@ function BotForm({
   const [instructions, setInstructions] = useState("");
   const [capabilities, setCapabilities] = useState("");
   const [providerId, setProviderId] = useState<string>(providers[0]?.id ?? "");
+  const [face, setFace] = useState<FaceChoice>(DEFAULT_FACE);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -329,6 +362,7 @@ function BotForm({
               .split(",")
               .map((s) => s.trim())
               .filter(Boolean),
+            face,
           });
           if (providerId) {
             await api.patchTeammate(created.id, { provider_id: providerId });
@@ -363,6 +397,9 @@ function BotForm({
           onChange={(e) => setCapabilities(e.target.value)}
           placeholder="code, review"
         />
+      </Field>
+      <Field label="Face — the bot's own, changeable later">
+        <FacePicker value={face} onChange={setFace} compact />
       </Field>
       <Field label="Model connection (change or detach later)">
         {providers.length === 0 ? (

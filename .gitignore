@@ -13,6 +13,9 @@ build/
 
 .nerdbot-data/
 
+# generated face renders (dashboard/scripts/render-*.ts)
+dashboard/out/
+
 # runtime task checkouts + produced evidence (never committed)
 workspaces/
 artifacts/

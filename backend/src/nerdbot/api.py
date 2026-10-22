@@ -25,6 +25,7 @@ from . import chat as chat_mod
 from . import decomposition as decomposition_mod
 from . import delegation as delegation_mod
 from . import executor as executor_mod
+from . import faces as faces_mod
 from . import fleet as fleet_mod
 from . import gates as gates_mod
 from . import knowledge as knowledge_mod
@@ -151,6 +152,22 @@ def _enforce_memory_scope(
             status_code=403,
             detail=f"teammate may not access memory scope {scope!r}",
         )
+
+
+def _validated_face(raw: Any) -> dict[str, str] | None:
+    """Check a face against the catalogue, or refuse it.
+
+    A face the catalogue does not know is a face nobody can draw, so it is a
+    400 rather than a stored value the dashboard would silently replace with
+    the default. ``None`` means "no face in this request", which is not the
+    same as an empty one.
+    """
+    if raw is None:
+        return None
+    try:
+        return faces_mod.validate_face(raw)
+    except faces_mod.FaceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _project_counts(conn: sqlite3.Connection, project_id: str) -> dict[str, int]:
@@ -321,6 +338,7 @@ def create_app() -> FastAPI:
         acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
     ) -> dict[str, Any]:
         require_project_owner(conn, project_id, principal)
+        face = _validated_face(body.face)
         mate = fleet_mod.create_teammate_service(
             conn,
             project_id,
@@ -330,6 +348,7 @@ def create_app() -> FastAPI:
             memory_scope=body.memory_scope or "project",
             permissions=list(body.permissions or []),
             provider_id=body.provider_id or None,
+            face=face,
             acting=acting,
         )
         return mate.model_dump(mode="json")
@@ -388,6 +407,8 @@ def create_app() -> FastAPI:
             # provider_id: null is an explicit DETACH (absent = no change)
             "clear_provider": ("provider_id" in body and body["provider_id"] is None),
         }
+        if body.get("face") is not None:
+            updates["face"] = _validated_face(body.get("face"))
         mate = fleet_mod.update_teammate_service(
             conn, teammate_id, updates, acting=acting
         )

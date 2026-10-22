@@ -38,6 +38,7 @@ Projects are optional contexts. General assistant chats use your default Home co
 
 ### Persistent teammates / bots
 - Persistent identity: persona, instructions, configured provider/model, permissions, memory scope, tool policy.
+- A face of your own: pick a body shape, a colour and a resting expression while you set the bot up, and change it later from the bot's own page. The avatar is drawn in the browser, from a port of [bloub](https://github.com/jeremy-prt/bloub) (MIT) — see `dashboard/src/bot/README.md`.
 - Bots access the same authorized logical workspace resources as you, subject to permissions.
 - Select a bot from the conversation, or delegate to a suitable specialist.
 - Per-task Git workspaces are isolated. Patches, files, and artifacts return through the existing transfer model; no unsafe shared Git checkouts.
@@ -72,6 +73,7 @@ Browser (React dashboard, served at /)
 Relevant architecture decision records:
 - `docs/decisions/0008-workspace-isolation.md:` workspace isolation and per-task Git workspaces
 - `docs/decisions/0009-shell-tool-approval-policy.md:` what the approval gate covers, and what bounds the shell instead
+- `docs/decisions/0010-bot-faces.md:` a bot's face is the owner's choice, and it lives in the dashboard
 - `docs/ARCHITECTURE.md:` architecture boundary document and eight extension seams
 - `docs/PLAN.md:` phase plan and capability matrix
 

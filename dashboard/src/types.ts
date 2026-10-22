@@ -18,6 +18,14 @@ export interface ProjectCounts {
   approvals: number;
 }
 
+/** A bot's face: the body shape, the colour and the resting expression the
+ *  owner picked. The ids come from the catalogue in `src/bot/`. */
+export interface BotFace {
+  shape: string;
+  color: string;
+  expression: string;
+}
+
 export interface Teammate {
   id: string;
   project_id: string;
@@ -29,6 +37,7 @@ export interface Teammate {
   status: string;
   tool_policy: Record<string, unknown>;
   provider_id: string | null;
+  face: BotFace;
 }
 
 export interface Task {

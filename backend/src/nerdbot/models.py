@@ -77,6 +77,19 @@ class Project(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
 
+class BotFace(BaseModel):
+    """The face of a bot: three choices the owner makes when setting it up.
+
+    The ids come from the catalogue in :mod:`nerdbot.faces`, which mirrors
+    the dashboard's own list. The geometry lives in the dashboard, where the
+    avatar is drawn; this model only carries the vocabulary.
+    """
+
+    shape: str = "cercle"
+    color: str = "encre"
+    expression: str = "neutre"
+
+
 class Teammate(BaseModel):
     id: str
     project_id: str
@@ -88,6 +101,7 @@ class Teammate(BaseModel):
     status: TeammateStatus = TeammateStatus.ACTIVE
     tool_policy: dict[str, Any] = Field(default_factory=dict)
     provider_id: str | None = None
+    face: BotFace = Field(default_factory=BotFace)
 
 
 class Task(BaseModel):
