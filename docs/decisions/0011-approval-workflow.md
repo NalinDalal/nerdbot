@@ -141,8 +141,59 @@ permit lets the same exact action through again.
 permissions and the provider — but not the instructions. The *action* that
 runs is still the checkpointed one, so the owner approves exactly what
 happens; the digest is the request's identity rather than a complete
-description of it. Widening it is a change to the gate's contract and
-belongs to its own decision.
+description of it. See `0012-action-binding.md` for the second digest that
+closes that gap, and for why widening the gate's own digest would be a
+breaking change.
+
+## The crash windows
+
+A process can die at any point around the action. Each boundary leaves a
+state the recovery knows about, and none of them can repeat the action.
+
+| The process dies… | What is left | What the recovery does |
+| --- | --- | --- |
+| before the decision is written | the request is pending, the action has not run | nothing to do; the request is still decidable |
+| after the decision, before the claim | the request is approved, the action has not run | the sweep carries the action out — it is still to be done |
+| after the claim, before the action | the action is claimed, the outcome is unknown | the action is **lost**, and NOT repeated; the run is closed with that reason and the task is left blocked |
+| after the action, before the run is settled | the action ran, the run is still waiting | the sweep settles the run as done, and the run says what it did |
+| after the run is settled | everything is consistent | nothing to do |
+
+The recovery runs in two places: the executor's sweep, so a server left
+running heals itself, and `POST /approvals/sweep`, so the interface can ask
+for it. Both are the same code — `approval_flow.recover`.
+
+**At-most-once means an action can be lost.** The third row is the price,
+and it is the right way round: for a privileged action, losing it is a far
+better failure than repeating it, and the loss is explicit — the run says
+so, the task is left blocked, and a retry re-asks.
+
+## Concurrency
+
+Two decisions arriving at the same instant are settled by **conditional
+updates**, not by a check followed by a write:
+
+- the decision lands only on a row that is still pending;
+- the claim lands only on a checkpoint that has not been claimed;
+- the run is settled only by a run that is still waiting.
+
+So two requests for the same approval cannot both carry the action out,
+and the loser's answer is "already decided" rather than a second
+performance.
+
+**The claim is per checkpoint, not per run.** A run-level claim would
+serialise a batch: two requests answered at the same moment would leave
+one of the two actions unperformed, and the owner's second "yes" would
+silently do nothing. The run's status is a *summary* of its checkpoints, so
+a decision that arrives after the run was settled still performs its own
+action.
+
+**The task's own state is not forced.** Two workers finishing the same
+batch can disagree about where the task is, and one of them can find it
+already done. The settle updates the task only if the transition is
+allowed; otherwise the task keeps the state it has, and the run's summary
+still says what happened. A task's lifecycle belongs to whoever set it
+last, and a summary update is not a reason to raise.
+
 
 ## Consequences
 
