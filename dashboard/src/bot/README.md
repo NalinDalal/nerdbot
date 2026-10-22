@@ -27,9 +27,11 @@ holds here.
 | `engine.ts` | The clock-free engine: `sample(t)` is a pure function of time. |
 | `repere.ts` | The reference frame everything is measured in. |
 | `gaze.ts` | Where the bot looks when it follows the pointer. |
-| `face.ts` | **Ours**: the face as a choice — the three ids, the labels, the plate. |
+| `face.ts` | **Ours**: the face as a choice — the three ids, the labels, the plate, the random draw. |
 | `BotAvatar.tsx` | **Ours**: the React component that draws the engine's frames. |
 | `FacePicker.tsx` | **Ours**: the picker the owner uses to choose a face. |
+| `ticker.ts` | **Ours**: the one animation loop every animated face shares. |
+| `status.ts` | **Ours**: which pose a status earns, and what a bot is doing now. |
 
 ## What changed in the port
 
@@ -66,3 +68,9 @@ assumes nothing about the method.
 The heavy one ("lets no shape let an eye out of the silhouette") sweeps 680
 combinations of state, shape and expression over three seconds of time. It
 takes a few seconds and it is the only test that proves what the eye sees.
+
+The rest are ours: `ticker.test.ts` drives the shared loop a frame at a time
+through an injected scheduler, `status.test.ts` pins the status-to-pose
+mapping and the activity priority, and `random-face.test.ts` makes sure
+"Surprise me" never appears to do nothing. `src/motion.test.ts` covers the
+reduced-motion read; the component uses it to turn `animated` into a still.

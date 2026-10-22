@@ -84,7 +84,9 @@ themes.
 **Small faces do not animate.** A fleet page can hold twenty avatars, and
 twenty animation loops are a page that janks. The faces in lists draw a
 single frame; the ones that carry the page — the bot's own page, the
-picker's preview — run the loop.
+picker's preview — run the loop. The still is posed to the bot's status, so a
+frozen face still says what the bot is doing; see
+[0013](0013-bot-motion.md).
 
 ## Consequences
 
