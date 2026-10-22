@@ -3,7 +3,7 @@
  * looked at in a single image.
  *
  * A tool, not a test: `npx vite-node scripts/render-sheet.ts`, then open
- * `out/sheet.png`.
+ * `out/sheet.svg`.
  */
 import { writeFileSync, mkdirSync } from "node:fs";
 import { BotEngine } from "../src/bot/engine";
