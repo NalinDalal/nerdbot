@@ -1123,7 +1123,7 @@ export function BotsView() {
                     className="align-top transition-colors hover:bg-[var(--surface-2)]"
                   >
                     <td className={TABLE_TD}>
-                      <BotChip persona={mate.persona || "Unnamed bot"} id={mate.id} status={liveStatus} face={mate.face} />
+                      <BotChip href={`#/bot/${mate.id}`} persona={mate.persona || "Unnamed bot"} id={mate.id} status={liveStatus} face={mate.face} />
                       <div className="mt-0.5 truncate pl-8 text-[var(--step-minus-2)] text-[var(--faint)]">
                         {projectOf(mate.project_id)} · {tasks.length} task{tasks.length === 1 ? "" : "s"}
                       </div>

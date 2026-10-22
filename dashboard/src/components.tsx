@@ -429,19 +429,34 @@ export function BotChip({
   status,
   face,
   size = "sm",
+  href,
 }: {
   persona: string;
   id: string;
   status: string;
   face?: BotFaceSpec | null;
   size?: "sm" | "md";
+  /** Where the name goes. Omit for a chip that is only a label. */
+  href?: string;
 }) {
+  const name = persona || "Unnamed";
+  const nameClass = "truncate text-[var(--step-minus-1)] text-[var(--text-soft)]";
   return (
-    <span className="inline-flex items-center gap-2 min-w-0">
+    <span className="inline-flex min-w-0 items-center gap-2">
       <BotFace face={face} size={size === "md" ? 36 : 28} status={status} />
-      <span className="truncate text-[var(--step-minus-1)] text-[var(--text-soft)]" title={id}>
-        {persona || "Unnamed"}
-      </span>
+      {href ? (
+        <a
+          href={href}
+          title={id}
+          className={`${nameClass} hover:text-[var(--text)] hover:underline`}
+        >
+          {name}
+        </a>
+      ) : (
+        <span className={nameClass} title={id}>
+          {name}
+        </span>
+      )}
     </span>
   );
 }
