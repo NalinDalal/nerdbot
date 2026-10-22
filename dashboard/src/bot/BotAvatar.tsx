@@ -1,4 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useReducedMotion } from "../motion";
 import { NOTIF_BLUE } from "./decor";
 import { BotEngine, type BotFrame } from "./engine";
 import { EXPRESSION_BY_ID } from "./expressions";
@@ -8,6 +9,7 @@ import { lookTarget, TURN_TIME } from "./gaze";
 import { DEMI_CORPS, DEMI_VIEWBOX, RAYON } from "./repere";
 import { SHAPE_BY_ID, mixHex } from "./skins";
 import { STATE_BY_ID, type StateId } from "./states";
+import { ticker } from "./ticker";
 
 /**
  * The bot avatar.
@@ -20,8 +22,13 @@ import { STATE_BY_ID, type StateId } from "./states";
  *
  * - static: one frame, no loop. Used everywhere a face appears in a list,
  *   where twenty live avatars would cost twenty animation loops.
- * - animated: a `requestAnimationFrame` loop with a delta-bounded clock, so a
- *   backgrounded tab does not jump forward when it comes back.
+ * - animated: the shared loop in `ticker.ts`, which runs one
+ *   `requestAnimationFrame` for every face on the page and a delta-bounded
+ *   clock, so a backgrounded tab does not jump forward when it comes back.
+ *
+ * Animated is not a promise. Someone who has asked their system to reduce
+ * motion gets the still frame instead: the avatar is a decoration, and a
+ * decoration is never a reason to overrule that.
  */
 
 export interface BotAvatarProps {
@@ -75,8 +82,6 @@ export function BotAvatar({
   const plateHex = facePlateHex(resolved);
 
   const svgRef = useRef<SVGSVGElement | null>(null);
-  const clockRef = useRef(0);
-  const lastRef = useRef(0);
 
   // One engine per mounted avatar. It is created once and then driven by
   // dated setters, so the rendering stays a pure function of time.
@@ -85,53 +90,52 @@ export function BotAvatar({
   );
 
   /**
+   * Animated only if asked for AND permitted. The stylesheet's
+   * `prefers-reduced-motion` block cannot reach an SVG driven by
+   * `requestAnimationFrame`, so the preference is read here instead.
+   */
+  const reduced = useReducedMotion();
+  const running = animated && !reduced;
+
+  /**
    * The static frame is DERIVED, not stored: a face that never moves is a
    * function of its shape, its expression and its state, and deriving it
    * means it can never disagree with the props.
+   *
+   * It is also the first frame an animated face draws, so the component
+   * never commits an empty silhouette while the loop wakes up.
    */
-  const stillFrame = useMemo(() => {
-    if (animated) return null;
+  const posedStill = useMemo(() => {
     const own = new BotEngine(RAYON, state, shapeRadii, expression);
     if (state !== "idle") own.setState(state, 0);
     return own.sample(frozenAt);
-  }, [animated, state, shapeRadii, expression, frozenAt]);
+  }, [state, shapeRadii, expression, frozenAt]);
 
   const [liveFrame, setLiveFrame] = useState<BotFrame | null>(null);
 
   // A fresh frame whenever the shape, the expression or the state changes.
+  // The time comes from the shared clock, so the morph starts from the
+  // moment the page is actually showing.
   useEffect(() => {
-    engine.setShape(shapeRadii, clockRef.current);
-    engine.setExpression(expression, clockRef.current);
-    engine.setState(state, clockRef.current);
+    const now = ticker.now();
+    engine.setShape(shapeRadii, now);
+    engine.setExpression(expression, now);
+    engine.setState(state, now);
   }, [engine, shapeRadii, expression, state]);
 
   useEffect(() => {
-    if (!animated) return;
-    let raf = 0;
-    let disposed = false;
-
-    const tick = (ms: number) => {
-      if (disposed) return;
-      raf = requestAnimationFrame(tick);
-      // Scene clock with a bounded delta: a hidden tab then shown again
-      // resumes without jumping forward (rAF is suspended in the meantime).
-      const dt = lastRef.current ? Math.min((ms - lastRef.current) / 1000, 0.064) : 0;
-      lastRef.current = ms;
-      clockRef.current += dt;
-      setLiveFrame(engine.sample(clockRef.current));
-    };
-    raf = requestAnimationFrame(tick);
-    return () => {
-      disposed = true;
-      cancelAnimationFrame(raf);
-      lastRef.current = 0;
-    };
-  }, [engine, animated]);
+    if (!running) return;
+    const draw = (t: number) => setLiveFrame(engine.sample(t));
+    // Draw once immediately: a face that waits for its first frame would be
+    // blank until then.
+    draw(ticker.now());
+    return ticker.subscribe(draw);
+  }, [engine, running]);
 
   // Pointer tracking: the eyes follow the cursor, but only on the states
   // that carry the resting face — elsewhere the gaze pose IS the animation.
   useEffect(() => {
-    if (!animated || !follow) return;
+    if (!running || !follow) return;
     let pointer: { x: number; y: number } | null = null;
     let aiming = false;
     let turnSince = 0;
@@ -149,7 +153,7 @@ export function BotAvatar({
     const aim = () => {
       if (!STATE_BY_ID.get(engine.state)?.baseFace) {
         if (aiming) {
-          engine.setLook(null, clockRef.current, TURN_TIME);
+          engine.setLook(null, ticker.now(), TURN_TIME);
           aiming = false;
         }
         return;
@@ -159,17 +163,17 @@ export function BotAvatar({
       // normalisation below would become `0 / 0`, i.e. `NaN`. The engine
       // KEEPS the last target: a single `NaN` set once stays for good.
       if (!box || box.width === 0 || box.height === 0) return;
-      if (!aiming) turnSince = clockRef.current;
+      if (!aiming) turnSince = ticker.now();
       const halfWidth = Math.max(1, window.innerWidth / 2);
       const halfHeight = Math.max(1, window.innerHeight / 2);
       engine.setLook(
         lookTarget({
           nx: pointer ? clamp((pointer.x - (box.left + box.width / 2)) / halfWidth, -1, 1) : 0,
           ny: pointer ? clamp((pointer.y - (box.top + box.height / 2)) / halfHeight, -1, 1) : 0,
-          tour: easings.easeOutQuint(clamp((clockRef.current - turnSince) / TURN_TIME)),
+          tour: easings.easeOutQuint(clamp((ticker.now() - turnSince) / TURN_TIME)),
           pointer: pointer !== null,
         }),
-        clockRef.current,
+        ticker.now(),
       );
       aiming = true;
     };
@@ -184,7 +188,7 @@ export function BotAvatar({
       document.removeEventListener("pointerleave", onLeave);
       window.clearInterval(timer);
     };
-  }, [engine, animated, follow]);
+  }, [engine, running, follow]);
 
   const half = frame === "scene" ? DEMI_VIEWBOX : DEMI_CORPS;
   // A unique id for the mask, so two avatars on the same page do not share
@@ -192,7 +196,7 @@ export function BotAvatar({
   // stripped because they are not welcome in a url(#…) reference.
   const maskId = `bot-mask-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
 
-  const f = animated ? liveFrame : stillFrame;
+  const f = running ? (liveFrame ?? posedStill) : posedStill;
   const eyes = f?.eyes ?? [];
 
   return (

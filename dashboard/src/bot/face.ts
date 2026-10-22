@@ -121,6 +121,41 @@ export function isDefaultFace(face: BotFace): boolean {
   );
 }
 
+/**
+ * A face nobody chose.
+ *
+ * The picker is a wall of forty tiles, and someone with no opinion will
+ * otherwise leave the default on every bot. The draw is a plain uniform pick
+ * per field, which is the honest reading of "surprise": weighting it towards
+ * the combinations that happen to look good would keep returning the same
+ * faces and stop being a surprise.
+ *
+ * `rng` is a parameter rather than `Math.random` captured here, so a test can
+ * pin the sequence. `avoid` is the face already on screen, because a button
+ * that appears to do nothing reads as broken.
+ */
+export function randomFace(rng: () => number = Math.random, avoid?: BotFace): BotFace {
+  const pick = <T,>(ids: readonly T[]): T =>
+    ids[Math.min(ids.length - 1, Math.floor(rng() * ids.length))]!;
+  const face: BotFace = {
+    shape: pick(SHAPE_IDS),
+    color: pick(COLOR_IDS),
+    expression: pick(EXPRESSION_IDS),
+  };
+  const same =
+    avoid !== undefined &&
+    face.shape === avoid.shape &&
+    face.color === avoid.color &&
+    face.expression === avoid.expression;
+  if (same) {
+    // Step the colour instead of redrawing: the shape and the expression are
+    // the two choices that read at a glance, so any change beats none.
+    const index = COLOR_IDS.indexOf(face.color);
+    face.color = COLOR_IDS[(index + 1) % COLOR_IDS.length]!;
+  }
+  return face;
+}
+
 /** The body colour of a face, as a hex string. */
 export function faceInk(face: BotFace): string {
   return COLOR_BY_ID.get(face.color)?.hex ?? "#0a0a0c";

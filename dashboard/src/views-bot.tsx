@@ -4,6 +4,7 @@ import { describeError, notifyError } from "./app";
 import { FacePicker } from "./bot/FacePicker";
 import { DEFAULT_FACE, normalizeFace, SHAPE_LABELS, COLOR_LABELS, EXPRESSION_LABELS, type BotFace as FaceChoice } from "./bot/face";
 import { BotAvatar } from "./bot/BotAvatar";
+import { botActivity, faceStateFor } from "./bot/status";
 import type { Board, BoardMember, MemoryEntry, Project, Provider, Run, Task, Teammate } from "./types";
 import {
   EmptyState,
@@ -121,6 +122,9 @@ export function BotDetailView({
   const unclaimed = taskList.find((t) => t.status === "pending" && !t.owner_teammate_id);
   const openCount = taskList.filter((t) => !["done", "failed", "cancelled"].includes(t.status)).length;
 
+  /** What this bot is doing right now; the face is posed to match. */
+  const activity = botActivity(mate.status, taskList, runList);
+
   /** Open the face editor on the bot's current face, not on the default. */
   const openFaceEditor = () => {
     setFaceDraft(normalizeFace(mate.face));
@@ -177,6 +181,7 @@ export function BotDetailView({
           size={96}
           animated
           follow
+          state={faceStateFor(activity)}
           label={`The face of ${mate.persona || "this bot"}`}
         />
         <div className="min-w-0 flex-1">
@@ -1104,11 +1109,10 @@ export function BotsView() {
                 );
                 const latest = tasks[0];
                 const busy = active.length > 0;
-                const liveStatus = busy
-                  ? "running"
-                  : tasks.some((t) => t.status === "ready")
-                    ? "ready"
-                    : mate.status;
+                // What the bot is doing, not whether it is enabled: an
+                // unanswered approval outranks work in flight, so a blocked
+                // bot no longer looks busy.
+                const liveStatus = botActivity(mate.status, tasks);
                 const provider = mate.provider_id
                   ? (providerNames.data as Record<string, Provider> | undefined)?.[mate.provider_id]
                   : undefined;
@@ -1127,7 +1131,13 @@ export function BotsView() {
                     <td className={`${TABLE_TD} whitespace-nowrap`}>
                       <StatusDot
                         status={liveStatus}
-                        label={liveStatus === "running" ? "working" : liveStatus}
+                        label={
+                          liveStatus === "running"
+                            ? "working"
+                            : liveStatus === "awaiting_approval"
+                              ? "needs you"
+                              : liveStatus
+                        }
                         pulse={liveStatus === "running"}
                       />
                     </td>

@@ -3,6 +3,8 @@ import type { ReactElement } from "react";
 import type { ReactNode } from "react";
 import { api, describeError } from "./api";
 import { BotAvatar } from "./bot/BotAvatar";
+import { faceStateFor } from "./bot/status";
+import type { StateId } from "./bot/states";
 import type { Approval, Permission, Task } from "./types";
 import type { BotFace as BotFaceSpec } from "./types";
 
@@ -371,17 +373,26 @@ export function StatusDot({
  *  two bots look different because their owner said so.
  *
  *  A live bot is a whole screen of faces, so the small ones draw a single
- *  frame: twenty animation loops on one page is a page that janks.
+ *  frame: twenty animation loops on one page is a page that janks. The
+ *  frame is still POSED, though — `state` says what the bot is doing, and a
+ *  face frozen mid-work still reads as working.
+ *
+ *  `status` also draws the small status dot, because a caller that has the
+ *  word usually wants the glance. A caller that already shows a badge
+ *  passes `state` alone and keeps the avatar quiet.
  */
 export function BotFace({
   face,
   size = 28,
   status,
+  state,
   className = "",
 }: {
   face?: BotFaceSpec | null;
   size?: number;
   status?: string;
+  /** The pose, when the caller knows it. Defaults to the status's pose. */
+  state?: StateId;
   className?: string;
 }) {
   const tone = status ? statusTone(status) : "neutral";
@@ -401,7 +412,7 @@ export function BotFace({
       style={{ width: size, height: size }}
       aria-hidden
     >
-      <BotAvatar face={face} size={size} />
+      <BotAvatar face={face} size={size} state={state ?? faceStateFor(status)} />
       {status ? (
         <span
           className="absolute -bottom-0.5 -right-0.5 rounded-full ring-2 ring-[var(--surface)]"

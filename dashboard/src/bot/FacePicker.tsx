@@ -6,6 +6,7 @@ import {
   EXPRESSION_LABELS,
   SHAPE_IDS,
   SHAPE_LABELS,
+  randomFace,
   type BotFace,
 } from "./face";
 import { COLOR_BY_ID } from "./skins";
@@ -40,21 +41,39 @@ export function FacePicker({ value, onChange, compact = false }: FacePickerProps
             label={`Preview of the selected face: ${SHAPE_LABELS[value.shape]}, ${COLOR_LABELS[value.color]}, ${EXPRESSION_LABELS[value.expression]}`}
           />
         </div>
-        <dl className="min-w-0 flex-1 text-[var(--step-minus-1)]">
-          {[
-            ["Body", SHAPE_LABELS[value.shape]],
-            ["Colour", COLOR_LABELS[value.color]],
-            ["Expression", EXPRESSION_LABELS[value.expression]],
-          ].map(([key, text]) => (
-            <div
-              key={key}
-              className="flex items-baseline justify-between gap-4 border-b border-[var(--border-dim)] py-1 last:border-0"
+        <div className="min-w-0 flex-1">
+          <dl className="text-[var(--step-minus-1)]">
+            {[
+              ["Body", SHAPE_LABELS[value.shape]],
+              ["Colour", COLOR_LABELS[value.color]],
+              ["Expression", EXPRESSION_LABELS[value.expression]],
+            ].map(([key, text]) => (
+              <div
+                key={key}
+                className="flex items-baseline justify-between gap-4 border-b border-[var(--border-dim)] py-1 last:border-0"
+              >
+                <dt className="text-[var(--faint)]">{key}</dt>
+                <dd className="truncate text-[var(--text-soft)]">{text}</dd>
+              </div>
+            ))}
+          </dl>
+
+          {/* The three fieldsets below are precise but slow: eight bodies by
+              twelve colours by sixteen expressions. This is the way out for
+              someone who does not want to make three decisions. */}
+          <div className="mt-2 flex justify-end">
+            <button
+              type="button"
+              onClick={() => onChange(randomFace(Math.random, value))}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1 text-[var(--step-minus-1)] text-[var(--text-soft)] transition-colors hover:border-[var(--border-focus)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
             >
-              <dt className="text-[var(--faint)]">{key}</dt>
-              <dd className="truncate text-[var(--text-soft)]">{text}</dd>
-            </div>
-          ))}
-        </dl>
+              <span aria-hidden="true" className="text-[var(--accent)]">
+                ✦
+              </span>
+              Surprise me
+            </button>
+          </div>
+        </div>
       </div>
 
       <fieldset>

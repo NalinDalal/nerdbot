@@ -3,6 +3,7 @@ import { api, describeError } from "../api";
 import { notifyError } from "../app";
 import { FacePicker } from "../bot/FacePicker";
 import { DEFAULT_FACE, normalizeFace, type BotFace as FaceChoice } from "../bot/face";
+import { faceStateFor } from "../bot/status";
 import { Provider, Teammate as TeammateT } from "../types";
 import { BotFace, Button, CARD_SHELL, ERROR_BOX, EmptyState, ErrorState, Field, LoadingState, Modal, PILL_SHELL, StatusBadge, useAsync, usePermissionCatalogue } from "../components";
 export function TeammatesTab({ projectId }: { projectId: string }) {
@@ -84,7 +85,7 @@ function BotCard({
     <div className={CARD_SHELL}>
       <div className="flex items-center gap-3" style={{ justifyContent: "space-between" }}>
         <div className="flex items-center gap-2.5">
-          <BotFace face={mate.face} size={32} />
+          <BotFace face={mate.face} size={32} state={faceStateFor(mate.status)} />
           <div>
             <strong>{mate.persona || "Unnamed bot"}</strong>{" "}
             <span className="mono text-[var(--muted)]">{mate.id}</span> <StatusBadge status={mate.status} />
