@@ -143,11 +143,12 @@ curl -H "Authorization: Bearer $NERDBOT_TOKEN" \
 
 ## First-use walkthrough
 
-1. **Open Home / Command Center.** Start the server, open `http://localhost:8080`, sign in with your bearer token. You land in the Command Center: an attention banner across the whole workspace (runs in flight, failed runs, approvals waiting for one-tap decisions) plus a team-level execution rollup, above the chat composer. No project is required.
-2. **Start a chat.** Click **New chat** (or pick a recent conversation) and send a message. The assistant answers using your configured provider, or the mock provider if none is set.
-3. **Create a project.** From the sidebar, open **Workspace > Projects**, then create a project (a repository plus shared knowledge, memory, tasks, bots, boards, and approvals). Projects are optional organizational contexts; they add files, instructions, history, and scoped work to your chats.
-4. **Configure a teammate.** In the project (or the global Fleet page), create a bot: give it a persona, instructions, memory scope, permissions, and attach a model provider. Bots are persistent teammates with their own task history.
-5. **Run a real task.** From a conversation, click **Task** to create a task from the chat, or create one in Projects. Assign it to your bot and run it. The bot executes in its isolated workspace. Inspect the run output, artifacts, workspace files, and diff from the execution view or the task page. For admin actions, you will see an approval to decide (reject / approve once / approve forever). A run that is still in flight can be stopped with **Stop run** — the command's whole process group is killed and the run is recorded as `cancelled`.
+1. **Open Home.** Start the server, open `http://localhost:8080`, sign in with your bearer token. Home is the command surface: a composer, a work pulse (running, queued, needs you), one conversation list, and an attention banner only when a run or an approval actually needs you. No workspace is required to land here.
+2. **Start a chat.** Click **New chat** (or pick a recent conversation) and send a message. The assistant answers using the model connected to that workspace, or the mock provider if none is set.
+3. **Open Work.** Work is the inbox for every task across every workspace: needs you, running, queued, and done. Start a task there with **New task**, choose a workspace and (optionally) a bot, and open a row to reach the task page.
+4. **Configure a bot in Fleet.** Create a bot with a persona, instructions, memory scope, permissions, and a model provider. The bot page leads with its live state and current work; **Give work** starts a task for it.
+5. **Connect a model and create workspaces in Settings.** Settings lists each workspace and its model connection, with Test and Add actions. The same page creates a workspace. Boards, Teams, all workspaces, and Capabilities live under **Advanced**.
+6. **Run a real task.** The task page leads with the latest output. **Run**, **Stop run**, and **Run again** are in the header; every other action is under **More**. The bot executes in its isolated workspace, and the run output, artifacts, workspace files, and diff stay attached to the task. For admin actions, you will see an approval to decide (reject / approve once / approve forever). A run that is still in flight can be stopped with **Stop run**; the command's whole process group is killed and the run is recorded as `cancelled`.
 
 ## How context, memory, and permissions work
 

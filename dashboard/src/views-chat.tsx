@@ -3,7 +3,7 @@ import { toast } from "sonner";
 import { api, ApiError } from "./api";
 import { notifyError, navigate } from "./app";
 import type { ChatMessage, ChatThread, Teammate } from "./types";
-import { AttentionBanner, ExecutionRollup, useWorkspaceSummary } from "./views-home";
+import { AttentionBanner, useWorkspaceSummary } from "./views-home";
 import {
   EmptyState,
   ErrorState,
@@ -90,6 +90,9 @@ export function ConversationView({
   }
 
   const isHome = !projectId;
+  const workspaceName = summary.data?.summary.bundles.find(
+    (bundle) => bundle.project.id === resolvedProjectId,
+  )?.project.repository;
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -100,12 +103,12 @@ export function ConversationView({
       <header className="flex flex-wrap items-end justify-between gap-3 border-b border-[var(--border-dim)] py-3 pl-14 pr-4 md:px-6">
         <div className="min-w-0">
           <h1 className="text-[var(--step-1)] font-semibold tracking-tight">
-            {isHome ? "Home" : "Project conversation"}
+            {isHome ? "Home" : workspaceName || "Conversation"}
           </h1>
           <p className="mt-0.5 text-[var(--step-0)] text-[var(--muted)]">
             {isHome
-              ? "Your default personal conversation. Projects are optional."
-              : "Scoped to this workspace — files, tasks, and teammates stay with it."}
+              ? "Ask, delegate, or pick up where you left off."
+              : "This workspace's conversation."}
           </p>
         </div>
         <Button variant="primary" onClick={() => setShowNew(true)} disabled={!home.data}>
@@ -113,11 +116,13 @@ export function ConversationView({
         </Button>
       </header>
 
-      {/* Workspace-wide attention banner */}
+      {/* Workspace-wide attention banner. Kept to the same column as the
+          composer and the lists below, so the page has one left edge. */}
       <div className="px-4 pt-3 md:px-6">
+        <div className="mx-auto w-full max-w-[860px]">
         {summary.loadFailed && !summary.loading ? (
           <div className="mb-2 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-[var(--step-minus-1)] text-[var(--danger)]">
-            <span>Couldn't load some fleet data — the Command Center below may be incomplete.</span>
+            <span>Couldn't load some fleet data. This page may be incomplete.</span>
             <Button onClick={summary.reload}>Retry</Button>
           </div>
         ) : null}
@@ -127,10 +132,13 @@ export function ConversationView({
           onDecide={decideApproval}
           onOpenTask={openTask}
         />
+        </div>
       </div>
 
-      {/* Body: thread rail + active pane */}
+      {/* Body: thread rail + active pane. Home has one conversation list
+          (below), so the rail would be a second list of the same thing. */}
       <div className="flex min-h-0 flex-1">
+        {!isHome ? (
         <aside className="hidden w-[var(--width-conversation-sidebar)] shrink-0 flex-col border-r border-[var(--border-dim)] xl:flex">
           <div className="px-3 pt-3">
             <input
@@ -142,7 +150,7 @@ export function ConversationView({
             />
           </div>
           <div className="px-3 pb-1 pt-4">
-            <SectionLabel>Recent conversations</SectionLabel>
+            <SectionLabel>Conversations</SectionLabel>
           </div>
           <div className="flex-1 overflow-y-auto px-2 pb-4 pt-1">
             {threads.loading ? (
@@ -181,6 +189,7 @@ export function ConversationView({
             ) : null}
           </div>
         </aside>
+        ) : null}
 
         <section className="flex min-w-0 flex-1 flex-col">
           {activeId ? (
@@ -196,7 +205,6 @@ export function ConversationView({
               projectId={resolvedProjectId}
               recentThreads={recentThreads.data?.threads ?? []}
               providers={providers.data?.providers ?? []}
-              onNewChat={() => setShowNew(true)}
               onThreadCreated={(threadId) => {
                 setActiveId(threadId);
                 onSetActiveThread?.(threadId);
@@ -580,7 +588,7 @@ function ThreadPane({
         description,
         owner_teammate_id: null,
       });
-      toast.success("Task created — its live execution view is one click away.");
+      toast.success("Task created. Its live execution view is one click away.");
       openTask(projectId, task.id);
       await onReload();
     } catch (err) {
@@ -966,7 +974,7 @@ function ExecutionView({
         </div>
         {awaitingDecision && (
           <div className="rounded-md border border-[var(--warn)] bg-[var(--warn-dim)] px-3 py-2 text-[var(--warn)]">
-            This run needs your decision — it appears in the banner above.
+            This run needs your decision. It appears in the banner above.
           </div>
         )}
         {!terminal && !awaitingDecision && latestRun && latestRun.status === "failed" && (
@@ -1097,7 +1105,6 @@ function CommandCenter({
   recentThreads,
   providers,
   summary,
-  onNewChat,
   onThreadCreated,
   onOpenThread,
   refreshProviders,
@@ -1108,7 +1115,6 @@ function CommandCenter({
   recentThreads: ChatThread[];
   providers: { id: string; name: string; kind: string }[];
   summary: ReturnType<typeof useWorkspaceSummary>;
-  onNewChat: () => void;
   onThreadCreated: (threadId: string) => void;
   onOpenThread: (thread: ChatThread) => void;
   refreshProviders?: () => void;
@@ -1190,13 +1196,7 @@ function CommandCenter({
 
         {/* Landing composer */}
         <div className="scroll-mt-6">
-          <h1 className="text-[var(--step-1)] font-semibold tracking-tight text-[var(--text)]">
-            Command Center
-          </h1>
-          <p className="mt-1 text-[var(--step-0)] text-[var(--muted)]">
-            Your AI fleet. One place to get work done.
-          </p>
-          <form onSubmit={send} className="mt-5">
+          <form onSubmit={send}>
             <div className="flex flex-col gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-2 shadow-sm focus-within:border-[var(--border-focus)] sm:flex-row sm:items-end">
               <textarea
                 value={draft}
@@ -1210,7 +1210,7 @@ function CommandCenter({
                 placeholder={
                   hasProvider
                     ? "Ask anything, delegate work, or continue a task…"
-                    : "No model configured yet — connect a provider first."
+                    : "Connect a model to start."
                 }
                 disabled={busy || !hasProvider}
                 spellCheck
@@ -1258,15 +1258,16 @@ function CommandCenter({
             </div>
           ) : null}
           {!hasProvider && (
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-lg border border-[var(--warn)] bg-[var(--warn-dim)] px-4 py-2.5">
-              <span className="text-[var(--step-minus-1)] text-[var(--text)]">
-                No model connected. A bot cannot think until this workspace has one with a
-                working key.
-              </span>
-              <Button variant="primary" onClick={() => setShowConfigure((v) => !v)}>
-                Connect a model
-              </Button>
-            </div>
+            <p className="mt-2 flex flex-wrap items-center gap-2 text-[var(--step-minus-1)] text-[var(--muted)]">
+              <span>This workspace has no model. A bot cannot think without one.</span>
+              <button
+                type="button"
+                onClick={() => setShowConfigure((v) => !v)}
+                className="font-medium text-[var(--text)] underline underline-offset-4 hover:text-[var(--text-soft)]"
+              >
+                Connect one
+              </button>
+            </p>
           )}
           {showConfigure && (
             <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
@@ -1344,70 +1345,68 @@ function CommandCenter({
           )}
         </div>
 
-        {/* Quick entry points. These are links, not destinations in their own
-            right, so they read as a row rather than three cards. */}
-        <nav aria-label="Go to" className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
-          <button
-            onClick={onNewChat}
-            className="text-[var(--step-minus-1)] text-[var(--text-soft)] underline-offset-4 transition-colors hover:text-[var(--text)] hover:underline"
-          >
-            New conversation
-          </button>
-          <button
-            onClick={() => { window.location.hash = "#/bots"; }}
-            className="text-[var(--step-minus-1)] text-[var(--text-soft)] underline-offset-4 transition-colors hover:text-[var(--text)] hover:underline"
-          >
-            AI fleet
-          </button>
-          <button
-            onClick={() => { window.location.hash = "#/projects"; }}
-            className="text-[var(--step-minus-1)] text-[var(--text-soft)] underline-offset-4 transition-colors hover:text-[var(--text)] hover:underline"
-          >
-            Workspaces
-          </button>
-          <button
-            onClick={() => { window.location.hash = "#/boards"; }}
-            className="text-[var(--step-minus-1)] text-[var(--text-soft)] underline-offset-4 transition-colors hover:text-[var(--text)] hover:underline"
-          >
-            Boards
-          </button>
-          <button
-            onClick={() => { window.location.hash = "#/teams"; }}
-            className="text-[var(--step-minus-1)] text-[var(--text-soft)] underline-offset-4 transition-colors hover:text-[var(--text)] hover:underline"
-          >
-            Teams
-          </button>
-        </nav>
 
-        {/* Team-level execution rollup */}
+        {/* Work pulse. The inbox itself lives on the Work page; Home only
+            says whether there is anything to look at. */}
         <section>
           <div className="mb-2 flex items-center justify-between">
-            <SectionLabel>Fleet execution</SectionLabel>
-            {summary.data ? (
-              <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
-                {summary.data.summary.runningTasks} running · {summary.data.summary.queuedTasks} queued ·{" "}
-                {summary.data.summary.blockedTasks} blocked
-                {summary.data.summary.awaitingTasks > 0
-                  ? ` · ${summary.data.summary.awaitingTasks} awaiting approval`
-                  : ""}
-              </span>
-            ) : null}
+            <SectionLabel>Work</SectionLabel>
+            <a
+              href="#/work"
+              className="text-[var(--step-minus-1)] text-[var(--muted)] hover:text-[var(--text)]"
+            >
+              Open work →
+            </a>
           </div>
-          <ExecutionRollup
-            summary={summary.data?.summary ?? null}
-            onOpenTeam={(teamId) => { window.location.hash = `#/team/${teamId}`; }}
-          />
+          {summary.data ? (
+            <div className="grid grid-cols-3 overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
+              {[
+                { label: "Running", value: summary.data.summary.runningTasks },
+                { label: "Queued", value: summary.data.summary.queuedTasks },
+                {
+                  label: "Needs you",
+                  value:
+                    summary.data.summary.blockedTasks +
+                    summary.data.summary.pendingApprovals.length,
+                },
+              ].map((item, index) => (
+                <a
+                  key={item.label}
+                  href="#/work"
+                  className={`px-4 py-3 transition-colors hover:bg-[var(--surface-2)] ${
+                    index > 0 ? "border-l border-[var(--border-dim)]" : ""
+                  }`}
+                >
+                  <div
+                    className={`text-[var(--step-1)] font-semibold tracking-tight ${
+                      item.value === 0
+                        ? "text-[var(--faint)]"
+                        : item.label === "Needs you"
+                          ? "text-[var(--warn)]"
+                          : item.label === "Running"
+                            ? "text-[var(--accent)]"
+                            : "text-[var(--text)]"
+                    }`}
+                  >
+                    {item.value}
+                  </div>
+                  <div className="text-[var(--step-minus-2)] text-[var(--faint)]">{item.label}</div>
+                </a>
+              ))}
+            </div>
+          ) : (
+            <LoadingState lines={1} />
+          )}
         </section>
 
-        {/* Recent conversations, across every workspace the owner owns. The
-            scope is spelled out because the conversation rail beside this
-            panel lists only the current workspace's conversations. */}
+        {/* One list. Home has no conversation rail, so this is the whole
+            history rather than a second copy of it. */}
         <section>
           <div className="mb-2 flex items-center justify-between gap-3">
             <div className="flex flex-wrap items-baseline gap-2">
-              <SectionLabel>Recent conversations</SectionLabel>
+              <SectionLabel>Conversations</SectionLabel>
               <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
-                across all workspaces
+                every workspace
               </span>
             </div>
             {sorted.length > 0 && refreshThreads ? (

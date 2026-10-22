@@ -1,7 +1,13 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { Toaster, toast } from "sonner";
-import { ApiError, api, describeError as apiDescribeError, getSession, setSession } from "./api";
+import {
+  ApiError,
+  api,
+  describeError as apiDescribeError,
+  getSession,
+  setSession,
+} from "./api";
 import { ConversationView } from "./views-chat";
 import { ApprovalsView } from "./views-approvals";
 import { CapabilitiesView } from "./views-projects";
@@ -12,10 +18,12 @@ import { SettingsView } from "./views-settings";
 import { TeamsView, TeamDetailView } from "./views-teams";
 import { BotDetailView, BotsView } from "./views-bot";
 import { BoardsView, BoardDetailView } from "./views-boards";
+import { WorkView } from "./views-work";
 import { EmptyState, useTheme, ThemeButton } from "./components";
 
 export type Route =
   | { name: "home" }
+  | { name: "work" }
   | { name: "chat"; projectId?: string }
   | { name: "teams" }
   | { name: "team"; teamId: string }
@@ -33,26 +41,36 @@ export type Route =
 export function parseHash(): Route {
   const hash = window.location.hash.replace(/^#\/?/, "");
   /* A query carries the tab to open, so a recovery link can land on the
-     exact screen the owner needs: #/p/<id>?tab=Providers */
+  exact screen the owner needs: #/p/<id>?tab=Providers */
   const [path, query] = hash.split("?");
   const params = new URLSearchParams(query ?? "");
   const parts = path.split("/").filter(Boolean);
   if (parts.length === 0) return { name: "home" };
+  if (parts[0] === "work") return { name: "work" };
   if (parts[0] === "chat") {
-    return parts[1] ? { name: "chat", projectId: parts[1] } : { name: "chat" };
+    return parts[1]
+      ? { name: "chat", projectId: parts[1] }
+      : { name: "chat" };
   }
   if (parts[0] === "teams") return { name: "teams" };
-  if (parts[0] === "team" && parts[1]) return { name: "team", teamId: parts[1] };
-  if (parts[0] === "bot" && parts[1]) return { name: "bot", teammateId: parts[1] };
+  if (parts[0] === "team" && parts[1])
+    return { name: "team", teamId: parts[1] };
+  if (parts[0] === "bot" && parts[1])
+    return { name: "bot", teammateId: parts[1] };
   if (parts[0] === "boards") return { name: "boards" };
-  if (parts[0] === "board" && parts[1]) return { name: "board", boardId: parts[1] };
+  if (parts[0] === "board" && parts[1])
+    return { name: "board", boardId: parts[1] };
   if (parts[0] === "projects") return { name: "projects" };
   if (parts[0] === "settings") return { name: "settings" };
   if (parts[0] === "p" && parts[1] && parts[2] === "t" && parts[3]) {
     return { name: "task", projectId: parts[1], taskId: parts[3] };
   }
   if (parts[0] === "p" && parts[1]) {
-    return { name: "project", projectId: parts[1], tab: params.get("tab") ?? undefined };
+    return {
+      name: "project",
+      projectId: parts[1],
+      tab: params.get("tab") ?? undefined,
+    };
   }
   if (parts[0] === "capabilities") return { name: "capabilities" };
   if (parts[0] === "bots") return { name: "bots" };
@@ -86,7 +104,7 @@ function NavItem({
       }`}
     >
       {/* The active item is marked by a rule in the margin, not by weight, so
-          the navigation never competes with the page content. */}
+     the navigation never competes with the page content. */}
       <span
         aria-hidden
         className={`absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full ${
@@ -98,14 +116,29 @@ function NavItem({
   );
 }
 
-const NAV_ITEMS: Array<{ label: string; routes: Array<Route["name"]>; href: string }> = [
+const NAV_ITEMS: Array<{
+  label: string;
+  routes: Array<Route["name"]>;
+  href: string;
+}> = [
   { label: "Home", routes: ["home"], href: "#/" },
-  { label: "Workspaces", routes: ["projects", "project", "task"], href: "#/projects" },
-  { label: "AI fleet", routes: ["bots", "bot"], href: "#/bots" },
+  { label: "Work", routes: ["work", "task"], href: "#/work" },
+  { label: "Fleet", routes: ["bots", "bot"], href: "#/bots" },
   { label: "Approvals", routes: ["approvals"], href: "#/approvals" },
-  { label: "Boards", routes: ["boards", "board"], href: "#/boards" },
-  { label: "Teams", routes: ["teams", "team"], href: "#/teams" },
-  { label: "Settings", routes: ["settings"], href: "#/settings" },
+  {
+    label: "Settings",
+    routes: [
+      "settings",
+      "projects",
+      "project",
+      "boards",
+      "board",
+      "teams",
+      "team",
+      "capabilities",
+    ],
+    href: "#/settings",
+  },
 ];
 
 function Sidebar({
@@ -130,8 +163,8 @@ function Sidebar({
       }`}
     >
       <div className="flex h-full flex-col overflow-y-auto px-3 py-4">
-        <div className="mb-0.5 flex items-center justify-between px-2">
-          <strong className="text-[var(--step-0)] font-semibold tracking-tight text-[var(--text)]">
+        <div className="mb-5 flex items-center justify-between px-2">
+          <strong className="font-semibold tracking-tight text-[var(--step-1)] text-[var(--text)]">
             NerdBot
           </strong>
           <button
@@ -141,9 +174,6 @@ function Sidebar({
           >
             ×
           </button>
-        </div>
-        <div className="mb-4 px-2 text-[var(--step-minus-2)] uppercase tracking-[0.18em] text-[var(--faint)]">
-          assistant
         </div>
 
         <nav className="flex flex-col gap-0.5">
@@ -160,12 +190,14 @@ function Sidebar({
         <div className="mt-auto flex flex-col gap-1 border-t border-[var(--border-dim)] pt-3">
           <button
             onClick={onDisconnect}
-            className="flex w-full items-center rounded-md px-3 py-1.5 text-left text-[var(--step-minus-1)] text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text-soft)]"
+            className="flex w-full items-center rounded-md px-3 py-1.5 text-left text-[var(--muted)] text-[var(--step-minus-1)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text-soft)]"
           >
             Disconnect
           </button>
           <div className="flex items-center gap-2 px-3 py-1.5">
-            <span className="text-[var(--step-minus-2)] text-[var(--faint)]">Theme</span>
+            <span className="text-[var(--faint)] text-[var(--step-minus-2)]">
+              Theme
+            </span>
             <ThemeButton onThemeChange={onThemeChange} />
           </div>
         </div>
@@ -202,25 +234,35 @@ export default function App() {
   }
 
   /* Route → view. ConversationView is the home surface (Command Center
-   * landing); every other route renders a full-page view that owns its
-   * own scroll container. */
+  * landing); every other route renders a full-page view that owns its
+  * own scroll container. */
   let content: ReactNode;
   switch (route.name) {
     case "home":
     case "chat":
       content = (
         <ConversationView
-          projectId={route.name === "chat" ? route.projectId : undefined}
+          projectId={
+            route.name === "chat" ? route.projectId : undefined
+          }
           initialThreadId={activeThreadId}
           onSetActiveThread={setActiveThread}
         />
       );
       break;
+    case "work":
+      content = <WorkView />;
+      break;
     case "teams":
       content = <TeamsView />;
       break;
     case "team":
-      content = <TeamDetailView teamId={route.teamId} onOpenProject={openProject} />;
+      content = (
+        <TeamDetailView
+          teamId={route.teamId}
+          onOpenProject={openProject}
+        />
+      );
       break;
     case "bot":
       content = <BotDetailView teammateId={route.teammateId} />;
@@ -242,7 +284,9 @@ export default function App() {
         <ProjectDetailView
           projectId={route.projectId}
           initialTab={route.tab}
-          onOpenTask={(taskId) => navigate(`#/p/${route.projectId}/t/${taskId}`)}
+          onOpenTask={(taskId) =>
+            navigate(`#/p/${route.projectId}/t/${taskId}`)
+          }
         />
       );
       break;
@@ -251,7 +295,7 @@ export default function App() {
         <TaskDetailView
           projectId={route.projectId}
           taskId={route.taskId}
-          onBack={() => navigate(`#/p/${route.projectId}`)}
+          onBack={() => navigate("#/work")}
         />
       );
       break;
@@ -265,7 +309,12 @@ export default function App() {
       content = <ApprovalsView />;
       break;
     default:
-      content = <EmptyState title="Workspace" hint="Select a workspace area from the sidebar." />;
+      content = (
+        <EmptyState
+          title="Workspace"
+          hint="Select a workspace area from the sidebar."
+        />
+      );
   }
 
   return (
@@ -297,7 +346,7 @@ export default function App() {
 
       <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
         <button
-          className="fixed left-3 top-3 z-40 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] transition-colors hover:border-[var(--faint)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-1 md:hidden"
+          className="fixed top-3 left-3 z-40 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] transition-colors hover:border-[var(--faint)] focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-1 focus-visible:outline-none md:hidden"
           aria-label="Open navigation"
           onClick={() => setDrawerOpen(true)}
         >
@@ -316,7 +365,11 @@ export default function App() {
  *  served elsewhere (the vite dev server) does the local default remain. */
 export function defaultApiBase(): string {
   const loc = typeof window !== "undefined" ? window.location : null;
-  if (loc && (loc.protocol === "http:" || loc.protocol === "https:") && loc.port !== "5173") {
+  if (
+    loc &&
+    (loc.protocol === "http:" || loc.protocol === "https:") &&
+    loc.port !== "5173"
+  ) {
     return loc.origin;
   }
   return "http://127.0.0.1:8080";
@@ -335,11 +388,16 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }) {
     setSession({ baseUrl: baseUrl.replace(/\/+$/, ""), token });
     try {
       const health = await api.health();
-      if (health.status !== "ok") throw new Error("Server reported unhealthy status");
+      if (health.status !== "ok")
+        throw new Error("Server reported unhealthy status");
       onConnected();
     } catch (err) {
       setSession(null);
-      setError(err instanceof ApiError ? `Error ${err.status}: ${err.detail}` : String(err));
+      setError(
+        err instanceof ApiError
+          ? `Error ${err.status}: ${err.detail}`
+          : String(err),
+      );
     } finally {
       setBusy(false);
     }
@@ -349,8 +407,10 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }) {
     <div className="flex h-full bg-[var(--bg)] text-[var(--text)]">
       <main className="flex h-full flex-1 flex-col items-center justify-center px-6">
         <div className="w-full max-w-[460px]">
-          <h1 className="mb-2 text-[var(--step-4)] font-semibold tracking-tight">NerdBot</h1>
-          <p className="mb-6 text-[var(--step-0)] text-[var(--muted)]">
+          <h1 className="mb-2 font-semibold tracking-tight text-[var(--step-4)]">
+            NerdBot
+          </h1>
+          <p className="mb-6 text-[var(--muted)] text-[var(--step-0)]">
             Connect to a running NerdBot API server.
           </p>
           {error ? (
@@ -363,7 +423,7 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }) {
           ) : null}
           <form onSubmit={connect} className="space-y-4">
             <div>
-              <span className="mb-1.5 block text-[var(--step-minus-1)] font-medium uppercase tracking-wide text-[var(--muted)]">
+              <span className="mb-1.5 block font-medium tracking-wide text-[var(--muted)] text-[var(--step-minus-1)] uppercase">
                 API base URL
               </span>
               <input
@@ -374,8 +434,9 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }) {
               />
             </div>
             <div>
-              <span className="mb-1.5 block text-[var(--step-minus-1)] font-medium uppercase tracking-wide text-[var(--muted)]">
-                API token (kept in this browser's local storage only)
+              <span className="mb-1.5 block font-medium tracking-wide text-[var(--muted)] text-[var(--step-minus-1)] uppercase">
+                API token (kept in this browser's local storage
+                only)
               </span>
               <input
                 type="password"
@@ -387,7 +448,7 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }) {
               />
             </div>
             <button
-              className="mt-2 inline-flex w-full items-center justify-center rounded-md border border-[var(--accent)] bg-[var(--accent)] px-3 py-2 text-[var(--step-minus-1)] font-semibold text-[var(--text-inverse)] transition-colors hover:border-[var(--accent-hover)] hover:bg-[var(--accent-hover)] disabled:pointer-events-none disabled:opacity-50"
+              className="mt-2 inline-flex w-full items-center justify-center rounded-md border border-[var(--accent)] bg-[var(--accent)] px-3 py-2 font-semibold text-[var(--step-minus-1)] text-[var(--text-inverse)] transition-colors hover:border-[var(--accent-hover)] hover:bg-[var(--accent-hover)] disabled:pointer-events-none disabled:opacity-50"
               type="submit"
               disabled={busy}
             >

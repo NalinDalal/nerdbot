@@ -43,9 +43,9 @@ export function TeamsView() {
   return (
     <Page>
       <PageHeader
-        eyebrow="Fleet"
+        eyebrow="Advanced"
         title="Teams"
-        description="A team coordinates bots and workspaces around one purpose. Membership is a grouping only — it grants no permissions; bots act within the tool permissions configured on each bot."
+        description="Group workspaces for a shared roll-up. Membership grants no permissions."
         actions={
           <>
             <Button variant="primary" onClick={() => setShowCreate(true)}>
@@ -350,7 +350,7 @@ export function TeamDetailView({
         <SectionLabel className="mb-2">Bots in this team</SectionLabel>
         <p className="mb-3 max-w-[72ch] text-[var(--step-minus-1)] text-[var(--muted)]">
           These bots share the team&rsquo;s workspaces and hand tasks off to one another.
-          Membership grants no permissions — each bot acts within its own configured tool permissions.
+          Membership grants no permissions. Each bot acts within its own configured tool permissions.
         </p>
         {teammates.length > 0 ? (
           <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">

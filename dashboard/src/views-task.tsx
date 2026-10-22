@@ -6,6 +6,7 @@ import { notifyError } from "./app";
 import type { Run } from "./types";
 import {
   ApprovalRow,
+  Badge,
   EmptyState,
   ErrorState,
   LoadingState,
@@ -20,6 +21,7 @@ import {
   Button,
   BotChip,
   SectionLabel,
+  approvalIsPending,
   Page,
   PageHeader,
   relativeTime,
@@ -27,6 +29,7 @@ import {
   runStatusLabel,
 } from "./components";
 import { EntityForm } from "./forms";
+import { Markdown } from "./markdown";
 
 /* Plain render columns over the static runs data — the core-row-model only
  * treatment TanStack was giving this table, without the dependency. */
@@ -35,8 +38,19 @@ interface RunColumn {
   cell: (run: Run) => ReactNode;
 }
 
+/** The runtime wraps provider output in prompt-injection markers before it
+ *  goes back to a model. The owner is not a model; show the answer. */
+function unwrapRunOutput(text: string): string {
+  return text
+    .replace(/^<<<UNTRUSTED_RUN_OUTPUT>>>\s*/, "")
+    .replace(/\s*<<<END_UNTRUSTED_RUN_OUTPUT>>>$/, "");
+}
+
 const runColumns: RunColumn[] = [
-  { header: "Run", cell: (run) => <ShortId id={run.id} /> },
+  {
+    header: "Started",
+    cell: (run) => <span className="text-[var(--muted)]">{relativeTime(run.started_at)}</span>,
+  },
   {
     header: "Status",
     cell: (run) => <StatusBadge status={run.status} label={runStatusLabel(run.status)} />,
@@ -100,6 +114,7 @@ export function TaskDetailView({
 }) {
   const view = useAsync(() => api.taskView(taskId), [taskId]);
   const [busy, setBusy] = useState<string | null>(null);
+  const [showMore, setShowMore] = useState(false);
   const [showReview, setShowReview] = useState(false);
   const [showPackage, setShowPackage] = useState(false);
   const [showKnowledge, setShowKnowledge] = useState(false);
@@ -197,39 +212,198 @@ export function TaskDetailView({
   const owner = task.owner_teammate_id
     ? teammates.data?.teammates.find((m) => m.id === task.owner_teammate_id)
     : undefined;
+  const headingText = (task.description || task.command || "Untitled task").trim();
+  const cut = headingText.slice(0, 110);
+  const heading =
+    headingText.length > 110
+      ? `${cut.replace(/\s+\S*$/, "") || cut}…`
+      : headingText;
+  const pendingApprovals = approvalRows.filter((approval) => approvalIsPending(approval));
+  const latestOutput = unwrapRunOutput(
+    latestRun?.output_excerpt?.trim() ||
+      latestRun?.stdout?.trim() ||
+      latestRun?.stderr?.trim() ||
+      "",
+  );
+  const runPrimary = () => void act("run", () => api.runTask(taskId));
 
   return (
     <Page>
       <PageHeader
         eyebrow="Task"
-        title={task.description || "Untitled task"}
-        description={task.branch ? `branch ${task.branch}` : undefined}
-        back={{ label: "Back to project", onClick: onBack }}
+        title={heading}
+        back={{ label: "Work", onClick: onBack }}
         actions={
           <>
-            <span className="mono text-[var(--step-minus-1)] text-[var(--faint)]" title={task.id}>
-              {task.id.slice(0, 10)}…
-            </span>
             <StatusBadge status={task.status} />
-            {task.blocked_reason ? (
-              <span className="text-[var(--step-minus-1)] text-[var(--muted)]">
-                {task.blocked_reason}
-              </span>
-            ) : null}
+            {owner ? (
+              <BotChip
+                persona={owner.persona || "bot"}
+                id={owner.id}
+                status={owner.status}
+                face={owner.face}
+              />
+            ) : (
+              <Badge variant="warn">Unassigned</Badge>
+            )}
+            {liveRun ? (
+              <Button
+                variant="danger"
+                disabled={!!busy}
+                onClick={() => void act("stop", () => api.cancelRun(liveRun.id))}
+              >
+                {busy === "stop" ? "Stopping…" : "Stop run"}
+              </Button>
+            ) : (
+              <Button variant="primary" disabled={!!busy} onClick={runPrimary}>
+                {busy === "run"
+                  ? "Running…"
+                  : ["done", "failed", "cancelled"].includes(task.status)
+                    ? "Run again"
+                    : "Run"}
+              </Button>
+            )}
+            <Button onClick={() => setShowMore((value) => !value)}>
+              {showMore ? "Close" : "More"}
+            </Button>
           </>
         }
       />
 
-      {approvalRows.length > 0 ? (
+      {showMore ? (
+        <div className="mb-6 flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
+          <Button disabled={!!busy} onClick={() => void act("retry", () => api.retryTask(taskId))}>
+            {busy === "retry" ? "Retrying…" : "Retry (new run)"}
+          </Button>
+          <Button
+            variant="danger"
+            disabled={!!busy}
+            onClick={() => void act("cancel", () => api.cancelTask(taskId, "cancelled from the task view"))}
+          >
+            {busy === "cancel" ? "Cancelling…" : "Cancel task"}
+          </Button>
+          <Button disabled={!!busy} onClick={() => void act("workspace", () => api.ensureWorkspace(taskId))}>
+            Ensure workspace
+          </Button>
+          <Button disabled={!!busy} onClick={() => setShowKnowledge(true)}>
+            Attach knowledge
+          </Button>
+          <Button disabled={!!busy} onClick={() => setShowReview(true)}>
+            Submit review
+          </Button>
+          <Button disabled={!!busy} onClick={() => setShowPackage(true)}>
+            Generate PR package
+          </Button>
+          <Button
+            disabled={!!busy || !latestPackage}
+            onClick={() => void act("approval", () => api.requestPackageApproval(taskId))}
+          >
+            Request package approval
+          </Button>
+          {latestRun ? (
+            <>
+              <Button
+                disabled={!!busy}
+                onClick={() =>
+                  void act("patch", () => api.capturePatch(taskId, latestRun.id).then(() => null))
+                }
+              >
+                Capture patch
+              </Button>
+              <Button
+                disabled={!!busy}
+                onClick={() =>
+                  void act("approval", () =>
+                    api.requestApproval(latestRun.id, "deploy").then(() => null),
+                  )
+                }
+              >
+                Request run approval
+              </Button>
+            </>
+          ) : null}
+          <Button
+            disabled={!!busy}
+            onClick={() =>
+              void act("rollup", async () => {
+                setRollup((await api.buildRollup(taskId)) as Record<string, unknown>);
+              })
+            }
+          >
+            Build roll-up
+          </Button>
+          <Button disabled={!!busy} onClick={() => view.reload()}>
+            Refresh
+          </Button>
+        </div>
+      ) : null}
+
+      {/* The answer comes before the machinery. A run that produced a result
+          is the point of the task; the runs, approvals and evidence are how
+          it got there. */}
+      <section className="mb-8">
+        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-3">
+          <SectionLabel>Output</SectionLabel>
+          {latestRun ? (
+            <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
+              {runStatusLabel(latestRun.status)} · {Number(latestRun.duration_s ?? 0).toFixed(1)}s ·{" "}
+              {relativeTime(latestRun.started_at)}
+            </span>
+          ) : null}
+        </div>
+        {latestRun ? (
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+            {latestRun.status === "failed" && latestRun.exit_code !== null ? (
+              <div className="mb-3 rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-[var(--step-minus-1)] text-[var(--danger)]">
+                Run failed with exit code <span className="mono">{latestRun.exit_code}</span>.
+              </div>
+            ) : null}
+            {latestOutput ? (
+              <>
+                <div className="max-h-[28rem] overflow-y-auto pr-1">
+                  {latestRun?.runtime === "shell" ? (
+                    <pre className={`${LOG_BLOCK} mt-0 !whitespace-pre-wrap break-words`}>
+                      {latestOutput.slice(0, 4000)}
+                    </pre>
+                  ) : (
+                    <Markdown text={latestOutput.slice(0, 4000)} />
+                  )}
+                </div>
+                {latestOutput.length > 4000 ? (
+                  <p className="mt-2 text-[var(--step-minus-2)] text-[var(--faint)]">
+                    Showing the first 4000 characters. The full output is in the run artifacts.
+                  </p>
+                ) : null}
+              </>
+            ) : (
+              <p className="text-[var(--step-minus-1)] text-[var(--muted)]">
+                The run finished without output.
+              </p>
+            )}
+          </div>
+        ) : (
+          <EmptyState
+            title="No output yet"
+            hint="Run the task to see what the bot produces."
+            action={
+              <Button variant="primary" disabled={!!busy} onClick={runPrimary}>
+                {busy === "run" ? "Running…" : "Run task"}
+              </Button>
+            }
+          />
+        )}
+      </section>
+
+      {pendingApprovals.length > 0 ? (
         <section className="mb-6">
           <div className="mb-2 flex items-center justify-between">
-            <SectionLabel>Approvals</SectionLabel>
+            <SectionLabel>Waiting on you</SectionLabel>
             <span className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
-              {approvalRows.length} request{approvalRows.length === 1 ? "" : "s"}
+              {pendingApprovals.length} request{pendingApprovals.length === 1 ? "" : "s"}
             </span>
           </div>
           <div className="flex flex-col gap-2">
-            {approvalRows.map((approval) => (
+            {pendingApprovals.map((approval) => (
               <ApprovalRow
                 key={approval.id}
                 approval={approval}
@@ -243,20 +417,20 @@ export function TaskDetailView({
                       ? result.resume
                       : null;
                   if (resume && resume.outcome === "carried_out") {
-                    toast.success("Approved — the action was carried out.");
+                    toast.success("Approved. The action was carried out.");
                   } else if (resume && resume.outcome === "refused") {
                     toast.error(`Approved, but the action did not run: ${resume.output}`);
                   } else if (resume && resume.outcome === "waiting") {
-                    toast.message("Approved — one more decision is still needed.");
+                    toast.message("Approved. One more decision is still needed.");
                   } else if (decision === "denied") {
-                    toast.message("Rejected — nothing was performed.");
+                    toast.message("Rejected. Nothing was performed.");
                   }
                 }}
                 onReask={
                   approval.tool_name
                     ? async () => {
                         await act("approval", () => api.reaskApproval(approval.id));
-                        toast.message("Asked again — a new request is waiting for you.");
+                        toast.message("Asked again. A new request is waiting for you.");
                       }
                     : undefined
                 }
@@ -319,19 +493,21 @@ export function TaskDetailView({
             <BotChip persona={owner.persona || "bot"} id={owner.id} status={owner.status} face={owner.face} />
           ) : (
             <span className="text-[var(--step-minus-1)] text-[var(--muted)]">
-              Unassigned — pick a bot to own this task.
+              Unassigned. Pick a bot to own this task.
             </span>
           )}
           <div className="flex items-center gap-2">
             <select
               id="assign-teammate"
               aria-label="Assign owner teammate"
-              className={`${FORM_INPUT} max-w-56`}
+              key={teammates.data?.teammates.length ?? 0}
+              defaultValue={task.owner_teammate_id ?? ""}
+              className={`${FORM_INPUT} max-w-[14rem]`}
             >
-              <option value="">(select bot)</option>
+              <option value="">Unassigned</option>
               {teammates.data?.teammates.map((mate) => (
                 <option key={mate.id} value={mate.id}>
-                  {mate.persona || "Unnamed bot"} ({mate.id.slice(0, 10)}…)
+                  {mate.persona || "Unnamed bot"}
                 </option>
               ))}
             </select>
@@ -346,68 +522,6 @@ export function TaskDetailView({
               Assign
             </Button>
           </div>
-        </div>
-      </section>
-
-      {/* Actions */}
-      <section className="mb-6">
-        <SectionLabel className="mb-2">Actions</SectionLabel>
-        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
-          <Button variant="primary" disabled={!!busy} onClick={() => void act("run", () => api.runTask(taskId))}>
-            {busy === "run" ? "Running…" : "Run"}
-          </Button>
-          <Button disabled={!!busy} onClick={() => void act("retry", () => api.retryTask(taskId))}>
-            {busy === "retry" ? "Retrying…" : "Retry (new run)"}
-          </Button>
-          <Button
-            variant="danger"
-            disabled={!!busy}
-            onClick={() => void act("cancel", () => api.cancelTask(taskId, "cancelled from the task view"))}
-          >
-            {busy === "cancel" ? "Cancelling…" : "Cancel task"}
-          </Button>
-          {liveRun ? (
-            <Button
-              variant="danger"
-              disabled={!!busy}
-              onClick={() => void act("stop", () => api.cancelRun(liveRun.id))}
-            >
-              {busy === "stop" ? "Stopping…" : "Stop run"}
-            </Button>
-          ) : null}
-          <span className="mx-1 h-4 w-px bg-[var(--border)]" aria-hidden />
-          <Button disabled={!!busy} onClick={() => void act("workspace", () => api.ensureWorkspace(taskId))}>
-            Ensure workspace
-          </Button>
-          <Button disabled={!!busy} onClick={() => setShowKnowledge(true)}>
-            Attach knowledge
-          </Button>
-          <span className="mx-1 h-4 w-px bg-[var(--border)]" aria-hidden />
-          <Button disabled={!!busy} onClick={() => setShowReview(true)}>
-            Submit review
-          </Button>
-          <Button disabled={!!busy} onClick={() => setShowPackage(true)}>
-            Generate PR package
-          </Button>
-          <Button
-            disabled={!!busy || !latestPackage}
-            onClick={() => void act("approval", () => api.requestPackageApproval(taskId))}
-          >
-            Request package approval
-          </Button>
-          <Button
-            disabled={!!busy}
-            onClick={() =>
-              void act("rollup", async () => {
-                setRollup((await api.buildRollup(taskId)) as Record<string, unknown>);
-              })
-            }
-          >
-            Build roll-up
-          </Button>
-          <Button disabled={!!busy} onClick={() => view.reload()}>
-            Refresh
-          </Button>
         </div>
       </section>
 
@@ -472,59 +586,6 @@ export function TaskDetailView({
           ) : null}
         </div>
         <RunsTable runs={runs} />
-        {latestRun ? (
-          <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <strong className="text-[var(--text)]">Latest run</strong>
-              <ShortId id={latestRun.id} />
-              <StatusBadge status={latestRun.status} label={runStatusLabel(latestRun.status)} />
-            </div>
-            <div className="mono mt-2 text-[var(--step-minus-2)] text-[var(--faint)]">
-              command: {latestRun.command || "—"} · {Number(latestRun.duration_s ?? 0).toFixed(1)}s
-              {latestRun.provider_id ? ` · provider ${latestRun.provider_id.slice(0, 12)}…` : ""}
-            </div>
-            {latestRun.status === "failed" && latestRun.exit_code !== null && (
-              <div className="mt-3 rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-[var(--step-minus-1)] text-[var(--danger)]">
-                <div>
-                  Run failed with exit code <span className="mono">{latestRun.exit_code}</span>.
-                </div>
-                {latestRun.stderr ? (
-                  <>
-                    <div className="mt-1">Error output:</div>
-                    <pre className={LOG_BLOCK}>{latestRun.stderr.slice(0, 2000)}</pre>
-                  </>
-                ) : null}
-                <Button
-                  variant="danger"
-                  onClick={() => void act("retry", () => api.retryTask(taskId))}
-                >
-                  Retry (new run)
-                </Button>
-              </div>
-            )}
-            <div className="mt-3 flex items-center gap-2">
-              <Button
-                onClick={() =>
-                  void act("patch", () => api.capturePatch(taskId, latestRun.id).then(() => null))
-                }
-              >
-                Capture patch
-              </Button>
-              <Button
-                onClick={() =>
-                  void act("approval", () =>
-                    api.requestApproval(latestRun.id, "deploy").then(() => null),
-                  )
-                }
-              >
-                Request run approval
-              </Button>
-            </div>
-            {latestRun.output_excerpt ? (
-              <pre className={LOG_BLOCK}>{latestRun.output_excerpt.slice(0, 2000)}</pre>
-            ) : null}
-          </div>
-        ) : null}
       </section>
 
       {/* Handoffs (delegation) */}
@@ -538,11 +599,11 @@ export function TaskDetailView({
             </span>
           </div>
           <form onSubmit={(e) => { e.preventDefault(); delegate(); }} className="flex flex-wrap items-end gap-2">
-            <select id="delegate-to" aria-label="Delegate to teammate" className={`${FORM_INPUT} max-w-56`}>
-              <option value="">(select bot)</option>
+            <select id="delegate-to" aria-label="Delegate to teammate" className={`${FORM_INPUT} max-w-[14rem]`}>
+              <option value="">Unassigned</option>
               {teammates.data?.teammates.map((mate) => (
                 <option key={mate.id} value={mate.id}>
-                  {mate.persona || "Unnamed bot"} ({mate.id.slice(0, 10)}…)
+                  {mate.persona || "Unnamed bot"}
                 </option>
               ))}
             </select>
@@ -661,10 +722,10 @@ export function TaskDetailView({
                 className="text-[var(--accent)] hover:underline"
                 href={`#/p/${projectId}/t/${parent.id}`}
               >
-                <ShortId id={parent.id} /> {parent.description || "Untitled"}
+                {parent.description || "Untitled"}
               </a>
             ) : (
-              <span className="text-[var(--muted)]">none — this is a root task</span>
+              <span className="text-[var(--muted)]">none. This is a root task</span>
             )}
           </div>
           <div className="mt-3">
@@ -673,7 +734,7 @@ export function TaskDetailView({
             </span>
             {children.length === 0 ? (
               <div className="mt-1 text-[var(--step-minus-1)] text-[var(--faint)]">
-                No child tasks yet — bots create them when they delegate with a command.
+                No child tasks yet. Bots create them when they delegate with a command.
               </div>
             ) : (
               <div className="mt-1.5 flex flex-col gap-1">
@@ -689,7 +750,7 @@ export function TaskDetailView({
                           className="text-[var(--accent)] hover:underline"
                           href={`#/p/${projectId}/t/${child.id}`}
                         >
-                          <ShortId id={child.id} />
+                          {child.description || "Untitled"}
                         </a>{" "}
                         <span className="text-[var(--text-soft)]">{child.description || "Untitled"}</span>{" "}
                         <span className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
@@ -798,8 +859,13 @@ export function TaskDetailView({
           <pre className={LOG_BLOCK}>{JSON.stringify(rollup, null, 2)}</pre>
         </section>
       ) : null}
-      <div className="mono mt-6 text-[var(--step-minus-2)] text-[var(--faint)]">
-        Project <ShortId id={projectId} />
+      <div className="mt-6 text-[var(--step-minus-1)]">
+        <a
+          href={`#/p/${projectId}`}
+          className="text-[var(--muted)] hover:text-[var(--text)] hover:underline"
+        >
+          Open workspace →
+        </a>
       </div>
     </Page>
   );
@@ -865,7 +931,7 @@ function WorkspacePanel({ taskId }: { taskId: string }) {
             <pre className={LOG_BLOCK}>{diff.data.diff.slice(0, 8000)}</pre>
           ) : (
             <div className="mt-2 text-[var(--step-minus-1)] text-[var(--muted)]">
-              No uncommitted changes (or the workspace does not exist yet — use “Ensure workspace”).
+              No uncommitted changes (or the workspace does not exist yet; use Ensure workspace).
             </div>
           )}
         </div>

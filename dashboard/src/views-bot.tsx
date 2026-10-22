@@ -30,10 +30,6 @@ import {
   TABLE_TH,
 } from "./components";
 
-function openBot(id: string): void {
-  window.location.hash = `#/bot/${id}`;
-}
-
 function openTask(projectId: string, taskId: string): void {
   window.location.hash = `#/p/${projectId}/t/${taskId}`;
 }
@@ -48,6 +44,16 @@ export function BotDetailView({
   const runs = useAsync(() => api.teammateRuns(teammateId), [teammateId]);
   const memory = useAsync(() => api.teammateMemory(teammateId), [teammateId]);
   const boards = useAsync(() => api.listBoards(), [teammateId]);
+  /* Resolve the model name rather than printing "model connected": the owner
+     needs to know which model a bot will think with. */
+  const mateProjectId = all.data?.teammates.find((m) => m.id === teammateId)?.project_id;
+  const providers = useAsync(
+    () =>
+      mateProjectId
+        ? api.listProviders(mateProjectId).then((result) => result.providers)
+        : Promise.resolve([] as Provider[]),
+    [mateProjectId],
+  );
 
   const [memContent, setMemContent] = useState("");
   const [memSource, setMemSource] = useState("");
@@ -124,6 +130,9 @@ export function BotDetailView({
 
   /** What this bot is doing right now; the face is posed to match. */
   const activity = botActivity(mate.status, taskList, runList);
+  const modelName = mate.provider_id
+    ? providers.data?.find((provider) => provider.id === mate.provider_id)?.name
+    : undefined;
 
   /** Open the face editor on the bot's current face, not on the default. */
   const openFaceEditor = () => {
@@ -146,73 +155,82 @@ export function BotDetailView({
 
   return (
     <Page>
-      <PageHeader
-        eyebrow="Bot"
-        title={mate.persona || "Unnamed bot"}
-        description={mate.instructions ? undefined : "No instructions — give this bot a role via edit."}
-        back={{ label: "Fleet", onClick: () => { window.location.hash = "#/bots"; } }}
-        actions={
-          <>
-            <StatusDot status={mate.status} label={mate.status} pulse={mate.status === "running"} />
-            {mate.provider_id ? (
-              <span className="mono text-[var(--step-minus-1)] text-[var(--muted)]">
-                model {mate.provider_id.slice(0, 10)}…
+      <div className="mb-8">
+        <button
+          onClick={() => {
+            window.location.hash = "#/bots";
+          }}
+          className="mb-3 inline-flex items-center gap-1 text-[var(--step-minus-1)] text-[var(--muted)] transition-colors hover:text-[var(--text)]"
+        >
+          <span aria-hidden>←</span> Fleet
+        </button>
+        <div className="flex flex-wrap items-start gap-4">
+          <BotAvatar
+            face={mate.face}
+            size={64}
+            animated
+            follow
+            state={faceStateFor(activity)}
+            label={`The face of ${mate.persona || "this bot"}`}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="mb-1 text-[var(--step-minus-2)] uppercase tracking-[0.16em] text-[var(--faint)]">
+              Bot
+            </div>
+            <h1 className="text-[var(--step-1)] font-semibold tracking-tight text-[var(--text)]">
+              {mate.persona || "Unnamed bot"}
+            </h1>
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[var(--step-minus-1)] text-[var(--muted)]">
+              <StatusDot
+                status={mate.status}
+                label={mate.status}
+                pulse={mate.status === "running"}
+              />
+              <span>
+                {openCount} open task{openCount === 1 ? "" : "s"}
               </span>
-            ) : (
-              <Badge variant="warn">no model attached</Badge>
-            )}
-          </>
-        }
-      />
-
-      <div className="mb-4 flex flex-wrap items-center gap-2 text-[var(--step-minus-1)] text-[var(--muted)]">
-        <span className="mono">{mate.id}</span>
-        <span className="text-[var(--faint)]">·</span>
-        <span>workspace {mate.project_id.slice(0, 10)}…</span>
-        <span className="text-[var(--faint)]">·</span>
-        <span>
-          {openCount} open task{openCount === 1 ? "" : "s"} · {runList.length} runs
-        </span>
+              <span aria-hidden>·</span>
+              <span>{runList.length} runs</span>
+              <span aria-hidden>·</span>
+              <span>{modelName || (mate.provider_id ? "Model connected" : "No model connected")}</span>
+            </div>
+          </div>
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            <Button variant="primary" onClick={() => setShowCreateTask(true)}>
+              Give work
+            </Button>
+            <Button onClick={openFaceEditor}>Change face</Button>
+          </div>
+        </div>
       </div>
 
-      <section className="mb-6 flex flex-wrap items-center gap-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
-        <BotAvatar
-          face={mate.face}
-          size={96}
-          animated
-          follow
-          state={faceStateFor(activity)}
-          label={`The face of ${mate.persona || "this bot"}`}
-        />
-        <div className="min-w-0 flex-1">
-          <SectionLabel className="mb-1">Face</SectionLabel>
-          <p className="mb-3 max-w-[52ch] text-[var(--step-minus-1)] text-[var(--muted)]">
-            The face this bot wears wherever it appears. It is yours to change.
-          </p>
-          <Button onClick={openFaceEditor}>Change face</Button>
-        </div>
-      </section>
-
       {mate.instructions ? (
-        <section className="mb-6 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
-          <SectionLabel className="mb-2">Instructions</SectionLabel>
-          <p className="whitespace-pre-wrap text-[var(--step-0)] leading-relaxed text-[var(--text-soft)]">
+        <details className="mb-6 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
+          <summary className="cursor-pointer text-[var(--step-minus-1)] font-medium text-[var(--text-soft)]">
+            Instructions
+          </summary>
+          <p className="mt-3 whitespace-pre-wrap text-[var(--step-0)] leading-relaxed text-[var(--text-soft)]">
             {mate.instructions}
           </p>
-        </section>
+        </details>
       ) : null}
 
-      <section className="mb-6">
+      <details className="mb-6">
+        <summary className="mb-2 cursor-pointer text-[var(--step-minus-2)] uppercase tracking-[0.14em] text-[var(--faint)]">
+          Access and permissions
+        </summary>
         <BotAccess mate={mate} boards={(boards.data as { boards: Board[] }).boards} />
-      </section>
+      </details>
 
       {/* Tasks */}
       <section className="mb-6">
         <div className="mb-2 flex items-center justify-between">
           <SectionLabel>Tasks</SectionLabel>
-          <Button onClick={() => setShowCreateTask((v) => !v)} variant="ghost">
-            {showCreateTask ? "Cancel" : "New task"}
-          </Button>
+          {showCreateTask ? (
+            <Button onClick={() => setShowCreateTask(false)} variant="ghost">
+              Cancel
+            </Button>
+          ) : null}
         </div>
         {showCreateTask && (
           <form
@@ -240,9 +258,10 @@ export function BotDetailView({
             <input
               value={taskDescription}
               onChange={(e) => setTaskDescription(e.target.value)}
-              placeholder="Task description (e.g. review the login flow)"
+              placeholder="What should this bot do?"
               aria-label="Task description"
               required
+              autoFocus
               className={`${FORM_INPUT} min-w-52 flex-1`}
             />
             <input
@@ -274,7 +293,7 @@ export function BotDetailView({
               >
                 <div className="min-w-0 flex-1">
                   <button
-                    className="truncate text-left font-medium text-[var(--text)] hover:underline"
+                    className="block w-full truncate text-left font-medium text-[var(--text)] hover:underline"
                     onClick={() => openTask(t.project_id, t.id)}
                   >
                     {t.description || "Untitled"}
@@ -326,11 +345,11 @@ export function BotDetailView({
               >
                 <StatusDot status={r.status} pulse={r.status === "running"} label={undefined} />
                 <button
-                  className="mono min-w-0 flex-1 truncate text-left text-[var(--step-minus-1)] text-[var(--muted)] hover:text-[var(--text)]"
+                  className="min-w-0 flex-1 truncate text-left text-[var(--step-minus-1)] text-[var(--muted)] hover:text-[var(--text)]"
                   onClick={() => openTask(mate.project_id, r.task_id)}
                   title="Open task"
                 >
-                  {r.task_id.slice(0, 12)}…
+                  {taskList.find((t) => t.id === r.task_id)?.description?.trim() || "Task"}
                 </button>
                 <span className="mono text-[var(--step-minus-2)] text-[var(--faint)]">exit {r.exit_code ?? "—"}</span>
                 <span className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
@@ -349,9 +368,6 @@ export function BotDetailView({
       <section>
         <div className="mb-2 flex items-center justify-between">
           <SectionLabel>Private memory</SectionLabel>
-          <span className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
-            scoped to teammate:{mate.id}
-          </span>
         </div>
         <p className="mb-3 max-w-[72ch] text-[var(--step-minus-1)] text-[var(--muted)]">
           Only this bot reads and writes this memory. Notes here are recalled in its future runs.
@@ -512,10 +528,10 @@ function BotAccess({ mate, boards }: { mate: Teammate; boards: Board[] }) {
                 tabIndex={0}
                 title={
                   catalogue.isAdmin(perm)
-                    ? "admin permission — also needs the owner's exact-action approval"
+                    ? "admin permission. Also needs the owner's exact-action approval"
                     : catalogue.byName.has(perm)
                       ? catalogue.byName.get(perm)?.summary
-                      : "unknown permission — the server does not recognise it, so it grants nothing"
+                      : "unknown permission. The server does not recognise it, so it grants nothing"
                 }
                 className={`inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-0.5 text-[var(--step-minus-2)] font-medium text-[var(--text-soft)] ${
                   catalogue.isAdmin(perm) ? "border-[var(--warn)] text-[var(--warn)]" : ""
@@ -528,7 +544,7 @@ function BotAccess({ mate, boards }: { mate: Teammate; boards: Board[] }) {
           </div>
         ) : (
           <p className="text-[var(--step-minus-1)] text-[var(--muted)]">
-            No permissions — every gated tool call for this bot is denied.
+            No permissions. Every gated tool call for this bot is denied.
           </p>
         )}
         {unknownHeld.length > 0 ? (
@@ -554,7 +570,7 @@ function BotAccess({ mate, boards }: { mate: Teammate; boards: Board[] }) {
               <span
                 key={perm.name}
                 tabIndex={0}
-                title={`${perm.summary} — denied unless granted.`}
+                title={`${perm.summary}. Denied unless granted.`}
                 className="inline-flex items-center rounded-full border border-[var(--border-dim)] bg-[var(--surface-2)] px-2.5 py-0.5 text-[var(--step-minus-2)] font-medium text-[var(--muted)] opacity-60"
               >
                 {perm.name}
@@ -621,7 +637,7 @@ function BotAccess({ mate, boards }: { mate: Teammate; boards: Board[] }) {
               <option value="">(select board)</option>
               {notMemberOf.map((b) => (
                 <option key={b.id} value={b.id}>
-                  {b.name || "Unnamed board"} ({b.id.slice(0, 8)}…)
+                  {b.name || "Unnamed board"}
                 </option>
               ))}
             </select>
@@ -639,7 +655,7 @@ function BotAccess({ mate, boards }: { mate: Teammate; boards: Board[] }) {
             </Button>
             {inactive ? (
               <span className="text-[var(--step-minus-1)] text-[var(--muted)]">
-                This bot is {mate.status} — only active bots can join a board.
+                This bot is {mate.status}. Only active bots can join a board.
               </span>
             ) : null}
           </form>
@@ -844,9 +860,8 @@ export function BotsView() {
   return (
     <Page>
       <PageHeader
-        eyebrow="Fleet"
-        title="AI fleet"
-        description="Persistent AI teammates with identity, instructions, model/provider, permissions, memory, and task history. Bots own tasks and run them in isolated workspaces."
+        title="Fleet"
+        description="Your bots. Each one owns its work and keeps its own memory."
         actions={
           <>
             <Button variant="primary" onClick={() => setShowCreate(true)}>
@@ -863,7 +878,7 @@ export function BotsView() {
       </div>
 
       {showCreate ? (
-        <Modal title={`Create bot — ${stepName(step)}`} onClose={() => setShowCreate(false)}>
+        <Modal title={`Create bot: ${stepName(step)}`} onClose={() => setShowCreate(false)}>
           <div className="mb-3 flex items-center gap-1.5">
             {steps.map((s, i) => (
               <div
@@ -887,7 +902,7 @@ export function BotsView() {
                     <option value="">(select project)</option>
                     {projList.map((p) => (
                       <option key={p.id} value={p.id}>
-                        {p.repository || "workspace"} ({p.id.slice(0, 8)}…)
+                        {p.repository || "workspace"}
                       </option>
                     ))}
                   </select>
@@ -940,7 +955,7 @@ export function BotsView() {
                     onChange={(e) => setProviderId(e.target.value)}
                     className={FORM_INPUT}
                   >
-                    <option value="">(none — use default)</option>
+                    <option value="">(none, use default)</option>
                     {provList.map((pr) => (
                       <option key={pr.id} value={pr.id}>
                         {pr.name} ({pr.kind})
@@ -1028,10 +1043,10 @@ export function BotsView() {
                   {[
                     ["Project", projList.find((p) => p.id === pid)?.repository || pid],
                     ["Persona / name", persona],
-                    ["Instructions", instructions || "—"],
+                    ["Instructions", instructions || "Not set"],
                     ["Face", `${SHAPE_LABELS[face.shape]} · ${COLOR_LABELS[face.color]} · ${EXPRESSION_LABELS[face.expression]}`],
-                    ["Model provider", provList.find((pr) => pr.id === providerId)?.name || "(none — default)"],
-                    ["Permissions", selectedPerms.length > 0 ? selectedPerms.join(", ") : "— none —"],
+                    ["Model provider", provList.find((pr) => pr.id === providerId)?.name || "(none, default)"],
+                    ["Permissions", selectedPerms.length > 0 ? selectedPerms.join(", ") : "None"],
                     ["Memory scope", memoryScope],
                   ].map(([key, value]) => (
                     <div
@@ -1090,11 +1105,11 @@ export function BotsView() {
           <table className="w-full min-w-[720px] table-fixed">
             <thead>
               <tr>
-                <th className={`${TABLE_TH} w-[22%]`}>Agent</th>
-                <th className={`${TABLE_TH} w-[6rem]`}>State</th>
-                <th className={`${TABLE_TH} w-[8rem]`}>Model</th>
+                <th className={`${TABLE_TH} w-[27%]`}>Agent</th>
+                <th className={`${TABLE_TH} w-[5.5rem]`}>State</th>
+                <th className={`${TABLE_TH} w-[10rem]`}>Model</th>
                 <th className={TABLE_TH}>Work</th>
-                <th className={`${TABLE_TH} w-[12rem]`}><span className="sr-only">Actions</span></th>
+                <th className={`${TABLE_TH} w-[8rem]`}><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody>
@@ -1124,7 +1139,10 @@ export function BotsView() {
                   >
                     <td className={TABLE_TD}>
                       <BotChip href={`#/bot/${mate.id}`} persona={mate.persona || "Unnamed bot"} id={mate.id} status={liveStatus} face={mate.face} />
-                      <div className="mt-0.5 truncate pl-8 text-[var(--step-minus-2)] text-[var(--faint)]">
+                      <div
+                        className="mt-0.5 truncate text-[var(--step-minus-2)] text-[var(--faint)]"
+                        title={`${projectOf(mate.project_id)} · ${tasks.length} tasks`}
+                      >
                         {projectOf(mate.project_id)} · {tasks.length} task{tasks.length === 1 ? "" : "s"}
                       </div>
                     </td>
@@ -1158,18 +1176,18 @@ export function BotsView() {
                     <td className={TABLE_TD}>
                       {latest ? (
                         <>
-                          <button
-                            className="block w-full truncate text-left text-[var(--step-minus-1)] text-[var(--text)] hover:underline"
-                            title={latest.description}
-                            onClick={() => openTask(latest.project_id, latest.id)}
-                          >
-                            {latest.description || "Untitled task"}
-                          </button>
-                          <div className="mt-1 flex flex-wrap items-center gap-2">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <button
+                              className="min-w-0 flex-1 truncate text-left text-[var(--step-minus-1)] text-[var(--text)] hover:underline"
+                              title={latest.description}
+                              onClick={() => openTask(latest.project_id, latest.id)}
+                            >
+                              {latest.description || "Untitled task"}
+                            </button>
                             <StatusBadge status={latest.status} />
-                            {busy ? (
-                              <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
-                                +{active.length - 1} more
+                            {busy && active.length > 1 ? (
+                              <span className="shrink-0 text-[var(--step-minus-2)] text-[var(--faint)]">
+                                +{active.length - 1}
                               </span>
                             ) : null}
                           </div>
@@ -1195,9 +1213,6 @@ export function BotsView() {
                           title={mate.status !== "active" ? "Only active bots can be given work" : "Give this bot a task"}
                         >
                           Give work
-                        </Button>
-                        <Button variant="ghost" onClick={() => openBot(mate.id)}>
-                          Open →
                         </Button>
                       </div>
                     </td>

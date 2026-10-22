@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { ShortId } from "../components";
+import { api } from "../api";
+import { useAsync } from "../components";
 import { ConversationView } from "../views-chat";
 import { TasksTab } from "./tasks";
 import { TeammatesTab } from "./teammates";
@@ -49,18 +50,22 @@ export function ProjectDetailView({
       ? (initialTab as (typeof TABS)[number])
       : "Tasks",
   );
+  const projects = useAsync(() => api.listProjects(), []);
+  const workspaceName =
+    projects.data?.projects.find((project) => project.id === projectId)?.repository ||
+    "Workspace";
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="mx-auto w-full max-w-[var(--max-width-wide)] px-6 py-6 md:px-8 md:py-8">
-        <div className="mono mb-1 text-[var(--step-minus-2)] text-[var(--faint)]">
-          <a href="#/" className="hover:text-[var(--text-soft)]">
-            projects
-          </a>{" "}
-          / {projectId}
-        </div>
+        <a
+          href="#/settings"
+          className="mb-3 inline-flex items-center gap-1 text-[var(--step-minus-1)] text-[var(--muted)] transition-colors hover:text-[var(--text)]"
+        >
+          <span aria-hidden>←</span> Settings
+        </a>
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-[var(--step-2)] font-semibold tracking-tight text-[var(--text)]">
-            Project <ShortId id={projectId} />
+            {workspaceName}
           </h1>
         </div>
         <div

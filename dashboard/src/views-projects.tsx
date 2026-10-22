@@ -7,14 +7,7 @@ import { EntityForm } from "./forms";
 
 export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
   const list = useAsync(() => api.listProjects(), []);
-  const [projectId, setProjectId] = useState("");
   const [showCreate, setShowCreate] = useState("");
-
-  const open = (e: React.FormEvent) => {
-    e.preventDefault();
-    const id = projectId.trim();
-    if (id) onOpen(id);
-  };
 
   const create = async (values: Record<string, string>) => {
     const project = await api.createProject(values.repository || "repo");
@@ -30,7 +23,7 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
       <PageHeader
         eyebrow="Workspace"
         title="Workspaces"
-        description="Every workspace on this server. A workspace holds its bots, tasks, boards, memory and approvals. Open one to work inside it."
+        description="Every workspace on this server."
         actions={
           <>
             <Button variant="primary" onClick={() => setShowCreate("create")}>
@@ -55,7 +48,6 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
                 <th className={`${TABLE_TH} w-[6rem]`}>Tasks</th>
                 <th className={`${TABLE_TH} w-[5rem]`}>Boards</th>
                 <th className={`${TABLE_TH} w-[10rem]`}>Needs you</th>
-                <th className={`${TABLE_TH} w-[10rem]`}>Id</th>
                 <th className={`${TABLE_TH} w-[7rem]`}><span className="sr-only">Open</span></th>
               </tr>
             </thead>
@@ -75,9 +67,6 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
                       >
                         {project.repository || "Untitled workspace"}
                       </button>
-                      <div className="truncate text-[var(--step-minus-2)] text-[var(--faint)]">
-                        owner {project.owner}
-                      </div>
                     </td>
                     <td className={TABLE_TD}>{count?.bots ?? 0}</td>
                     <td className={TABLE_TD}>
@@ -99,11 +88,6 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
                       ) : (
                         <span className="text-[var(--faint)]">nothing</span>
                       )}
-                    </td>
-                    <td className={TABLE_TD}>
-                      <span className="mono block truncate text-[var(--step-minus-2)] text-[var(--faint)]">
-                        {project.id}
-                      </span>
                     </td>
                     <td className={`${TABLE_TD} whitespace-nowrap`}>
                       <Button variant="ghost" onClick={() => onOpen(project.id)}>
@@ -127,30 +111,6 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
           }
         />
       )}
-
-      {/* Opening a workspace by its id stays available for scripts and for
-          ids copied from elsewhere, without sitting in the page's way. */}
-      <form
-        onSubmit={open}
-        className="mt-8 flex flex-wrap items-center gap-2 border-t border-[var(--border-dim)] pt-4"
-      >
-        <label
-          htmlFor="open-by-id"
-          className="text-[var(--step-minus-1)] text-[var(--muted)]"
-        >
-          Open by id
-        </label>
-        <input
-          id="open-by-id"
-          value={projectId}
-          onChange={(e) => setProjectId(e.target.value)}
-          placeholder="prj_…"
-          className="mono w-56 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-[var(--step-minus-1)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
-        />
-        <Button type="submit" disabled={!projectId.trim()}>
-          Open
-        </Button>
-      </form>
 
       {showCreate ? (
         <Modal title="New workspace" onClose={() => setShowCreate("")}>

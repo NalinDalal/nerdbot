@@ -1,18 +1,19 @@
 import { useState } from "react";
 import { api } from "../api";
-import { Button, CARD_SHELL, EmptyState, ErrorState, LoadingState, Modal, ShortId, StatusBadge, TABLE_TD, TABLE_TH, useAsync } from "../components";
+import { Button, EmptyState, ErrorState, LoadingState, Modal, StatusBadge, TABLE_TD, TABLE_TH, relativeTime, useAsync } from "../components";
 import { EntityForm } from "../forms";
 
 export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenTask: (id: string) => void }) {
   const [showCreate, setShowCreate] = useState(false);
-  const [created, setCreated] = useState<string[]>([]);
   const tasks = useAsync(() => api.projectTasks(projectId), [projectId]);
   const runs = useAsync(() => api.projectRuns(projectId), [projectId]);
   const mates = useAsync(() => api.listTeammates(projectId), [projectId]);
   const ownerName = (id: string | null): string => {
-    if (!id) return "—";
-    return mates.data?.teammates.find((m) => m.id === id)?.persona || id.slice(0, 10);
+    if (!id) return "Unassigned";
+    return mates.data?.teammates.find((m) => m.id === id)?.persona || "Assigned";
   };
+  const taskName = (id: string): string =>
+    tasks.data?.tasks.find((task) => task.id === id)?.description?.trim() || "Task";
   const reload = () => {
     tasks.reload();
     runs.reload();
@@ -38,26 +39,12 @@ export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenT
             ]}
             onSubmit={async (values) => {
               const task = await api.createTask(projectId, values);
-              setCreated((prev) => [task.id, ...prev]);
               setShowCreate(false);
               onOpenTask(task.id);
             }}
           />
         </Modal>
       ) : null}
-      {created.length > 0 ? (
-        <div className={CARD_SHELL}>
-          <strong>Created this session</strong>
-          {created.map((id) => (
-            <div key={id}>
-              <a href={`#/p/${projectId}/t/${id}`}>
-                <ShortId id={id} />
-              </a>
-            </div>
-          ))}
-        </div>
-      ) : null}
-
       <h2>Tasks</h2>
       {tasks.loading ? (
         <LoadingState />
@@ -85,23 +72,34 @@ export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenT
                 <td className={TABLE_TD}>
                   <StatusBadge status={task.status} />
                   {task.blocked_reason ? (
-                    <span className="ml-2 text-[var(--step-minus-1)] text-[var(--muted)]">
+                    <div
+                      className="mt-0.5 max-w-[12rem] truncate text-[var(--step-minus-2)] text-[var(--muted)]"
+                      title={task.blocked_reason}
+                    >
                       {task.blocked_reason}
-                    </span>
+                    </div>
                   ) : null}
                 </td>
                 <td className="text-[var(--muted)]">{ownerName(task.owner_teammate_id)}</td>
-                <td className={TABLE_TD}>
+                <td className="text-[var(--muted)]">
                   {task.parent_task_id ? (
-                    <a href={`#/p/${projectId}/t/${task.parent_task_id}`}>
-                      <ShortId id={task.parent_task_id} />
+                    <a
+                      href={`#/p/${projectId}/t/${task.parent_task_id}`}
+                      className="hover:underline"
+                    >
+                      Parent task
                     </a>
                   ) : (
-                    <span className="text-[var(--muted)]">—</span>
+                    <span>—</span>
                   )}
                 </td>
-                <td className="mono text-[var(--muted)]" style={{ maxWidth: 260, overflowWrap: "anywhere" }}>
-                  {task.command || "—"}
+                <td className={TABLE_TD}>
+                  <div
+                    className="mono max-w-[16rem] truncate text-[var(--step-minus-1)] text-[var(--muted)]"
+                    title={task.command || undefined}
+                  >
+                    {task.command || "—"}
+                  </div>
                 </td>
               </tr>
             ))}
@@ -130,12 +128,14 @@ export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenT
           <tbody>
             {runs.data.runs.map((run) => (
               <tr className="transition-colors hover:bg-[var(--surface-2)]" key={run.id}>
+                <td className="text-[var(--muted)]">{relativeTime(run.started_at)}</td>
                 <td className={TABLE_TD}>
-                  <ShortId id={run.id} />
-                </td>
-                <td className={TABLE_TD}>
-                  <a href={`#/p/${projectId}/t/${run.task_id}`}>
-                    <ShortId id={run.task_id} />
+                  <a
+                    href={`#/p/${projectId}/t/${run.task_id}`}
+                    className="block max-w-[16rem] truncate hover:underline"
+                    title={taskName(run.task_id)}
+                  >
+                    {taskName(run.task_id)}
                   </a>
                 </td>
                 <td className={TABLE_TD}>

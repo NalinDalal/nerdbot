@@ -88,7 +88,17 @@ export function summarize(
         if (run.task_id) runningRunIds.add(run.task_id);
         activeRuns.push({ run, projectId: bundle.project.id, projectName: name, task: taskById.get(run.task_id) ?? null });
       } else if (run.status === "failed") {
-        failedRuns.push({ run, projectId: bundle.project.id, projectName: name, task: taskById.get(run.task_id) ?? null });
+        const task = taskById.get(run.task_id) ?? null;
+        /* A failed attempt is history once the task succeeded, was cancelled,
+           or has a newer run in flight. Keeping those in the banner would
+           leave the owner looking at a solved problem forever. */
+        if (
+          task &&
+          (task.status === "done" || task.status === "cancelled" || task.status === "running")
+        ) {
+          continue;
+        }
+        failedRuns.push({ run, projectId: bundle.project.id, projectName: name, task });
       }
     }
     for (const approval of bundle.approvals) {
@@ -206,6 +216,19 @@ export function AttentionBanner({
     return null;
   }
   const urgent = pendingApprovals.length > 0 || failedRuns.length > 0;
+  /* Three failed attempts at one task are one thing to look at, not three.
+     Keep the newest run per task and count the attempts. */
+  const failuresByTask = new Map<
+    string,
+    { run: (typeof failedRuns)[number]["run"]; task: (typeof failedRuns)[number]["task"]; projectName: string; projectId: string; attempts: number }
+  >();
+  for (const failure of failedRuns) {
+    const key = failure.task?.id ?? failure.run.id;
+    const seen = failuresByTask.get(key);
+    if (seen) seen.attempts += 1;
+    else failuresByTask.set(key, { ...failure, attempts: 1 });
+  }
+  const shownFailures = [...failuresByTask.values()].slice(0, 3);
   return (
     <section
       aria-label="Attention"
@@ -222,7 +245,7 @@ export function AttentionBanner({
           }`}
         >
           <span
-            className={`h-2 w-2 rounded-full ${urgent ? "bg-[var(--warn)]" : "bg-[var(--info)]"} animate-pulse`}
+            className={`h-2 w-2 rounded-full ${urgent ? "bg-[var(--warn)]" : "bg-[var(--info)]"}`}
           />
           {urgent ? "Needs your attention" : "The fleet is working"}
         </span>
@@ -244,6 +267,40 @@ export function AttentionBanner({
           </span>
         )}
       </div>
+
+      {failedRuns.length > 0 && (
+        <div className="mt-3 flex flex-col gap-1 border-t border-[var(--warn-dim)] pt-3">
+          {shownFailures.map(({ run, task, projectName, projectId, attempts }) => (
+            <div
+              key={run.id}
+              className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[var(--step-minus-1)]"
+            >
+              <span className="flex min-w-0 flex-1 items-baseline gap-2">
+                <span className="truncate text-[var(--text)]">
+                  {task?.description?.trim() || "A run failed"}
+                </span>
+                <span className="shrink-0 text-[var(--faint)]">
+                  {projectName}
+                  {attempts > 1 ? ` · ${attempts} attempts` : ""}
+                </span>
+              </span>
+              {task ? (
+                <button
+                  className="shrink-0 font-medium text-[var(--text)] underline underline-offset-4 hover:text-[var(--text-soft)]"
+                  onClick={() => onOpenTask(projectId, task.id)}
+                >
+                  Open task
+                </button>
+              ) : null}
+            </div>
+          ))}
+          {failuresByTask.size > 3 ? (
+            <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
+              and {failuresByTask.size - 3} more
+            </span>
+          ) : null}
+        </div>
+      )}
 
       {pendingApprovals.length > 0 && (
         <div className="mt-3 border-t border-[var(--warn-dim)] pt-3 flex flex-col gap-2">

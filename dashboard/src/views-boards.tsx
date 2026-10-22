@@ -19,9 +19,9 @@ export function BoardsView() {
   return (
     <Page>
       <PageHeader
-        eyebrow="Fleet"
+        eyebrow="Advanced"
         title="Boards"
-        description="Boards are workspace containers where bots own tasks. A CEO bot can create and delete boards, add teammate members, and exchange messages with other boards over the response channel."
+        description="Message channels that bots can read and write. Board membership is a real grant."
         actions={
           <>
             <Button variant="primary" onClick={() => setShowCreate(true)}>
@@ -460,7 +460,7 @@ function DecomposeModal({ boardId, onDone }: { boardId: string; onDone: () => vo
   };
 
   return (
-    <Modal title="Decompose objective — review the plan first" onClose={onDone}>
+    <Modal title="Decompose objective: review the plan first" onClose={onDone}>
       <label className="mb-4 flex flex-col gap-1.5">
         <span className="text-[var(--step-minus-1)] font-medium text-[var(--text)]">Objective</span>
         <textarea
@@ -476,7 +476,7 @@ function DecomposeModal({ boardId, onDone }: { boardId: string; onDone: () => vo
           {busy === "preview" ? "Planning…" : plan ? "Re-plan" : "Preview plan"}
         </Button>
         <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
-          Preview creates nothing — you review before any task exists.
+          Preview creates nothing. You review before any task exists.
         </span>
       </div>
 
@@ -556,7 +556,7 @@ function DecomposeModal({ boardId, onDone }: { boardId: string; onDone: () => vo
               {busy === "materialize" ? "Creating…" : "Approve & create tasks"}
             </Button>
             <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
-              Creates exactly these steps — no second model call.
+              Creates exactly these steps. No second model call.
             </span>
           </div>
         </div>

@@ -3,7 +3,6 @@ import { api } from "./api";
 import { notifyError } from "./app";
 import {
   ApprovalRow,
-  Badge,
   Button,
   EmptyState,
   ErrorState,
@@ -80,13 +79,13 @@ export function ApprovalsView() {
       const result = await api.decideApproval(item.id, decision);
       const resume = result.resume;
       if (resume && resume.outcome === "carried_out") {
-        setNotice(`Approved — ${item.action} was carried out.`);
+        setNotice(`Approved. ${item.action} was carried out.`);
       } else if (resume && resume.outcome === "refused") {
         setNotice(`Approved, but the action did not run: ${resume.output}`);
       } else if (resume && resume.outcome === "waiting") {
-        setNotice("Approved — one more decision is still needed.");
+        setNotice("Approved. One more decision is still needed.");
       } else if (decision === "denied") {
-        setNotice("Rejected — nothing was performed.");
+        setNotice("Rejected. Nothing was performed.");
       }
       inbox.reload();
       counts.reload();
@@ -102,7 +101,7 @@ export function ApprovalsView() {
     setNotice(null);
     try {
       await api.reaskApproval(item.id);
-      setNotice("Asked again — a new request is waiting for you.");
+      setNotice("Asked again. A new request is waiting for you.");
       inbox.reload();
       counts.reload();
     } catch (err) {
@@ -135,9 +134,8 @@ export function ApprovalsView() {
   return (
     <Page>
       <PageHeader
-        eyebrow="Oversight"
         title="Approvals"
-        description="Every request waiting on your answer, across your workspaces. Approving carries the exact action out — once, and only the action that was asked for."
+        description="Requests that need your answer. Approving carries out only the exact action that was asked for."
         actions={
           <>
             <Button onClick={() => void sweep()} disabled={busy === "sweep"}>
@@ -148,18 +146,6 @@ export function ApprovalsView() {
         }
       />
 
-      {counts.data ? (
-        <div className="mb-5 flex flex-wrap gap-1.5">
-          <Badge variant={counts.data.pending > 0 ? "warn" : "neutral"}>
-            {counts.data.pending} awaiting you
-          </Badge>
-          <Badge variant={counts.data.expired > 0 ? "bad" : "neutral"}>
-            {counts.data.expired} expired
-          </Badge>
-          <Badge variant="neutral">{counts.data.resolved} decided</Badge>
-        </div>
-      ) : null}
-
       {notice ? (
         <div
           className="mb-4 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-[var(--step-minus-1)] text-[var(--text-soft)]"
@@ -169,16 +155,27 @@ export function ApprovalsView() {
         </div>
       ) : null}
 
-      <div className="mb-4 flex flex-wrap gap-1.5">
-        {(["pending", "expired", "resolved"] as const).map((tab) => (
-          <Button
-            key={tab}
-            variant={state === tab ? "primary" : undefined}
-            onClick={() => setState(tab)}
-          >
-            {tab === "pending" ? "Awaiting you" : tab === "expired" ? "Expired" : "Decided"}
-          </Button>
-        ))}
+      <div className="mb-4 flex flex-wrap gap-1" role="tablist" aria-label="Approval state">
+        {(["pending", "expired", "resolved"] as const).map((tab) => {
+          const label = tab === "pending" ? "Awaiting you" : tab === "expired" ? "Expired" : "Decided";
+          const count = counts.data?.[tab] ?? 0;
+          return (
+            <button
+              key={tab}
+              role="tab"
+              aria-selected={state === tab}
+              onClick={() => setState(tab)}
+              className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[var(--step-minus-1)] transition-colors ${
+                state === tab
+                  ? "bg-[var(--surface-3)] text-[var(--text)]"
+                  : "text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text-soft)]"
+              }`}
+            >
+              {label}
+              <span className="text-[var(--step-minus-2)] text-[var(--faint)]">{count}</span>
+            </button>
+          );
+        })}
       </div>
 
       {inbox.loading ? (
