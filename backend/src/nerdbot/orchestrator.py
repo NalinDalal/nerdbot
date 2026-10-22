@@ -492,7 +492,10 @@ def retry_task(
 
     Only tasks in a terminal state (done/failed/blocked) may be retried, and
     only up to ``store.MAX_TASK_RETRIES`` times: a task that keeps failing
-    cannot be retried forever.
+    cannot be retried forever. A blocked run never started work — the owner
+    was inactive, a dependency was missing, the provider was not configured —
+    so it does not spend the retry budget. Otherwise fixing the environment
+    would still leave the task locked out.
     """
     task = store.get_task(conn, task_id)
     if task is None:
@@ -501,10 +504,12 @@ def retry_task(
         raise ValueError(
             f"task {task_id} is {task.status.value}; only terminal tasks may be retried"
         )
-    before = len(store.list_runs_for_task(conn, task_id))
-    if before >= store.MAX_TASK_RETRIES:
+    runs = store.list_runs_for_task(conn, task_id)
+    before = len(runs)
+    attempted = [run for run in runs if run.status != RunStatus.BLOCKED]
+    if len(attempted) >= store.MAX_TASK_RETRIES:
         raise ValueError(
-            f"task {task_id} has been attempted {before} times;"
+            f"task {task_id} has been attempted {len(attempted)} times;"
             f" retry limit ({store.MAX_TASK_RETRIES}) reached"
         )
     store.set_task_status(conn, task_id, TaskStatus.PENDING)

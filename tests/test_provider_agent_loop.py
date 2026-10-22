@@ -12,6 +12,7 @@ from nerdbot import orchestrator, store
 from nerdbot.api import create_app
 from nerdbot.models import ProviderKind
 from nerdbot.providers import (
+    MockRuntimeAdapter,
     OpenAICompatibleAdapter,
     ProviderAuthenticationError,
     ProviderConfigurationError,
@@ -69,6 +70,35 @@ def test_empty_command_fails_explicitly(tmp_path) -> None:
     adapter = OpenAICompatibleAdapter(CONFIG)
     with pytest.raises(_ExecutionError):
         adapter.start_run("  ", tmp_path)
+
+
+def test_task_description_is_the_prompt_when_command_is_empty(tmp_path) -> None:
+    """Dashboard tasks carry their instruction in the description only."""
+    from types import SimpleNamespace
+
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, json=_msg("understood"))
+
+    adapter = OpenAICompatibleAdapter(CONFIG, transport=httpx.MockTransport(handler))
+    context = SimpleNamespace(task=SimpleNamespace(description="find customers for driftlock"))
+    result = adapter.start_run("", tmp_path, context=context)
+    assert result.exit_code == 0 and result.output == "understood"
+    assert seen["messages"][-1] == {
+        "role": "user",
+        "content": "find customers for driftlock",
+    }
+
+
+def test_mock_uses_description_when_command_is_empty(tmp_path) -> None:
+    from types import SimpleNamespace
+
+    context = SimpleNamespace(task=SimpleNamespace(description="draft the plan"))
+    result = MockRuntimeAdapter().start_run("", tmp_path, context=context)
+    assert result.exit_code == 0
+    assert "draft the plan" in result.output
 
 
 def test_single_tool_then_final(tmp_path) -> None:
@@ -167,6 +197,44 @@ def test_auth_and_protocol_errors(tmp_path) -> None:
         adapter.start_run("hi", tmp_path)
     adapter = OpenAICompatibleAdapter(CONFIG, transport=_transport([(200, {"nope": 1})]))
     with pytest.raises(ProviderProtocolError):
+        adapter.start_run("hi", tmp_path)
+
+
+def test_provider_error_body_is_reported(tmp_path) -> None:
+    """A bare status code is not actionable; the provider says why."""
+    adapter = OpenAICompatibleAdapter(
+        CONFIG,
+        transport=_transport([(400, {"error": {"message": "tool_choice unsupported"}})]),
+    )
+    with pytest.raises(ProviderProtocolError, match="tool_choice unsupported"):
+        adapter.start_run("hi", tmp_path)
+
+
+HALLUCINATED_TOOL = {
+    "error": {
+        "message": "Tool call validation failed",
+        "type": "invalid_request_error",
+        "code": "tool_use_failed",
+        "failed_generation": '{"name": "persona.read_catalog", "arguments": {}}',
+    }
+}
+
+
+def test_hallucinated_tool_is_corrected_not_fatal(tmp_path) -> None:
+    """A model naming an unoffered tool must not cost the whole run."""
+    script = [(400, HALLUCINATED_TOOL), _msg("answered without tools")]
+    adapter = OpenAICompatibleAdapter(CONFIG, transport=_transport(script))
+    result = adapter.start_run("hi", tmp_path)
+    assert result.exit_code == 0 and result.output == "answered without tools"
+    correction = [t for t in adapter.last_transcript if t["role"] == "user"][-1]["content"]
+    assert "persona.read_catalog" in correction
+    assert "web_search" in correction
+
+
+def test_repeated_hallucinated_tools_fail_explicitly(tmp_path) -> None:
+    script = [(400, HALLUCINATED_TOOL)] * 5
+    adapter = OpenAICompatibleAdapter({**CONFIG, "max_turns": 5}, transport=_transport(script))
+    with pytest.raises(Exception, match="kept rejecting tool calls"):
         adapter.start_run("hi", tmp_path)
 
 

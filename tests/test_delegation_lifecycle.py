@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from nerdbot import app_tools, executor, orchestrator, store
 from nerdbot.agent_context import AgentContext
 from nerdbot.api import create_app
-from nerdbot.models import DelegationStatus, ProviderKind, TaskStatus
+from nerdbot.models import DelegationStatus, ProviderKind, RunStatus, TaskStatus
 
 TOKEN = "cancel-token"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
@@ -270,6 +270,28 @@ def test_task_retry_is_bounded(tmp_path) -> None:
         retries += 1
         assert retries <= store.MAX_TASK_RETRIES
     assert len(store.list_runs_for_task(conn, task.id)) == store.MAX_TASK_RETRIES
+    conn.close()
+
+
+def test_blocked_runs_do_not_consume_the_retry_budget(tmp_path) -> None:
+    """A run that never started is not an attempt.
+
+    Six blocked runs from an unconfigured provider used to lock a task out of
+    every retry, so fixing the provider still left it stuck.
+    """
+    conn = store.connect(":memory:")
+    project = store.create_project(conn, owner="local-owner")
+    mate = store.create_teammate(conn, project.id, persona="bot")
+    task = store.create_task(
+        conn, project.id, "t", owner_teammate_id=mate.id, command="echo ok"
+    )
+    for _ in range(store.MAX_TASK_RETRIES):
+        run = store.create_run(conn, task.id, runtime="local", session=task.id)
+        store.finish_run(conn, run.id, RunStatus.BLOCKED, None, "provider not configured")
+    store.set_task_status(conn, task.id, TaskStatus.BLOCKED, "provider not configured")
+
+    _, result, _ = orchestrator.retry_task(conn, task.id, data_dir=str(tmp_path))
+    assert result is not None and result.exit_code == 0
     conn.close()
 
 

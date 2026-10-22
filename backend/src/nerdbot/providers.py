@@ -41,6 +41,7 @@ HARD_MAX_TURNS = 10
 DEFAULT_REQUEST_TIMEOUT_S = 30.0
 MAX_RETRIES = 2
 CONSECUTIVE_TOOL_FAILURE_LIMIT = 3
+MAX_TOOL_CALL_CORRECTIONS = 2
 
 
 class ProviderConfigurationError(ValueError):
@@ -61,6 +62,20 @@ class ProviderTimeoutError(RuntimeError):
 
 class ProviderProtocolError(RuntimeError):
     """Malformed provider response or unexpected HTTP status."""
+
+
+class ProviderToolCallRejected(ProviderProtocolError):
+    """Provider rejected a tool call before it reached the loop.
+
+    Groq validates tool names against the request and answers HTTP 400 when a
+    model names one that was never offered. The call is recoverable: the loop
+    tells the model which tools exist and tries again instead of failing the
+    whole run.
+    """
+
+    def __init__(self, detail: str, tool_name: str) -> None:
+        super().__init__(detail)
+        self.tool_name = tool_name
 
 
 class ProviderNetworkError(RuntimeError):
@@ -127,6 +142,73 @@ def _parse_tool_calls(message: dict[str, Any]) -> list[dict[str, Any]]:
     return calls
 
 
+def _error_detail(response: httpx.Response) -> str:
+    """Upstream error text, bounded.
+
+    ``HTTP 400`` alone cannot be acted on; providers explain themselves in
+    the body. Bounded so a stray HTML page cannot flood a run excerpt.
+    """
+    try:
+        text = response.text.strip()
+    except Exception:
+        return ""
+    return f": {text[:300]}" if text else ""
+
+
+def _rejected_tool_name(response: httpx.Response) -> str | None:
+    """Name of the tool in a provider ``tool_use_failed`` response, if any.
+
+    Returns ``None`` when the response is a different kind of error, and an
+    empty string when the provider rejected a tool call but did not say which
+    one. Both cases are recoverable; only ``None`` is a normal failure.
+    """
+    try:
+        body = response.json()
+    except Exception:
+        return None
+    if not isinstance(body, dict):
+        return None
+    error = body.get("error")
+    if not isinstance(error, dict) or error.get("code") != "tool_use_failed":
+        return None
+    generation = error.get("failed_generation")
+    if not isinstance(generation, str):
+        return ""
+    try:
+        parsed = json.loads(generation)
+    except ValueError:
+        return ""
+    name = parsed.get("name") if isinstance(parsed, dict) else None
+    return str(name) if name else ""
+
+
+def _tool_correction(tool_name: str, tools: list[dict[str, Any]]) -> str:
+    """Tell the model what it may call, after it invented a tool."""
+    available = ", ".join(
+        str(tool.get("function", {}).get("name", "")) for tool in tools if isinstance(tool, dict)
+    )
+    named = f"the tool {tool_name!r}" if tool_name else "a tool that does not exist"
+    return (
+        f"Your last message called {named}, which is not available. "
+        f"Use only these tools: {available}. Otherwise answer in plain text."
+    )
+
+
+def _prompt_text(command: str, context: Any | None) -> str:
+    """The instruction a model-shaped adapter runs.
+
+    Tasks created from the dashboard have no separate ``command``: the
+    description *is* the instruction. Only model-shaped adapters read it that
+    way. The shell runtime still rejects an empty command, so prose is never
+    handed to ``sh -c``.
+    """
+    text = command.strip()
+    if text:
+        return text
+    task = getattr(context, "task", None)
+    return str(getattr(task, "description", "") or "").strip()
+
+
 class OpenAICompatibleAdapter:
     """Bounded agent loop over OpenAI-style /chat/completions with tools.
 
@@ -186,7 +268,8 @@ class OpenAICompatibleAdapter:
         *,
         cancel: CancelToken | None = None,
     ) -> RunResult:
-        if not command.strip():
+        prompt_text = _prompt_text(command, context)
+        if not prompt_text:
             raise ExecutionError("empty command")
         base_url, model, api_key, max_turns, request_timeout = self._settings()
         deadline = time.monotonic() + timeout_s
@@ -197,15 +280,16 @@ class OpenAICompatibleAdapter:
         if system_message:
             messages.append({"role": "system", "content": system_message})
             transcript.append({"role": "system", "content": system_message})
-        prompt = command
+        prompt = prompt_text
         if system_message:
             # The system message already carries task facts; keep the user
             # message as the execution instruction.
-            prompt = f"Execute your task now.\n\nTask instruction:\n{command}"
+            prompt = f"Execute your task now.\n\nTask instruction:\n{prompt_text}"
         messages.append({"role": "user", "content": prompt})
         transcript.append({"role": "user", "content": prompt})
         tools = self._tools_for(context)
         consecutive_failures = 0
+        tool_call_corrections = 0
         turns = 0
         client = httpx.Client(
             base_url=base_url,
@@ -222,7 +306,22 @@ class OpenAICompatibleAdapter:
                     # model call to come back.
                     raise RunCancelled(f"run cancelled after {turns} turn(s)")
                 turns += 1
-                data = self._authed_post(client, api_key, model, messages, tools)
+                try:
+                    data = self._authed_post(client, api_key, model, messages, tools)
+                except ProviderToolCallRejected as exc:
+                    # A model may name a tool nobody offered. That is its
+                    # mistake, not a reason to lose the run: say what exists
+                    # and let it correct itself, within a small budget.
+                    tool_call_corrections += 1
+                    if tool_call_corrections > MAX_TOOL_CALL_CORRECTIONS:
+                        raise ProviderToolError(
+                            "provider kept rejecting tool calls after"
+                            f" {MAX_TOOL_CALL_CORRECTIONS} corrections"
+                        ) from exc
+                    correction = _tool_correction(exc.tool_name, tools)
+                    messages.append({"role": "user", "content": correction})
+                    transcript.append({"role": "user", "content": correction})
+                    continue
                 message = self._first_message(data)
                 transcript.append({"role": "assistant", "content": message.get("content") or ""})
                 calls = _parse_tool_calls(message)
@@ -352,9 +451,17 @@ class OpenAICompatibleAdapter:
             if response.status_code >= 500:
                 last_error = ProviderProtocolError(f"provider error (HTTP {response.status_code})")
                 continue
+            if response.status_code == 400:
+                rejected = _rejected_tool_name(response)
+                if rejected is not None:
+                    raise ProviderToolCallRejected(
+                        f"provider rejected a tool call (HTTP 400){_error_detail(response)}",
+                        rejected,
+                    )
             if response.status_code != 200:
                 raise ProviderProtocolError(
                     f"unexpected provider status (HTTP {response.status_code})"
+                    f"{_error_detail(response)}"
                 )
             try:
                 data = response.json()
@@ -402,12 +509,13 @@ class MockRuntimeAdapter:
         *,
         cancel: CancelToken | None = None,
     ) -> RunResult:
-        _ = (workspace, timeout_s, context)
-        if not command.strip():
+        _ = (workspace, timeout_s)
+        prompt_text = _prompt_text(command, context)
+        if not prompt_text:
             raise ExecutionError("empty command")
         if cancel is not None and cancel.cancelled:
             raise RunCancelled("run cancelled before the mock executed")
-        output = f"[mock provider] would execute: {command.strip()}"
+        output = f"[mock provider] would execute: {prompt_text}"
         return RunResult(exit_code=0, output=output, stdout=output, stderr="")
 
 
