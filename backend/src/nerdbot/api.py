@@ -1047,6 +1047,12 @@ def create_app() -> FastAPI:
         packages = [
             p.model_dump(mode="json") for p in store.list_pr_packages_for_task(conn, task_id)
         ]
+        # The approvals that belong to this task, so a task waiting on a
+        # decision can be decided from the task itself.
+        approvals = [
+            a.model_dump(mode="json")
+            for a in store.list_approvals_for_task(conn, task_id)
+        ]
         return {
             "task": task.model_dump(mode="json"),
             "runs": runs,
@@ -1054,6 +1060,7 @@ def create_app() -> FastAPI:
             "issue": issue.model_dump(mode="json") if issue else None,
             "reviews": reviews,
             "pr_packages": packages,
+            "approvals": approvals,
             "delegations": [
                 d.model_dump(mode="json")
                 for d in store.list_delegations_for_task(conn, task_id)

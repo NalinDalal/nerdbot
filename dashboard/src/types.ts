@@ -316,6 +316,9 @@ export interface TaskView {
   issue: Issue | null;
   reviews: Review[];
   pr_packages: PRPackage[];
+  /** Approvals tied to this task, so a task waiting on a decision can be
+   *  decided from the task itself. */
+  approvals: Approval[];
   delegations: Delegation[];
   /** Child tasks created via delegation (nested tree, one level per view). */
   children: Task[];

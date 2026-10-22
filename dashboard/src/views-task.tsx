@@ -177,7 +177,10 @@ export function TaskDetailView({
   }
 
   const data = view.data;
-  const { task, runs, artifacts, issue, reviews, pr_packages, children, parent } = data;
+  const { task, runs, artifacts, issue, reviews, pr_packages, approvals, children, parent } = data;
+  // The approval this task is waiting on, if any: the owner decides it here
+  // instead of having to find it in the approvals view.
+  const pendingApproval = approvals?.find((a) => a.decision === "pending") ?? null;
   // Merge view-level delegations with the dedicated endpoint (deduped).
   const delegationRows = [
     ...data.delegations,
@@ -214,6 +217,45 @@ export function TaskDetailView({
           </>
         }
       />
+
+      {pendingApproval ? (
+        <div
+          className="mb-6 flex flex-wrap items-center gap-x-4 gap-y-3 rounded-xl border border-[var(--warn)] bg-[var(--warn-dim)] px-4 py-3"
+          role="status"
+        >
+          <div className="min-w-0">
+            <strong className="text-[var(--step-minus-1)] text-[var(--text)]">
+              This task is waiting for your decision
+            </strong>
+            <div className="mt-0.5 text-[var(--step-minus-1)] text-[var(--muted)]">
+              {pendingApproval.action}
+              {pendingApproval.requester ? ` · asked by ${pendingApproval.requester}` : ""}
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Button
+              variant="primary"
+              disabled={busy !== null}
+              onClick={() => void act("approval", () => api.decideApproval(pendingApproval.id, "approved"))}
+            >
+              Approve once
+            </Button>
+            <Button
+              disabled={busy !== null}
+              onClick={() => void act("approval", () => api.decideApproval(pendingApproval.id, "approved_forever"))}
+            >
+              Forever
+            </Button>
+            <Button
+              variant="danger"
+              disabled={busy !== null}
+              onClick={() => void act("approval", () => api.decideApproval(pendingApproval.id, "denied"))}
+            >
+              Reject
+            </Button>
+          </div>
+        </div>
+      ) : null}
 
       {task.blocked_reason ? (
         <div
