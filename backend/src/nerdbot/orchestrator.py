@@ -20,8 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from . import agent_context as agent_context_mod
+from . import approval_flow, store, workspace
 from . import runtime as runtime_mod
-from . import store, workspace
 from .models import (
     Approval,
     DelegationStatus,
@@ -47,6 +47,11 @@ from .runtime import (
     RuntimeAdapter,
     frame_untrusted,
 )
+
+#: How large a checkpointed tool call may be. The arguments are stored
+#: verbatim so the action can be replayed exactly, and an unbounded payload
+#: would be a way to fill the database from a model.
+MAX_CHECKPOINT_BYTES = 64 * 1024
 
 
 def dependencies_satisfied(conn: sqlite3.Connection, task: Task) -> bool:
@@ -196,6 +201,12 @@ def schedule_run(
     finally:
         runtime_mod.unregister_run(run.id)
 
+    # The turn asked for something only the owner can allow. The run is
+    # WAITING, not finished: it must not report a success while the request
+    # it made is still unanswered.
+    if ctx.pending_approvals:
+        return _park_on_approval(conn, run, task, ctx.pending_approvals, active, data_dir)
+
     duration_s = time.monotonic() - started
     ok = result.exit_code == 0
     current = store.get_task(conn, task_id)
@@ -274,6 +285,48 @@ def schedule_run(
     if transcript:
         _record_transcript(conn, task_id, run, data_dir, transcript, turns)
     return run, result, artifact_id
+
+
+def _park_on_approval(
+    conn: sqlite3.Connection,
+    run: Run,
+    task: Task,
+    pending: list[Any],
+    active: RuntimeAdapter,
+    data_dir: str,
+) -> tuple[Run, None, None]:
+    """Park a run on a human decision.
+
+    The run does not fail and it does not succeed: it is WAITING. What it
+    waits for was written on the approval row when the gate fired — the bot
+    that asked, the tool, the exact arguments and the digest the owner will
+    decide on — so the decision can carry the action out instead of merely
+    recording that somebody said yes.
+
+    The transcript is kept: what the model did before it asked is the
+    context of the request, and it is evidence.
+    """
+    transcript = getattr(active, "last_transcript", None)
+    turns = getattr(active, "last_turns", 0)
+    action = pending[0].action if pending else "an action"
+    reason = (
+        f"waiting for your approval of {action}"
+        f" — {len(pending)} request(s) pending"
+    )
+    store.mark_run_awaiting_approval(conn, run.id, reason)
+    run.status = RunStatus.AWAITING_APPROVAL
+    run.output_excerpt = reason
+    store.set_task_status(conn, task.id, TaskStatus.AWAITING_APPROVAL, reason)
+    if transcript:
+        _record_transcript(conn, task.id, run, data_dir, transcript, turns)
+    # The owner may have answered while the run was still finishing its turn.
+    # Honour that now rather than leaving a decided request nobody acted on.
+    if approval_flow.resume_run(conn, run.id, data_dir).performed:
+        refreshed = store.get_run(conn, run.id)
+        if refreshed is not None:
+            run.status = refreshed.status
+            run.output_excerpt = refreshed.output_excerpt
+    return run, None, None
 
 
 def _finish_cancelled(

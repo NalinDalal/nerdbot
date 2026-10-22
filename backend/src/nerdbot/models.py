@@ -29,6 +29,10 @@ class TaskStatus(StrEnum):
     FAILED = "failed"
     BLOCKED = "blocked"
     CANCELLED = "cancelled"
+    # The task is stopped on a human decision: an agent asked for a
+    # privileged action and the owner has not answered yet. Not terminal —
+    # the approval can still arrive, and the task then resumes.
+    AWAITING_APPROVAL = "awaiting_approval"
 
 
 class RunStatus(StrEnum):
@@ -39,6 +43,9 @@ class RunStatus(StrEnum):
     BLOCKED = "blocked"
     STOPPED = "stopped"
     CANCELLED = "cancelled"
+    # The run is parked on a human decision. Not terminal: approving the
+    # request finishes the run.
+    AWAITING_APPROVAL = "awaiting_approval"
 
 
 class VerificationStatus(StrEnum):
@@ -225,6 +232,18 @@ class Approval(BaseModel):
     task_id: str | None = None
     digest: str | None = None
     executed_at: datetime | None = None
+    # The bot that asked for this action, when the approval came from a
+    # gate inside an agent run.
+    teammate_id: str = ""
+    # The exact action that is waiting: the tool and its arguments, as JSON.
+    # Empty on a manually requested approval (a run approval, a PR package
+    # approval), which has nothing to resume.
+    tool_name: str = ""
+    tool_arguments: str = ""
+    # When the resume started carrying this action out. It is written BEFORE
+    # the action runs, so a crash cannot repeat it: for a privileged action,
+    # at-most-once is the right way round.
+    resumed_at: datetime | None = None
 
 
 class ChatThread(BaseModel):

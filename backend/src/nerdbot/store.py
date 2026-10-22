@@ -242,12 +242,26 @@ TASK_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
             TaskStatus.BLOCKED,
             TaskStatus.PENDING,
             TaskStatus.CANCELLED,
+            TaskStatus.AWAITING_APPROVAL,
         }
     ),
     TaskStatus.BLOCKED: frozenset({TaskStatus.PENDING, TaskStatus.CANCELLED}),
     TaskStatus.FAILED: frozenset({TaskStatus.PENDING}),
     TaskStatus.DONE: frozenset({TaskStatus.PENDING}),
     TaskStatus.CANCELLED: frozenset({TaskStatus.PENDING, TaskStatus.RUNNING}),
+    # A task waiting on a human decision can go anywhere the work can go:
+    # the approval arrives and the run finishes, the owner rejects it, it
+    # expires, or the owner cancels it.
+    TaskStatus.AWAITING_APPROVAL: frozenset(
+        {
+            TaskStatus.RUNNING,
+            TaskStatus.DONE,
+            TaskStatus.FAILED,
+            TaskStatus.BLOCKED,
+            TaskStatus.PENDING,
+            TaskStatus.CANCELLED,
+        }
+    ),
 }
 
 RUN_TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {
@@ -266,6 +280,18 @@ RUN_TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {
             RunStatus.FAILED,
             RunStatus.BLOCKED,
             RunStatus.STOPPED,
+            RunStatus.CANCELLED,
+            RunStatus.AWAITING_APPROVAL,
+        }
+    ),
+    # A parked run is finished by the owner's decision, or by the expiry of
+    # the request. It never resumes mid-flight: the approved action is
+    # replayed as its own execution, and that execution ends the run.
+    RunStatus.AWAITING_APPROVAL: frozenset(
+        {
+            RunStatus.SUCCEEDED,
+            RunStatus.FAILED,
+            RunStatus.BLOCKED,
             RunStatus.CANCELLED,
         }
     ),
@@ -469,6 +495,20 @@ _PHASE18_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "teammates": [("face", "TEXT NOT NULL DEFAULT ''")],
 }
 
+_PHASE19_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    # The exact action an approval is waiting for, so the owner's decision
+    # can resume it instead of merely recording it. The three columns carry
+    # the whole association: which bot asked (teammate_id), which tool and
+    # with which arguments (tool_name, tool_arguments), on top of the
+    # action, digest, run and task the row already had.
+    "approvals": [
+        ("teammate_id", "TEXT NOT NULL DEFAULT ''"),
+        ("tool_name", "TEXT NOT NULL DEFAULT ''"),
+        ("tool_arguments", "TEXT NOT NULL DEFAULT ''"),
+        ("resumed_at", "TEXT"),
+    ],
+}
+
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Idempotent migrations for databases created by older schemas."""
@@ -479,7 +519,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
                   _PHASE6_COLUMNS, _PHASE7_COLUMNS, _PHASE8_COLUMNS, _PHASE9_COLUMNS,
                   _PHASE10_COLUMNS, _PHASE11_COLUMNS, _PHASE12_COLUMNS, _PHASE13_COLUMNS,
                   _PHASE14_COLUMNS, _PHASE15_COLUMNS, _PHASE16_COLUMNS, _PHASE17_COLUMNS,
-                  _PHASE18_COLUMNS):
+                  _PHASE18_COLUMNS, _PHASE19_COLUMNS):
         for table, columns in phase.items():
             phases.setdefault(table, []).extend(columns)
     for table, columns in phases.items():
@@ -1195,19 +1235,21 @@ def set_task_workspace(
 def set_task_status(
     conn: sqlite3.Connection, task_id: str, status: TaskStatus, reason: str = ""
 ) -> None:
-    """Move a task to a new status, recording why it was blocked.
+    """Move a task to a new status, recording why it is not progressing.
 
-    ``reason`` is kept only while the task is blocked and is cleared when it
-    leaves that state, so a stale reason never lingers on a running task.
+    ``reason`` is kept only while the task is blocked or waiting on a human
+    decision, and is cleared when it leaves those states, so a stale reason
+    never lingers on a running task.
     """
     task = get_task(conn, task_id)
     if task is None:
         raise KeyError(f"unknown task {task_id}")
     if status != task.status and status not in TASK_TRANSITIONS[task.status]:
         raise InvalidTransitionError(f"task {task_id}: {task.status.value} -> {status.value}")
+    keeps_reason = status in (TaskStatus.BLOCKED, TaskStatus.AWAITING_APPROVAL)
     conn.execute(
         "UPDATE tasks SET status = ?, blocked_reason = ? WHERE id = ?",
-        (status.value, reason if status == TaskStatus.BLOCKED else "", task_id),
+        (status.value, reason if keeps_reason else "", task_id),
     )
     conn.commit()
     if status != task.status:
@@ -2237,6 +2279,39 @@ def finish_run(
         record_event(conn, task.project_id, "run", run_id, f"run.status.{status.value}")
 
 
+def mark_run_awaiting_approval(
+    conn: sqlite3.Connection, run_id: str, reason: str
+) -> Run:
+    """Park a run on a human decision.
+
+    Unlike ``finish_run`` this does NOT stamp ``finished_at``: the run is not
+    over, it is waiting, and the owner's answer ends it. The output excerpt
+    says what it is waiting for, so the run row explains itself.
+    """
+    run = get_run(conn, run_id)
+    if run is None:
+        raise KeyError(f"unknown run {run_id}")
+    if run.status in TERMINAL_RUN_STATUSES:
+        raise TerminalRunError(f"run {run_id} is already terminal ({run.status.value})")
+    if RunStatus.AWAITING_APPROVAL not in RUN_TRANSITIONS[run.status]:
+        raise InvalidTransitionError(
+            f"run {run_id}: {run.status.value} -> {RunStatus.AWAITING_APPROVAL.value}"
+        )
+    conn.execute(
+        "UPDATE runs SET status = ?, output_excerpt = ? WHERE id = ?",
+        (RunStatus.AWAITING_APPROVAL.value, reason[:4000], run_id),
+    )
+    conn.commit()
+    run.status = RunStatus.AWAITING_APPROVAL
+    run.output_excerpt = reason[:4000]
+    task = get_task(conn, run.task_id)
+    if task is not None:
+        record_event(
+            conn, task.project_id, "run", run_id, "run.status.awaiting_approval"
+        )
+    return run
+
+
 def request_run_cancel(conn: sqlite3.Connection, run_id: str) -> Run:
     """Record that the owner asked for this run to stop.
 
@@ -2409,6 +2484,12 @@ def _approval_from_row(row: sqlite3.Row) -> Approval:
         executed_at=datetime.fromisoformat(row["executed_at"])
         if "executed_at" in keys and row["executed_at"]
         else None,
+        teammate_id=row["teammate_id"] if "teammate_id" in keys else "",
+        tool_name=row["tool_name"] if "tool_name" in keys else "",
+        tool_arguments=row["tool_arguments"] if "tool_arguments" in keys else "",
+        resumed_at=datetime.fromisoformat(row["resumed_at"])
+        if "resumed_at" in keys and row["resumed_at"]
+        else None,
     )
 
 
@@ -2473,6 +2554,14 @@ def purge_expired_approvals(conn: sqlite3.Connection, project_id: str) -> int:
 
 DEFAULT_APPROVAL_TTL_S = 600.0
 
+#: How long a decided one-use approval stays usable.
+#:
+#: The owner's answer is fresh; the request's own deadline is not. Without
+#: this, an approval decided one second before it expired would leave no
+#: window in which the action could actually be carried out — the decision
+#: would be recorded and the work would still not happen.
+APPROVAL_RESUME_GRACE_S = 300.0
+
 
 def request_approval(
     conn: sqlite3.Connection,
@@ -2527,6 +2616,48 @@ def request_approval(
     return approval
 
 
+def set_approval_checkpoint(
+    conn: sqlite3.Connection,
+    approval_id: str,
+    teammate_id: str = "",
+    tool_name: str = "",
+    tool_arguments: str = "",
+    run_id: str = "",
+    task_id: str = "",
+) -> Approval:
+    """Record the exact action an approval is waiting for.
+
+    The gate knows the action and its digest; it does not know which tool the
+    model asked for, nor with which arguments. The run does, so it writes them
+    here — and this is what makes the owner's decision *resumable* instead of
+    merely recordable.
+
+    The run and the task are bound here too, when they are not already: a
+    gate approval is created without them, and without that binding the
+    request cannot be traced back to the work that asked for it.
+
+    The write is idempotent: writing the same checkpoint twice changes
+    nothing, which matters because a run can be interrupted and restarted.
+    """
+    approval = get_approval(conn, approval_id)
+    if approval is None:
+        raise KeyError(f"unknown approval {approval_id}")
+    bound_run = run_id or approval.run_id
+    bound_task = task_id or approval.task_id
+    conn.execute(
+        "UPDATE approvals SET teammate_id = ?, tool_name = ?, tool_arguments = ?,"
+        " run_id = ?, task_id = ? WHERE id = ?",
+        (teammate_id, tool_name, tool_arguments, bound_run, bound_task, approval_id),
+    )
+    conn.commit()
+    approval.teammate_id = teammate_id
+    approval.tool_name = tool_name
+    approval.tool_arguments = tool_arguments
+    approval.run_id = bound_run
+    approval.task_id = bound_task
+    return approval
+
+
 def list_approvals_for_task(conn: sqlite3.Connection, task_id: str) -> list[Approval]:
     """Approvals belonging to a task: run-linked (from its runs), directly
     task-linked, or board-linked where the task lives on that board."""
@@ -2576,6 +2707,163 @@ def approval_is_pending(approval: Approval, now: datetime | None = None) -> bool
     return expires > (now or datetime.now(UTC))
 
 
+def approval_is_expired(approval: Approval, now: datetime | None = None) -> bool:
+    """True when an undecided approval has passed its expiry.
+
+    An expired approval is neither pending (it cannot be decided) nor
+    resolved (nobody decided it). It is a third thing, and it has to be
+    visible: a request that died unanswered is exactly the kind of silence
+    that makes a workspace feel stuck.
+    """
+    if approval.decision != Decision.PENDING:
+        return False
+    if approval.expires_at is None:
+        return False
+    expires = approval.expires_at
+    if expires.tzinfo is None:  # pragma: no cover - stored values are UTC-aware
+        expires = expires.replace(tzinfo=UTC)
+    return expires <= (now or datetime.now(UTC))
+
+
+#: The states an approval can be listed under.
+APPROVAL_STATES = ("pending", "expired", "resolved", "all")
+
+
+def list_approvals_inbox(
+    conn: sqlite3.Connection,
+    *,
+    state: str = "pending",
+    project_id: str = "",
+    teammate_id: str = "",
+    task_id: str = "",
+) -> list[Approval]:
+    """The owner's cross-workspace inbox of approvals.
+
+    Every filter is bound as a parameter — the values come from a query
+    string, and nothing here is interpolated into SQL.
+
+    ``state`` picks the slice: ``pending`` (decidable now), ``expired`` (dead
+    requests nobody answered), ``resolved`` (decided), ``all``.
+
+    Deduplication: the gate already reuses a pending row for the same action
+    and payload, so two live rows for one digest cannot exist. An expired row
+    and a later request for the same action CAN both exist, and the inbox
+    shows the newer one, with the older counted as superseded — otherwise
+    the owner sees the same action twice and cannot tell which is live.
+    """
+    if state not in APPROVAL_STATES:
+        raise ValueError(f"unknown approval state {state!r}")
+    clauses: list[str] = []
+    params: list[Any] = []
+    now = datetime.now(UTC)
+    if state == "pending":
+        clauses.append("decision = 'pending'")
+        clauses.append("(expires_at IS NULL OR expires_at > ?)")
+        params.append(now.isoformat())
+    elif state == "expired":
+        clauses.append("decision = 'pending'")
+        clauses.append("expires_at IS NOT NULL AND expires_at <= ?")
+        params.append(now.isoformat())
+    elif state == "resolved":
+        clauses.append("decision != 'pending'")
+    if project_id:
+        # "Reachable from this project": the row names it, or it hangs off a
+        # run of one of its tasks.
+        clauses.append(
+            "(project_id = ? OR run_id IN ("
+            "SELECT r.id FROM runs r JOIN tasks t ON t.id = r.task_id"
+            " WHERE t.project_id = ?))"
+        )
+        params.extend([project_id, project_id])
+    if teammate_id:
+        clauses.append("teammate_id = ?")
+        params.append(teammate_id)
+    if task_id:
+        clauses.append("task_id = ?")
+        params.append(task_id)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    rows = conn.execute(
+        f"SELECT * FROM approvals {where} ORDER BY rowid DESC",  # noqa: S608 - bound params
+        params,
+    ).fetchall()
+    approvals = [_approval_from_row(r) for r in rows]
+    if state != "all":
+        return approvals
+    # "all" shows the record; one row per (action, digest), the newest first,
+    # so a re-request after an expiry does not appear twice.
+    seen: set[tuple[str, str]] = set()
+    out: list[Approval] = []
+    for approval in approvals:
+        key = (approval.action, approval.digest or approval.id)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(approval)
+    return out
+
+
+def list_approvals_awaiting_decision(conn: sqlite3.Connection) -> list[Approval]:
+    """Every live approval that carries an action waiting to be resumed.
+
+    This is the sweep's input: a request whose time is up must stop holding
+    its run, or the run waits for a decision that can no longer be given.
+    """
+    now = datetime.now(UTC).isoformat()
+    rows = conn.execute(
+        "SELECT * FROM approvals WHERE decision = 'pending' AND tool_name != ''"
+        " AND (expires_at IS NULL OR expires_at <= ?) ORDER BY rowid",
+        (now,),
+    ).fetchall()
+    return [_approval_from_row(r) for r in rows]
+
+
+def list_run_checkpoints(conn: sqlite3.Connection, run_id: str) -> list[Approval]:
+    """The actions a run is waiting on, oldest first.
+
+    A run can ask for more than one privileged action in a turn, and the owner
+    sees them as one batch. These are the checkpoints that batch is made of.
+    """
+    rows = conn.execute(
+        "SELECT * FROM approvals WHERE run_id = ? AND tool_name != '' ORDER BY rowid",
+        (run_id,),
+    ).fetchall()
+    return [_approval_from_row(r) for r in rows]
+
+
+def mark_approval_resumed(conn: sqlite3.Connection, approval_id: str) -> Approval:
+    """Mark a checkpoint as being carried out, BEFORE the action runs.
+
+    Writing it first is the point: a crash between here and the action must
+    not let the action be attempted twice. For a privileged action, losing
+    the action is a far better failure than repeating it.
+    """
+    approval = get_approval(conn, approval_id)
+    if approval is None:
+        raise KeyError(f"unknown approval {approval_id}")
+    resumed_at = _now_iso()
+    conn.execute(
+        "UPDATE approvals SET resumed_at = ? WHERE id = ?", (resumed_at, approval_id)
+    )
+    conn.commit()
+    approval.resumed_at = datetime.fromisoformat(resumed_at)
+    return approval
+
+
+def claim_run_for_resume(conn: sqlite3.Connection, run_id: str) -> bool:
+    """Take exclusive ownership of a waiting run, or lose the race.
+
+    The compare-and-swap is the whole point: two approvals landing at the
+    same moment, or the same approval submitted twice, must not carry the
+    actions out twice. Only the writer whose UPDATE changed a row proceeds.
+    """
+    cursor = conn.execute(
+        "UPDATE runs SET status = ? WHERE id = ? AND status = ?",
+        (RunStatus.RUNNING.value, run_id, RunStatus.AWAITING_APPROVAL.value),
+    )
+    conn.commit()
+    return cursor.rowcount == 1
+
+
 def decide_approval(conn: sqlite3.Connection, approval_id: str, decision: Decision) -> Approval:
     approval = get_approval(conn, approval_id)
     if approval is None:
@@ -2586,13 +2874,20 @@ def decide_approval(conn: sqlite3.Connection, approval_id: str, decision: Decisi
         raise ApprovalExpiredError(f"approval {approval_id} expired at {approval.expires_at}")
     decided_at = _now_iso()
     forever = decision == Decision.APPROVED_FOREVER
+    # A decided one-use approval keeps a fresh window: the owner's answer is
+    # what starts the clock, not the moment the request was made.
+    expires_at = (
+        None
+        if forever
+        else (datetime.now(UTC) + timedelta(seconds=APPROVAL_RESUME_GRACE_S)).isoformat()
+    )
     conn.execute(
         "UPDATE approvals SET decision = ?, decided_at = ?, consumed_at = ?, expires_at = ? WHERE id = ?",
         (
             decision.value,
             decided_at,
             None if forever else decided_at,
-            None if forever else (approval.expires_at.isoformat() if approval.expires_at else None),
+            expires_at,
             approval_id,
         ),
     )

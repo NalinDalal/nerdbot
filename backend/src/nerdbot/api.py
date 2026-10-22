@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.responses import Response
 
+from . import approval_flow, orchestrator, schemas, store
 from . import backup as backup_mod
 from . import boards as boards_mod
 from . import capabilities as capabilities_mod
@@ -31,7 +32,6 @@ from . import gates as gates_mod
 from . import knowledge as knowledge_mod
 from . import metrics as metrics_mod
 from . import notify as notify_mod
-from . import orchestrator, schemas, store
 from . import permissions as permissions_mod
 from . import providers as providers_impl
 from . import runtime as runtime_mod
@@ -1070,10 +1070,25 @@ def create_app() -> FastAPI:
         ]
         # The approvals that belong to this task, so a task waiting on a
         # decision can be decided from the task itself.
-        approvals = [
-            a.model_dump(mode="json")
-            for a in store.list_approvals_for_task(conn, task_id)
-        ]
+        approval_rows = store.list_approvals_for_task(conn, task_id)
+        approvals: list[dict[str, Any]] = []
+        for approval in approval_rows:
+            item = approval.model_dump(mode="json")
+            if store.approval_is_pending(approval):
+                item["state"] = "pending"
+            elif store.approval_is_expired(approval):
+                item["state"] = "expired"
+            else:
+                item["state"] = "resolved"
+            mate = (
+                store.get_teammate(conn, approval.teammate_id)
+                if approval.teammate_id
+                else None
+            )
+            item["teammate_persona"] = mate.persona if mate else ""
+            item["resumable"] = bool(approval.tool_name)
+            item["performed"] = bool(approval.executed_at or approval.resumed_at)
+            approvals.append(item)
         return {
             "task": task.model_dump(mode="json"),
             "runs": runs,
@@ -1902,6 +1917,126 @@ def create_app() -> FastAPI:
         approvals = [a.model_dump(mode="json") for a in store.list_approvals_for_run(conn, run_id)]
         return {"approvals": approvals}
 
+    @app.get("/approvals")
+    def list_approvals_inbox(
+        state: str = "pending",
+        project_id: str = "",
+        teammate_id: str = "",
+        task_id: str = "",
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """The owner's cross-workspace inbox of approvals.
+
+        ``state`` picks the slice: ``pending`` (decidable now), ``expired``
+        (requests nobody answered), ``resolved`` (decided), ``all``.
+
+        Every item carries what the owner needs to decide: which action, who
+        asked, on which run and task, and the exact payload digest the
+        decision binds to. An item that holds an action also says so, and
+        that the action has not been performed yet.
+        """
+        if project_id:
+            require_project_owner(conn, project_id, principal)
+        try:
+            approvals = store.list_approvals_inbox(
+                conn,
+                state=state,
+                project_id=project_id,
+                teammate_id=teammate_id,
+                task_id=task_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        items: list[dict[str, Any]] = []
+        for approval in approvals:
+            item = approval.model_dump(mode="json")
+            if store.approval_is_pending(approval):
+                item["state"] = "pending"
+            elif store.approval_is_expired(approval):
+                item["state"] = "expired"
+            else:
+                item["state"] = "resolved"
+            item["resumable"] = bool(approval.tool_name)
+            item["performed"] = approval.executed_at is not None
+            mate = (
+                store.get_teammate(conn, approval.teammate_id)
+                if approval.teammate_id
+                else None
+            )
+            item["teammate_persona"] = mate.persona if mate else ""
+            task = (
+                store.get_task(conn, approval.task_id)
+                if approval.task_id
+                else None
+            )
+            if task is None and approval.run_id:
+                run = store.get_run(conn, approval.run_id)
+                task = store.get_task(conn, run.task_id) if run else None
+            item["task_description"] = task.description if task else ""
+            items.append(item)
+        return {"approvals": items, "state": state}
+
+    @app.post("/approvals/sweep")
+    def sweep_approvals(
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """Close the work whose request expired unanswered.
+
+        A request that died must not keep holding its run: the run would wait
+        for a decision that can no longer be given. The action is NOT
+        performed — nobody decided it — and the task is left blocked, so the
+        owner can re-ask by retrying it.
+        """
+        _ = principal
+        closed: list[dict[str, Any]] = []
+        for approval in store.list_approvals_awaiting_decision(conn):
+            outcome = approval_flow.expire_waiting_action(conn, approval)
+            if outcome.outcome == "expired":
+                closed.append(
+                    {
+                        "approval_id": approval.id,
+                        "run_id": outcome.run_id,
+                        "task_id": outcome.task_id,
+                        "output": outcome.output,
+                    }
+                )
+        return {"closed": closed, "count": len(closed)}
+
+    @app.post("/approvals/{approval_id}/reask")
+    def reask_approval(
+        approval_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """Ask again: re-run the task that made the request.
+
+        The expired (or refused) request stays in the record; a new run asks
+        the model for the same action again, with a fresh deadline.
+        """
+        approval = store.get_approval(conn, approval_id)
+        if approval is None:
+            raise HTTPException(status_code=404, detail="approval not found")
+        task = store.get_task(conn, approval.task_id) if approval.task_id else None
+        if task is None and approval.run_id:
+            run = store.get_run(conn, approval.run_id)
+            task = store.get_task(conn, run.task_id) if run else None
+        if task is None:
+            raise HTTPException(status_code=404, detail="the work that asked is gone")
+        require_project_owner(conn, task.project_id, principal)
+        try:
+            run, result, artifact_id = orchestrator.retry_task(
+                conn, task.id, data_dir=_data_dir(), timeout_s=_run_wall_clock_s()
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "run": run.model_dump(mode="json"),
+            "exit_code": result.exit_code if result else None,
+            "artifact_id": artifact_id,
+        }
+
     @app.post("/approvals/{approval_id}/decision")
     def decide_approval(
         approval_id: str,
@@ -1909,6 +2044,17 @@ def create_app() -> FastAPI:
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
+        """Decide an approval, and carry out what it holds.
+
+        The decision is idempotent: asking twice with the SAME answer returns
+        the same state and does not carry the action out twice. Asking with a
+        DIFFERENT answer is refused (409) — the first answer stands.
+
+        When the approval holds an action, the owner's "yes" carries it out:
+        the exact tool call, with the exact arguments, as the same bot. The
+        permission is checked again first, so a bot that lost it between the
+        request and the answer cannot act.
+        """
         try:
             decision = Decision(body.decision or "pending")
         except ValueError as exc:
@@ -1917,6 +2063,23 @@ def create_app() -> FastAPI:
         if project_id is None:
             raise HTTPException(status_code=404, detail="approval not found")
         require_project_owner(conn, project_id, principal)
+
+        current = store.get_approval(conn, approval_id)
+        if current is None:  # pragma: no cover - raced deletion
+            raise HTTPException(status_code=404, detail="approval not found")
+        if current.decision != Decision.PENDING or current.consumed_at is not None:
+            # Already answered. The same answer is the same answer, so it is
+            # returned as-is; a different one is refused.
+            if current.decision == decision:
+                return {
+                    **current.model_dump(mode="json"),
+                    "resume": None,
+                    "idempotent": True,
+                }
+            raise HTTPException(
+                status_code=409,
+                detail=f"approval {approval_id} already decided ({current.decision.value})",
+            )
         try:
             approval = store.decide_approval(conn, approval_id, decision)
         except KeyError as exc:
@@ -1925,7 +2088,37 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except store.ApprovalExpiredError as exc:
             raise HTTPException(status_code=410, detail=str(exc)) from exc
-        return approval.model_dump(mode="json")
+
+        resume: dict[str, Any] | None = None
+        if decision in (Decision.APPROVED, Decision.APPROVED_FOREVER):
+            outcome = approval_flow.resume_run(
+                conn, approval.run_id, data_dir=_data_dir()
+            )
+            resume = {
+                "outcome": outcome.outcome,
+                "output": outcome.output,
+                "run_id": outcome.run_id,
+                "task_id": outcome.task_id,
+                "run_status": outcome.run_status,
+                "task_status": outcome.task_status,
+                "performed": outcome.performed,
+            }
+        else:
+            outcome = approval_flow.close_rejected_action(conn, approval)
+            resume = {
+                "outcome": outcome.outcome,
+                "output": outcome.output,
+                "run_id": outcome.run_id,
+                "task_id": outcome.task_id,
+                "run_status": outcome.run_status,
+                "task_status": outcome.task_status,
+                "performed": outcome.performed,
+            }
+        return {
+            **approval.model_dump(mode="json"),
+            "resume": resume,
+            "idempotent": False,
+        }
 
     @app.post("/projects/{project_id}/approvals/purge")
     def purge_approvals(
@@ -2668,6 +2861,10 @@ def create_app() -> FastAPI:
             "message": message.model_dump(mode="json"),
             "provider_id": provider_id,
             "memory_used": provenance,
+            # A mock provider answers with canned text and executes nothing.
+            # The reply says so in its own text; this says so in the response,
+            # so the interface can label it instead of passing it off as work.
+            "mock": bool(provider and provider.kind == ProviderKind.MOCK),
         }
 
     @app.post("/threads/{thread_id}/chat/stream")
@@ -2689,6 +2886,10 @@ def create_app() -> FastAPI:
             import json as _json
 
             chunks: list[str] = []
+            # The mock provider answers with canned text and executes nothing;
+            # the interface is told, so it can label the reply.
+            if provider and provider.kind == ProviderKind.MOCK:
+                yield f"data: {_json.dumps({'mock': True})}\n\n"
             try:
                 for chunk in chat_mod.chat_stream(provider, messages):
                     chunks.append(chunk)

@@ -110,6 +110,23 @@ def test_chat_fail_closed_no_provider(app_client: TestClient) -> None:
     assert "no chat provider" in r.json()["detail"]
 
 
+def test_a_mock_reply_says_it_is_a_mock(app_client: TestClient) -> None:
+    """A canned reply must not be passable off as work.
+
+    The mock provider executes nothing. Its text says so, and the response
+    says so too, so the interface can label the reply instead of showing it
+    as the result of thinking.
+    """
+    pid = _project(app_client)
+    _mock_provider(app_client, pid)
+    tid = _thread(app_client, pid)
+    r = app_client.post(f"/threads/{tid}/chat", json={"content": "hi"}, headers=AUTH)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["mock"] is True
+    assert body["message"]["content"].startswith("[mock]")
+
+
 def test_chat_fail_closed_no_key(app_client: TestClient) -> None:
     pid = _project(app_client)
     r = app_client.post(f"/projects/{pid}/providers",

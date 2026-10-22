@@ -24,13 +24,14 @@ from typing import Any
 from fastapi import HTTPException
 
 from . import agent_context as agent_context_mod
-from . import boards, fleet, gates, orchestrator, store
+from . import boards, fleet, gates, store
 from . import decomposition as decomposition_mod
 from . import delegation as delegation_mod
 from . import faces as faces_mod
 from .agent_context import AgentContext
 from .agent_tools import truncate_output
 from .models import (
+    Approval,
     Delegation,
     DelegationStatus,
     Provider,
@@ -505,6 +506,70 @@ def app_tool_schemas(permissions: frozenset[str] | set[str]) -> list[dict[str, A
     return schemas
 
 
+def _approvals_from_conflict(exc: HTTPException) -> list[Approval] | None:
+    """The pending approvals a 409 conflict is carrying, if any.
+
+    The services turn the gate's exception into a 409 whose detail carries the
+    approval, so this is where they are read back. A 409 that carries no
+    approval is a different kind of conflict and is left alone.
+    """
+    if exc.status_code != 409 or not isinstance(exc.detail, dict):
+        return None
+    detail = exc.detail
+    raw = detail.get("approvals")
+    if not raw:
+        single = detail.get("approval")
+        raw = [single] if isinstance(single, dict) else []
+    out: list[Approval] = []
+    for item in raw:
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        fields = {k: v for k, v in item.items() if k in Approval.model_fields}
+        try:
+            out.append(Approval(**fields))
+        except ValueError:
+            continue
+    return out or None
+
+
+def _record_gate_request(
+    ctx: AgentContext,
+    exc: HTTPException,
+    tool_name: str,
+    arguments: dict[str, Any],
+) -> list[Approval]:
+    """Write down the exact action a gated call is asking for.
+
+    The gate knows the action and its digest; it does not know which tool the
+    model asked for, nor with which arguments. This does, so it writes them on
+    the approval row — and that is what makes the owner's decision
+    *resumable* instead of merely recordable.
+
+    The request is also remembered on the context, so the run knows at the end
+    of its turn that it is waiting on somebody.
+    """
+    approvals = _approvals_from_conflict(exc)
+    if not approvals:
+        return []
+    try:
+        payload = json.dumps(arguments, sort_keys=True, default=str)
+    except (TypeError, ValueError):  # pragma: no cover - default=str covers this
+        payload = "{}"
+    mate = ctx.teammate
+    for approval in approvals:
+        store.set_approval_checkpoint(
+            ctx.conn,
+            approval.id,
+            teammate_id=mate.id if mate else "",
+            tool_name=tool_name,
+            tool_arguments=payload,
+            run_id=ctx.run_id,
+            task_id=ctx.task.id,
+        )
+    ctx.pending_approvals.extend(approvals)
+    return approvals
+
+
 def execute_app_tool(
     ctx: AgentContext,
     name: str,
@@ -513,12 +578,17 @@ def execute_app_tool(
     data_dir: str = ".",
     run_id: str = "",
     workspace_path: str | None = None,
+    raise_on_denial: bool = False,
 ) -> str:
     """Execute one app tool call for the acting identity in ``ctx``.
 
     Returns bounded, human/model-readable text. Gate denials and required
     approvals are returned as normal results (never exceptions) so the model
     can report them to the user.
+
+    ``raise_on_denial`` is for the resume path: there, a denial is not
+    something to report to a model but a reason the action did not happen,
+    and it must not be mistaken for a success.
     """
     try:
         return _dispatch(ctx, name, arguments, data_dir, run_id, workspace_path)
@@ -527,6 +597,8 @@ def execute_app_tool(
     except gates.GateDenied as exc:
         # Gate denials are results, not crashes: the model must be able to
         # report them to the user instead of failing the whole run.
+        if raise_on_denial:
+            raise
         return f"permission denied: {exc}"
     except gates.GateApprovalRequired as exc:
         return _approval_result(exc)
@@ -765,7 +837,7 @@ def _dispatch(
                 permission="message.send",
             )
         except HTTPException as exc:
-            return _gate_result(exc)
+            return _gate_result(exc, ctx, name, args)
         return f"sent message {message.id}"
 
     if name == "read_board":
@@ -773,7 +845,7 @@ def _dispatch(
         try:
             detail = boards.read_board_service(conn, board_id, acting=mate)
         except HTTPException as exc:
-            return _gate_result(exc)
+            return _gate_result(exc, ctx, name, args)
         board = detail["board"]
         lines = [
             f"board {board['id']} name={board['name']!r}"
@@ -839,7 +911,7 @@ def _dispatch(
                 acting=mate,
             )
         except HTTPException as exc:
-            return _gate_result(exc)
+            return _gate_result(exc, ctx, name, args)
         return f"created board {board.id}: {board.name}"
 
     if name == "delete_board":
@@ -849,7 +921,7 @@ def _dispatch(
         try:
             boards.authorize_board(conn, board_id, mate, "board.delete")
         except HTTPException as exc:
-            return _gate_result(exc)
+            return _gate_result(exc, ctx, name, args)
         try:
             gates.require(
                 conn, mate, "board.delete",
@@ -862,7 +934,7 @@ def _dispatch(
         try:
             boards.delete_board_service(conn, board_id, acting=mate)
         except HTTPException as exc:
-            return _gate_result(exc)
+            return _gate_result(exc, ctx, name, args)
         return f"deleted board {board_id}"
 
     if name == "create_teammate":
@@ -884,7 +956,7 @@ def _dispatch(
                 acting=mate,
             )
         except HTTPException as exc:
-            return _gate_result(exc)
+            return _gate_result(exc, ctx, name, args)
         provider_note = (
             f" provider={new_mate.provider_id}"
             if new_mate.provider_id
@@ -919,7 +991,7 @@ def _dispatch(
                 conn, str(args.get("teammate_id", "")), updates, acting=mate
             )
         except HTTPException as exc:
-            return _gate_result(exc)
+            return _gate_result(exc, ctx, name, args)
         return f"updated teammate {updated_mate.id}"
 
     if name == "archive_teammate":
@@ -931,7 +1003,7 @@ def _dispatch(
                 conn, teammate_id, TeammateStatus.ARCHIVED, acting=mate
             )
         except HTTPException as exc:
-            return _gate_result(exc)
+            return _gate_result(exc, ctx, name, args)
         return f"archived teammate {archived.id}"
 
     if name == "create_team":
@@ -946,7 +1018,7 @@ def _dispatch(
                 acting=mate,
             )
         except HTTPException as exc:
-            return _gate_result(exc)
+            return _gate_result(exc, ctx, name, args)
         return f"created team {team.id}: {team.name}"
 
     if name == "add_teammate_to_team":
@@ -958,7 +1030,7 @@ def _dispatch(
                 acting=mate,
             )
         except HTTPException as exc:
-            return _gate_result(exc)
+            return _gate_result(exc, ctx, name, args)
         return f"added teammate {member.teammate_id} to team {member.team_id}"
 
     raise ValueError(f"unknown app tool: {name!r}")
@@ -1297,6 +1369,10 @@ def _await_delegations(ctx: AgentContext, data_dir: str) -> str:
                 " not started; try again later"
             )
             continue
+        # Imported here, not at module level: the orchestrator reaches back
+        # for the app tools through the approval flow.
+        from . import orchestrator
+
         run, _result, _artifact = orchestrator.schedule_run(
             conn, child.id, data_dir=data_dir, timeout_s=_run_budget_s(data_dir)
         )
@@ -1365,7 +1441,20 @@ def _cancel_delegation(ctx: AgentContext, args: dict[str, Any]) -> str:
     return f"cancelled delegation {cancelled.id} (status {cancelled.status.value})"
 
 
-def _gate_result(exc: HTTPException) -> str:
+def _gate_result(
+    exc: HTTPException,
+    ctx: AgentContext | None = None,
+    tool_name: str = "",
+    arguments: dict[str, Any] | None = None,
+) -> str:
+    """The model's answer when a call needs the owner's decision.
+
+    The request is written down first — the exact tool and arguments — so the
+    owner's decision can carry it out later. The model is then told what it
+    always was: the action is waiting for a yes.
+    """
+    if ctx is not None and tool_name:
+        _record_gate_request(ctx, exc, tool_name, arguments or {})
     detail = exc.detail
     if exc.status_code == 409 and isinstance(detail, dict):
         approval = detail.get("approval", {})

@@ -6,7 +6,8 @@ model HTTP transport is mocked (no network, no paid calls):
 
 1. Owner creates a team + a CEO bot with explicit, gated permissions.
 2. CEO creates an engineering bot through the real ``create_teammate`` tool;
-   the exact-action approval gate is presented and the owner approves it.
+   the exact-action approval gate is presented and the owner approves it —
+   and the approval carries the action out, so the bot really exists.
 3. CEO receives a substantive objective, reasons, and delegates to the
    engineering bot via ``delegate_task``.
 4. The engineering bot executes the delegated child task in its isolated Git
@@ -179,7 +180,11 @@ def test_ceo_creates_bots_delegates_and_reports(client, monkeypatch) -> None:
                               _call("c2", "create_teammate", {"persona": "reviewer",
                                                               "provider_id": provider_id})])])
     run1 = client.post(f"/tasks/{task['id']}/runs", json={}, headers=AUTH).json()
-    assert run1["run"]["status"] in ("succeeded", "failed")
+    # The run is WAITING, not finished: it asked for two privileged actions
+    # and neither has been answered. A run that reported a success here would
+    # be claiming work that never happened.
+    assert run1["run"]["status"] == "awaiting_approval", run1
+    assert run1["task_status"] == "awaiting_approval", run1
 
     approvals = client.get(f"/projects/{pid}/approvals", headers=AUTH).json()["approvals"]
     pending = [a for a in approvals if a["decision"] == "pending"]
@@ -187,26 +192,20 @@ def test_ceo_creates_bots_delegates_and_reports(client, monkeypatch) -> None:
     assert all(a["digest"] for a in pending)
     assert {a["requester"] for a in pending} == {ceo["id"]}
     assert all(a["project_id"] == pid for a in pending)
+    # Each request names the exact action it is waiting for.
+    assert {a["tool_name"] for a in pending} == {"create_teammate"}
+    assert all(a["run_id"] == run1["run"]["id"] for a in pending)
+    assert all(a["task_id"] == task["id"] for a in pending)
 
     # --- Owner approves the exact proposed actions -------------------------
+    # The approval carries the work out: the exact tool call, with the exact
+    # arguments, as the same bot. The run that was waiting now finishes.
     for a in pending:
         d = client.post(
             f"/approvals/{a['id']}/decision", json={"decision": "approved"}, headers=AUTH
         )
         assert d.status_code == 200, d.text
-
-    # --- Run 2: approved creations materialize -----------------------------
-    harness.script(
-        [
-            _msg("", [_call("c3", "create_teammate", {"persona": "engineer",
-                                                       "provider_id": provider_id})]),
-            _msg("", [_call("c4", "create_teammate", {"persona": "reviewer",
-                                                       "provider_id": provider_id})]),
-            _msg("bots created; ready to delegate"),
-        ]
-    )
-    run2 = client.post(f"/tasks/{task['id']}/retry", json={}, headers=AUTH).json()
-    assert run2["run"]["status"] in ("succeeded", "failed"), run2
+        assert d.json()["resume"]["outcome"] in ("carried_out", "waiting"), d.text
 
     teammates = client.get("/teammates", headers=AUTH).json()["teammates"]
     personas = {t["persona"] for t in teammates}
@@ -214,8 +213,10 @@ def test_ceo_creates_bots_delegates_and_reports(client, monkeypatch) -> None:
     engineer = next(t for t in teammates if t["persona"] == "engineer")
     # The created bot carries a model, so it can actually run delegated work.
     assert engineer["provider_id"] == provider_id
+    # And the run that asked now says it succeeded.
+    assert client.get(f"/tasks/{task['id']}", headers=AUTH).json()["task"]["status"] == "done"
 
-    # --- Run 3: the CEO delegates the coding work to the engineer ----------
+    # --- Run 2: the CEO delegates the coding work to the engineer ----------
     harness.script(
         [
             _msg(
@@ -239,8 +240,8 @@ def test_ceo_creates_bots_delegates_and_reports(client, monkeypatch) -> None:
             _msg("Delegated to the engineering bot; waiting for its acceptance."),
         ]
     )
-    run3 = client.post(f"/tasks/{task['id']}/retry", json={}, headers=AUTH).json()
-    assert run3["run"]["status"] in ("succeeded", "failed"), run3
+    run2 = client.post(f"/tasks/{task['id']}/retry", json={}, headers=AUTH).json()
+    assert run2["run"]["status"] in ("succeeded", "failed"), run2
 
     # A real child task was created by the CEO's delegation, and the
     # delegation is PENDING — it is not assumed to be accepted.
@@ -281,15 +282,15 @@ def test_ceo_creates_bots_delegates_and_reports(client, monkeypatch) -> None:
     assert refreshed[0].get("result"), "delegation must carry the child result"
     assert "accepted the delegated work" in refreshed[0]["result"]
 
-    # --- Run 4: the CEO reads the real result and reports it ---------------
+    # --- Run 3: the CEO reads the real result and reports it ---------------
     harness.script(
         [
             _msg("", [_call("r1", "check_delegations", {})]),
             _msg("Final report: login implemented by the engineering bot."),
         ]
     )
-    run4 = client.post(f"/tasks/{task['id']}/retry", json={}, headers=AUTH).json()
-    assert run4["run"]["status"] in ("succeeded", "failed"), run4
+    run3 = client.post(f"/tasks/{task['id']}/retry", json={}, headers=AUTH).json()
+    assert run3["run"]["status"] in ("succeeded", "failed"), run3
     delegator_calls = [name for name, _ in harness.tool_results]
     assert delegator_calls[-1] == "check_delegations"
     final_tool_result = harness.tool_results[-1][1]

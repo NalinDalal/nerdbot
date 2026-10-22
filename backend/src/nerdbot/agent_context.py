@@ -14,7 +14,15 @@ import sqlite3
 from dataclasses import dataclass, field
 
 from . import gates, store
-from .models import BoardMessage, Delegation, DelegationStatus, Project, Task, Teammate
+from .models import (
+    Approval,
+    BoardMessage,
+    Delegation,
+    DelegationStatus,
+    Project,
+    Task,
+    Teammate,
+)
 from .runtime import frame_untrusted
 
 MEMORY_PER_TEAMMATE = 5
@@ -37,6 +45,11 @@ class AgentContext:
     inbound_delegations: list[Delegation] = field(default_factory=list)
     data_dir: str = "."
     run_id: str = ""
+    # The approvals this run asked for and is waiting on. A gated call is
+    # reported to the model as text — it may ask for several in one turn —
+    # and recorded here, so the run knows at the end of the turn that it is
+    # waiting on the owner.
+    pending_approvals: list[Approval] = field(default_factory=list)
 
 
 def memory_scopes_for(
