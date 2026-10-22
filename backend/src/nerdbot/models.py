@@ -244,6 +244,15 @@ class Approval(BaseModel):
     # the action runs, so a crash cannot repeat it: for a privileged action,
     # at-most-once is the right way round.
     resumed_at: datetime | None = None
+    # How the carried-out action ended, written after it ran. Empty means
+    # "unknown" — the checkpoint was claimed but the record never landed,
+    # which is the crash window the recovery reasons about.
+    resume_result: str = ""
+    # The binding of the ACTION: a digest over the tool, its canonical
+    # arguments, the bot, the run and the task. The gate's own digest is the
+    # request's identity and is unchanged; this one proves the resumed call
+    # is the one that was asked for.
+    tool_digest: str = ""
 
 
 class ChatThread(BaseModel):

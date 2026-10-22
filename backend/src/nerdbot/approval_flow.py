@@ -86,14 +86,35 @@ def _execute_checkpoint(
     if task is None:
         return "refused", "the work that asked for this approval is gone"
 
+    # The action must still be the one that was asked for. The binding covers
+    # the tool, its canonical arguments, the bot, the run and the task, so a
+    # checkpoint that was tampered with, or whose work has moved, is not
+    # performed.
+    expected = store.tool_digest(
+        tool_name=approval.tool_name,
+        arguments=approval.tool_arguments,
+        teammate_id=approval.teammate_id,
+        run_id=approval.run_id,
+        task_id=approval.task_id,
+    )
+    if approval.tool_digest and approval.tool_digest != expected:
+        return (
+            "refused",
+            "the action no longer matches the request that was approved; it was not performed",
+        )
+
     ctx = agent_context_mod.build(conn, task, mate)
     ctx.data_dir = data_dir
     ctx.run_id = approval.run_id
     ctx.teammate = mate
 
-    # The checkpoint is marked BEFORE the action runs: a crash between here
-    # and the action must not let the action be attempted twice.
-    store.mark_approval_resumed(conn, approval.id)
+    # The checkpoint is claimed BEFORE the action runs, and the claim is
+    # atomic: a crash between here and the action means the action is LOST
+    # rather than repeated, and a second worker cannot perform it at all.
+    try:
+        store.mark_approval_resumed(conn, approval.id)
+    except store.ApprovalAlreadyResumed:
+        return "refused", "this action is already being carried out; it was not performed twice"
 
     try:
         result = app_tools.execute_app_tool(
@@ -106,15 +127,20 @@ def _execute_checkpoint(
             raise_on_denial=True,
         )
     except gates.GateDenied as exc:
+        store.record_approval_resume_result(conn, approval.id, f"refused: {exc}")
         return "refused", f"the approved action was refused: {exc}"
     except Exception as exc:  # explicit failure, never silent success
-        return "refused", f"the approved action failed: {type(exc).__name__}: {exc}"
+        message = f"the approved action failed: {type(exc).__name__}: {exc}"
+        store.record_approval_resume_result(conn, approval.id, f"failed: {exc}")
+        return "refused", message
 
     if ctx.pending_approvals:
         # The action is still gated: a second permission is missing. The
         # request that was just approved is one of several, so the run waits
         # again and the new request is what the owner sees next.
+        store.record_approval_resume_result(conn, approval.id, "waiting")
         return "waiting", _waiting_text(ctx.pending_approvals)
+    store.record_approval_resume_result(conn, approval.id, "performed", result)
     return "carried_out", result
 
 
@@ -134,6 +160,12 @@ def resume_run(
     several privileged actions, and the owner answers them one by one, so the
     run finishes when the last one is done. A checkpoint that is still
     undecided keeps the run waiting; one that was refused fails it.
+
+    THE CLAIM IS PER CHECKPOINT, not per run. A run-level claim would
+    serialise the batch: two requests answered at the same moment would
+    leave one of the two actions unperformed, and the owner's second "yes"
+    would silently do nothing. Each checkpoint is claimed on its own, and
+    the run is settled by whichever worker gets there first.
     """
     outcome = ResumeOutcome(run_id=run_id)
     run = store.get_run(conn, run_id)
@@ -146,25 +178,33 @@ def resume_run(
         return outcome
     outcome.task_id = task.id
 
-    if not store.claim_run_for_resume(conn, run_id):
-        # Another resume owns it, or it is no longer waiting. Either way this
-        # one must not act: the action is carried out exactly once.
-        outcome.output = "this run is no longer waiting for a decision"
+    if run.status == RunStatus.CANCELLED:
+        # The owner stopped the work. Nothing that was asked for may now
+        # happen, however it was approved.
+        outcome.output = "this run was cancelled; nothing was performed"
         outcome.run_status = run.status.value
         return outcome
 
+    # The run's status is a SUMMARY; the checkpoints are the truth. A run
+    # that has already been settled — because another checkpoint of the same
+    # batch was carried out — must not silently drop this one: the owner
+    # approved it, and the owner is the one who decides. So the checkpoints
+    # are what this call acts on, whatever the run says.
     checkpoints = store.list_run_checkpoints(conn, run_id)
-    approved = [
-        c
-        for c in checkpoints
-        if c.decision in (Decision.APPROVED, Decision.APPROVED_FOREVER)
-        and c.resumed_at is None
-    ]
     performed: list[str] = []
     outputs: list[str] = []
     failures: list[str] = []
 
-    for checkpoint in approved:
+    for checkpoint in checkpoints:
+        if checkpoint.decision not in (Decision.APPROVED, Decision.APPROVED_FOREVER):
+            continue
+        if checkpoint.resumed_at is not None:
+            # Already carried out — by this call or by another one.
+            continue
+        if not checkpoint.tool_name:
+            # Not a checkpoint: an approval that was never asked for by a
+            # tool (a manual run approval), so there is nothing to perform.
+            continue
         state, text = _execute_checkpoint(conn, checkpoint, data_dir)
         if state == "carried_out":
             performed.append(checkpoint.id)
@@ -174,15 +214,28 @@ def resume_run(
         else:
             failures.append(text)
 
-    # What is still outstanding: a request nobody has answered yet.
-    still_pending = [
-        c for c in checkpoints if c.decision == Decision.PENDING and c.resumed_at is None
+    # What is still outstanding: a request nobody has answered yet. Re-read
+    # the checkpoints, because another worker may have answered one while
+    # this one was running.
+    current = store.list_run_checkpoints(conn, run_id)
+    still_pending = [c for c in current if c.decision == Decision.PENDING]
+    lost = [
+        c
+        for c in current
+        if c.resumed_at is not None and not c.resume_result
     ]
 
     if still_pending:
         reason = _waiting_text(still_pending)
-        store.mark_run_awaiting_approval(conn, run_id, reason)
-        store.set_task_status(conn, task.id, TaskStatus.AWAITING_APPROVAL, reason)
+        store.settle_run_after_resume(
+            conn,
+            run_id,
+            RunStatus.AWAITING_APPROVAL,
+            reason,
+            task_id=task.id,
+            task_status=TaskStatus.AWAITING_APPROVAL,
+            reason=reason,
+        )
         outcome.outcome = "waiting"
         outcome.output = reason
         outcome.run_status = RunStatus.AWAITING_APPROVAL.value
@@ -190,10 +243,23 @@ def resume_run(
         outcome.performed = performed
         return outcome
 
-    if failures:
-        note = failures[0]
-        store.finish_run(conn, run_id, RunStatus.FAILED, None, note)
-        store.set_task_status(conn, task.id, TaskStatus.BLOCKED, note)
+    if lost:
+        # A checkpoint was claimed but its record never landed: the action
+        # may or may not have run. It is NOT repeated — that is the whole
+        # point of the claim — and the work is reported as lost.
+        note = (
+            "an approved action was claimed but never completed; it was not repeated"
+            " — retry the task if it still needs doing"
+        )
+        store.settle_run_after_resume(
+            conn,
+            run_id,
+            RunStatus.FAILED,
+            note,
+            task_id=task.id,
+            task_status=TaskStatus.BLOCKED,
+            reason=note,
+        )
         outcome.outcome = "refused"
         outcome.output = note
         outcome.run_status = RunStatus.FAILED.value
@@ -201,15 +267,93 @@ def resume_run(
         outcome.performed = performed
         return outcome
 
+    if failures:
+        note = failures[0]
+        store.settle_run_after_resume(
+            conn,
+            run_id,
+            RunStatus.FAILED,
+            note,
+            task_id=task.id,
+            task_status=TaskStatus.BLOCKED,
+            reason=note,
+        )
+        outcome.outcome = "refused"
+        outcome.output = note
+        outcome.run_status = RunStatus.FAILED.value
+        outcome.task_status = TaskStatus.BLOCKED.value
+        outcome.performed = performed
+        return outcome
+
+    # A checkpoint carried out by an earlier process leaves its output on
+    # the row: the summary says what the run did, not just that it did
+    # something.
+    for checkpoint in current:
+        if not checkpoint.resume_result.startswith("performed"):
+            continue
+        parts = checkpoint.resume_result.split("\n", 1)
+        if len(parts) > 1 and parts[1] and parts[1] not in outputs:
+            outputs.append(parts[1])
+
+    refreshed = store.get_run(conn, run_id)
+    if not performed and not outputs and refreshed is not None and (
+        refreshed.status != RunStatus.AWAITING_APPROVAL
+    ):
+        # Nothing to carry out, and the run is not waiting: there is nothing
+        # to settle either. Saying "carried out" here would be a lie.
+        outcome.output = "there was nothing to carry out"
+        outcome.run_status = refreshed.status.value
+        return outcome
+
     summary = "; ".join(outputs) or "the approved action"
-    store.finish_run(conn, run_id, RunStatus.SUCCEEDED, 0, summary, stdout=summary)
-    store.set_task_status(conn, task.id, TaskStatus.DONE)
+    store.settle_run_after_resume(
+        conn,
+        run_id,
+        RunStatus.SUCCEEDED,
+        summary,
+        task_id=task.id,
+        task_status=TaskStatus.DONE,
+    )
     outcome.outcome = "carried_out"
     outcome.output = summary
     outcome.run_status = RunStatus.SUCCEEDED.value
     outcome.task_status = TaskStatus.DONE.value
     outcome.performed = performed
     return outcome
+
+
+def recover(conn: sqlite3.Connection, data_dir: str = ".") -> list[dict[str, Any]]:
+    """Recover the work a crash left behind.
+
+    A process can die at any point around the action. The three states it can
+    leave behind, and what happens to each:
+
+    - **the decision landed, the action was never claimed.** The action has
+      NOT happened, so it is still to be done: the resume carries it out.
+    - **the action was claimed, the outcome was never recorded.** The action
+      MAY have happened. It is not repeated — that is what the claim is for
+      — so the run is closed with an honest reason and the task is left
+      blocked, recoverable by a retry.
+    - **the action ran, the run was never settled.** The action DID happen,
+      and the checkpoint says so: the run is settled as done.
+
+    Returns what was recovered, so the caller can say so out loud.
+    """
+    recovered: list[dict[str, Any]] = []
+    for approval in store.list_approvals_needing_recovery(conn):
+        outcome = resume_run(conn, approval.run_id, data_dir)
+        if outcome.outcome == "skipped":
+            continue
+        recovered.append(
+            {
+                "approval_id": approval.id,
+                "run_id": outcome.run_id,
+                "task_id": outcome.task_id,
+                "outcome": outcome.outcome,
+                "output": outcome.output,
+            }
+        )
+    return recovered
 
 
 def close_rejected_action(

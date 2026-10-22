@@ -1935,14 +1935,20 @@ def create_app() -> FastAPI:
         asked, on which run and task, and the exact payload digest the
         decision binds to. An item that holds an action also says so, and
         that the action has not been performed yet.
+
+        The inbox is SCOPED to the projects the caller owns: an inbox that
+        listed every request on the server would hand one owner another's
+        work.
         """
         if project_id:
             require_project_owner(conn, project_id, principal)
+        owned = [p.id for p in store.list_projects(conn, principal)]
         try:
             approvals = store.list_approvals_inbox(
                 conn,
                 state=state,
                 project_id=project_id,
+                project_ids=owned,
                 teammate_id=teammate_id,
                 task_id=task_id,
             )
@@ -1958,7 +1964,7 @@ def create_app() -> FastAPI:
             else:
                 item["state"] = "resolved"
             item["resumable"] = bool(approval.tool_name)
-            item["performed"] = approval.executed_at is not None
+            item["performed"] = bool(approval.executed_at or approval.resumed_at)
             mate = (
                 store.get_teammate(conn, approval.teammate_id)
                 if approval.teammate_id
@@ -1982,16 +1988,24 @@ def create_app() -> FastAPI:
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
-        """Close the work whose request expired unanswered.
+        """Close the work whose request expired unanswered, and recover the
+        work a crash left behind.
 
         A request that died must not keep holding its run: the run would wait
         for a decision that can no longer be given. The action is NOT
         performed — nobody decided it — and the task is left blocked, so the
         owner can re-ask by retrying it.
+
+        The recovery part is the crash window: a decision that landed but was
+        never carried out is carried out now, and an action that was claimed
+        but never settled is closed with an honest reason rather than
+        repeated.
         """
-        _ = principal
         closed: list[dict[str, Any]] = []
+        owned = {p.id for p in store.list_projects(conn, principal)}
         for approval in store.list_approvals_awaiting_decision(conn):
+            if approval.project_id and approval.project_id not in owned:
+                continue
             outcome = approval_flow.expire_waiting_action(conn, approval)
             if outcome.outcome == "expired":
                 closed.append(
@@ -2002,7 +2016,8 @@ def create_app() -> FastAPI:
                         "output": outcome.output,
                     }
                 )
-        return {"closed": closed, "count": len(closed)}
+        recovered = approval_flow.recover(conn, data_dir=_data_dir())
+        return {"closed": closed, "count": len(closed), "recovered": recovered}
 
     @app.post("/approvals/{approval_id}/reask")
     def reask_approval(

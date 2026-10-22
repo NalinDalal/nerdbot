@@ -15,7 +15,7 @@ import os
 import sqlite3
 from typing import Any
 
-from . import orchestrator, store
+from . import approval_flow, orchestrator, store
 from . import providers as providers_mod
 from .models import TaskStatus, Teammate, TeammateStatus
 
@@ -126,6 +126,11 @@ def sweep(
         }
         for task in requeued
     ]
+    # A decision that landed but was never carried out, or a run a crash left
+    # unsettled. The sweep is the background heartbeat, so it is where the
+    # recovery belongs: a server that is left running recovers without
+    # anybody opening the interface.
+    recovered = approval_flow.recover(conn, data_dir=data_dir)
     results: list[dict[str, Any]] = []
     pending = store.list_pending_unowned_tasks(conn)
     busy = _busy_bot_ids(conn)
@@ -233,6 +238,17 @@ def sweep(
                     "phase": "delegated",
                 }
             )
+    for entry in recovered:
+        results.append(
+            {
+                "task_id": entry.get("task_id", ""),
+                "run_id": entry.get("run_id", ""),
+                "status": "recovered",
+                "outcome": entry.get("outcome", ""),
+                "reason": entry.get("output", ""),
+                "phase": "approval",
+            }
+        )
     return requeue_notes + results
 
 

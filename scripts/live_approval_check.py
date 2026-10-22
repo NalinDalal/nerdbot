@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import signal
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
@@ -232,6 +234,71 @@ def main() -> int:
         _, mates = call("GET", f"/projects/{pid}/teammates")
         assert [m["persona"] for m in mates["teammates"]].count("engineer") == 1, mates
         print("a second, identical decision performed nothing")
+
+        # --- a crash between the decision and the action is recovered -------
+        # The decision lands and the process dies before the action runs.
+        _, project2 = call("POST", "/projects", {"repository": "crash"})
+        pid2 = project2["id"]
+        _, provider2 = call(
+            "POST",
+            f"/projects/{pid2}/providers",
+            {
+                "kind": "openai-compatible",
+                "name": "scripted",
+                "config": {
+                    "base_url": model.base_url,
+                    "model": "scripted",
+                    "api_key": "sk-live",
+                    "max_turns": 2,
+                },
+            },
+        )
+        _, bot2 = call(
+            "POST",
+            f"/projects/{pid2}/teammates",
+            {
+                "persona": "ceo",
+                "permissions": ["teammate.create"],
+                "provider_id": provider2["id"],
+            },
+        )
+        _, task2 = call(
+            "POST",
+            f"/projects/{pid2}/tasks",
+            {
+                "description": "make a teammate",
+                "command": "make a teammate",
+                "owner_teammate_id": bot2["id"],
+            },
+        )
+        call("POST", f"/tasks/{task2['id']}/runs")
+        _, inbox2 = call("GET", "/approvals?state=pending")
+        item2 = inbox2["approvals"][0]
+
+        # The decision lands, and the process dies right there.
+        stop_server(proc)
+        proc = start_server(db, data)
+        conn = sqlite3.connect(str(db))
+        try:
+            conn.execute(
+                "UPDATE approvals SET decision = 'approved', decided_at = ?,"
+                " consumed_at = ? WHERE id = ?",
+                (datetime.now(UTC).isoformat(), datetime.now(UTC).isoformat(), item2["id"]),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        # Nothing carried it out: the action has not happened.
+        _, mates2 = call("GET", f"/projects/{pid2}/teammates")
+        assert [m["persona"] for m in mates2["teammates"]] == ["ceo"], mates2
+
+        # The sweep finds the decision nobody carried out, and carries it out.
+        _, swept = call("POST", "/approvals/sweep")
+        assert swept.get("recovered"), swept
+        _, mates2 = call("GET", f"/projects/{pid2}/teammates")
+        assert [m["persona"] for m in mates2["teammates"]] == ["ceo", "engineer"], mates2
+        print("a crash between the decision and the action was recovered")
 
         print("\nLIVE CHECK PASSED")
         return 0

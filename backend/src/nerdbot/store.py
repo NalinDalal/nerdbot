@@ -6,6 +6,8 @@ behind the same repository surface. All access goes through repositories.
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import json
 import os
 import sqlite3
@@ -336,6 +338,10 @@ class ApprovalDecidedError(ValueError):
     """An approval was decided more than once (approvals are one-use)."""
 
 
+class ApprovalAlreadyResumed(ValueError):
+    """A checkpoint is already being carried out, so this caller must not."""
+
+
 # How long a writer waits for the database lock before giving up. The API,
 # the CLI sweeps and the dashboard can all write at once; without this the
 # second writer fails immediately with "database is locked".
@@ -506,6 +512,16 @@ _PHASE19_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("tool_name", "TEXT NOT NULL DEFAULT ''"),
         ("tool_arguments", "TEXT NOT NULL DEFAULT ''"),
         ("resumed_at", "TEXT"),
+        # How the carried-out action ended, written after it ran. Empty means
+        # "unknown": the checkpoint was claimed but the record never landed,
+        # which is the crash window the recovery has to reason about.
+        ("resume_result", "TEXT NOT NULL DEFAULT ''"),
+        # The binding of the ACTION, not of the gate payload: a digest over
+        # the tool, its canonical arguments, the bot, the run and the task.
+        # The gate's own digest is unchanged — it is the request's identity —
+        # and this one is what proves the resumed call is the one that was
+        # asked for.
+        ("tool_digest", "TEXT NOT NULL DEFAULT ''"),
     ],
 }
 
@@ -2490,6 +2506,8 @@ def _approval_from_row(row: sqlite3.Row) -> Approval:
         resumed_at=datetime.fromisoformat(row["resumed_at"])
         if "resumed_at" in keys and row["resumed_at"]
         else None,
+        resume_result=row["resume_result"] if "resume_result" in keys else "",
+        tool_digest=row["tool_digest"] if "tool_digest" in keys else "",
     )
 
 
@@ -2616,6 +2634,56 @@ def request_approval(
     return approval
 
 
+def tool_digest(
+    *,
+    tool_name: str,
+    arguments: str,
+    teammate_id: str = "",
+    run_id: str = "",
+    task_id: str | None = None,
+) -> str:
+    """The binding of an ACTION, as opposed to the identity of a request.
+
+    The gate's digest covers the gate payload, which is what the owner
+    approves *as a permission*. This one covers the call that will actually
+    run: the tool, its arguments in canonical form, the bot that asked, and
+    the run and task it belongs to.
+
+    Two things fall out of it. The arguments are canonicalised, so
+    ``{"a": 1, "b": 2}`` and ``{"b": 2, "a": 1}`` are the same action; and
+    the bot is part of it, so one bot's approval cannot carry another bot's
+    call.
+
+    It is recorded when the checkpoint is written and checked when the
+    action is carried out: a checkpoint whose action no longer matches its
+    binding is not performed.
+    """
+    canonical = json.dumps(
+        {
+            "tool": tool_name,
+            "arguments": _canonical_arguments(arguments),
+            "teammate_id": teammate_id,
+            "run_id": run_id,
+            "task_id": task_id,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _canonical_arguments(arguments: str) -> str:
+    """The arguments in a canonical form, so the digest does not depend on
+    the order the model happened to write them in."""
+    if not arguments:
+        return "{}"
+    try:
+        parsed = json.loads(arguments)
+    except ValueError:
+        return arguments
+    return json.dumps(parsed, sort_keys=True, separators=(",", ":"))
+
+
 def set_approval_checkpoint(
     conn: sqlite3.Connection,
     approval_id: str,
@@ -2646,8 +2714,22 @@ def set_approval_checkpoint(
     bound_task = task_id or approval.task_id
     conn.execute(
         "UPDATE approvals SET teammate_id = ?, tool_name = ?, tool_arguments = ?,"
-        " run_id = ?, task_id = ? WHERE id = ?",
-        (teammate_id, tool_name, tool_arguments, bound_run, bound_task, approval_id),
+        " run_id = ?, task_id = ?, tool_digest = ? WHERE id = ?",
+        (
+            teammate_id,
+            tool_name,
+            tool_arguments,
+            bound_run,
+            bound_task,
+            tool_digest(
+                tool_name=tool_name,
+                arguments=tool_arguments,
+                teammate_id=teammate_id,
+                run_id=bound_run,
+                task_id=bound_task,
+            ),
+            approval_id,
+        ),
     )
     conn.commit()
     approval.teammate_id = teammate_id
@@ -2734,6 +2816,7 @@ def list_approvals_inbox(
     *,
     state: str = "pending",
     project_id: str = "",
+    project_ids: list[str] | None = None,
     teammate_id: str = "",
     task_id: str = "",
 ) -> list[Approval]:
@@ -2744,6 +2827,10 @@ def list_approvals_inbox(
 
     ``state`` picks the slice: ``pending`` (decidable now), ``expired`` (dead
     requests nobody answered), ``resolved`` (decided), ``all``.
+
+    ``project_ids`` SCOPES the inbox to the projects the caller owns. The
+    scope is the point: an inbox that lists every request on the server
+    would hand one owner another's work.
 
     Deduplication: the gate already reuses a pending row for the same action
     and payload, so two live rows for one digest cannot exist. An expired row
@@ -2766,6 +2853,19 @@ def list_approvals_inbox(
         params.append(now.isoformat())
     elif state == "resolved":
         clauses.append("decision != 'pending'")
+    if project_ids is not None:
+        if not project_ids:
+            # The caller owns nothing: the inbox is empty, and saying so is
+            # better than listing everything.
+            return []
+        marks = ",".join("?" for _ in project_ids)
+        clauses.append(
+            "(project_id IN (" + marks + ") OR run_id IN ("
+            "SELECT r.id FROM runs r JOIN tasks t ON t.id = r.task_id"
+            f" WHERE t.project_id IN ({marks})))"
+        )
+        params.extend(project_ids)
+        params.extend(project_ids)
     if project_id:
         # "Reachable from this project": the row names it, or it hangs off a
         # run of one of its tasks.
@@ -2802,6 +2902,32 @@ def list_approvals_inbox(
     return out
 
 
+def list_approvals_needing_recovery(conn: sqlite3.Connection) -> list[Approval]:
+    """The checkpoints a crash left behind.
+
+    Three shapes:
+
+    - **approved, never claimed.** The decision landed and the process died
+      before the action was carried out. The action has NOT happened, so it
+      is still to be done.
+    - **claimed, no result.** The action was claimed, and the process died
+      before its outcome was recorded. The action may or may not have run.
+      It is never repeated — that is what the claim is for — so the
+      recovery closes it rather than trying again.
+    - **claimed, performed, run not settled.** The action ran and the
+      process died before the run was settled. The checkpoint says so, so
+      the recovery settles the run as done.
+    """
+    rows = conn.execute(
+        "SELECT * FROM approvals WHERE run_id != '' AND tool_name != '' AND ("
+        " (decision IN ('approved', 'approved_forever') AND resumed_at IS NULL)"
+        " OR (resumed_at IS NOT NULL AND resume_result = '')"
+        " OR (resumed_at IS NOT NULL AND resume_result LIKE 'performed%')"
+        ") ORDER BY rowid"
+    ).fetchall()
+    return [_approval_from_row(r) for r in rows]
+
+
 def list_approvals_awaiting_decision(conn: sqlite3.Connection) -> list[Approval]:
     """Every live approval that carries an action waiting to be resumed.
 
@@ -2831,22 +2957,94 @@ def list_run_checkpoints(conn: sqlite3.Connection, run_id: str) -> list[Approval
 
 
 def mark_approval_resumed(conn: sqlite3.Connection, approval_id: str) -> Approval:
-    """Mark a checkpoint as being carried out, BEFORE the action runs.
+    """Claim a checkpoint for carrying out, and record the claim.
 
-    Writing it first is the point: a crash between here and the action must
-    not let the action be attempted twice. For a privileged action, losing
-    the action is a far better failure than repeating it.
+    ATOMIC: the write only lands on a row that has not been claimed yet, so
+    two workers racing for the same checkpoint cannot both perform it. The
+    loser updates zero rows and is told so.
+
+    The claim is written BEFORE the action runs. A crash between here and
+    the action means the action is LOST rather than repeated — for a
+    privileged action that is the right way round, and the recovery says so
+    in as many words.
     """
-    approval = get_approval(conn, approval_id)
-    if approval is None:
-        raise KeyError(f"unknown approval {approval_id}")
     resumed_at = _now_iso()
-    conn.execute(
-        "UPDATE approvals SET resumed_at = ? WHERE id = ?", (resumed_at, approval_id)
+    cursor = conn.execute(
+        "UPDATE approvals SET resumed_at = ? WHERE id = ? AND resumed_at IS NULL",
+        (resumed_at, approval_id),
     )
     conn.commit()
+    approval = get_approval(conn, approval_id)
+    if approval is None:  # pragma: no cover - raced deletion
+        raise KeyError(f"unknown approval {approval_id}")
+    if cursor.rowcount == 0:
+        raise ApprovalAlreadyResumed(
+            f"approval {approval_id} is already being carried out"
+        )
     approval.resumed_at = datetime.fromisoformat(resumed_at)
     return approval
+
+
+def record_approval_resume_result(
+    conn: sqlite3.Connection, approval_id: str, outcome: str, output: str = ""
+) -> None:
+    """Record how a carried-out action ended.
+
+    Written AFTER the action, so it is the record of what happened rather
+    than a claim. The marker comes first, so the recovery can tell "the
+    action ran" from "the action was refused", and the output follows it so
+    a run settled by the recovery can still say what it did.
+
+    A checkpoint that was claimed but has no result is a checkpoint whose
+    action may or may not have run — the recovery treats it as lost, because
+    it must not be repeated.
+    """
+    record = outcome if not output else f"{outcome}\n{output}"
+    conn.execute(
+        "UPDATE approvals SET resume_result = ? WHERE id = ?", (record[:4000], approval_id)
+    )
+    conn.commit()
+
+
+def settle_run_after_resume(
+    conn: sqlite3.Connection,
+    run_id: str,
+    status: RunStatus,
+    output_excerpt: str,
+    task_id: str = "",
+    task_status: TaskStatus | None = None,
+    reason: str = "",
+) -> bool:
+    """Settle a waiting run after a resume. Returns True if this caller won.
+
+    ATOMIC: the write only lands on a run that is still waiting, so two
+    workers cannot both settle it, and the loser simply does nothing.
+    """
+    cursor = conn.execute(
+        "UPDATE runs SET status = ?, finished_at = ?, output_excerpt = ?"
+        " WHERE id = ? AND status = ?",
+        (
+            status.value,
+            _now_iso(),
+            output_excerpt[:4000],
+            run_id,
+            RunStatus.AWAITING_APPROVAL.value,
+        ),
+    )
+    conn.commit()
+    if cursor.rowcount == 0:
+        return False
+    task = get_task(conn, task_id) if task_id else None
+    if task is not None:
+        record_event(conn, task.project_id, "run", run_id, f"run.status.{status.value}")
+        if task_status is not None:
+            # The task's own lifecycle is owned by whoever set it, and two
+            # workers finishing the same batch can disagree about where it
+            # is. The run's summary is what this call is for; the task keeps
+            # the state it has.
+            with contextlib.suppress(InvalidTransitionError):
+                set_task_status(conn, task.id, task_status, reason)
+    return True
 
 
 def claim_run_for_resume(conn: sqlite3.Connection, run_id: str) -> bool:
@@ -2865,11 +3063,16 @@ def claim_run_for_resume(conn: sqlite3.Connection, run_id: str) -> bool:
 
 
 def decide_approval(conn: sqlite3.Connection, approval_id: str, decision: Decision) -> Approval:
+    """Record a decision on a pending approval.
+
+    The write is ATOMIC: it only lands on a row that is still pending and
+    unconsumed. Two requests arriving at the same instant cannot both
+    decide — the loser updates zero rows and is told so, rather than
+    overwriting the winner's answer.
+    """
     approval = get_approval(conn, approval_id)
     if approval is None:
         raise KeyError(f"unknown approval {approval_id}")
-    if approval.decision != Decision.PENDING or approval.consumed_at is not None:
-        raise ApprovalDecidedError(f"approval {approval_id} already decided (one-use)")
     if approval.expires_at is not None and datetime.now(UTC) > approval.expires_at:
         raise ApprovalExpiredError(f"approval {approval_id} expired at {approval.expires_at}")
     decided_at = _now_iso()
@@ -2881,8 +3084,9 @@ def decide_approval(conn: sqlite3.Connection, approval_id: str, decision: Decisi
         if forever
         else (datetime.now(UTC) + timedelta(seconds=APPROVAL_RESUME_GRACE_S)).isoformat()
     )
-    conn.execute(
-        "UPDATE approvals SET decision = ?, decided_at = ?, consumed_at = ?, expires_at = ? WHERE id = ?",
+    cursor = conn.execute(
+        "UPDATE approvals SET decision = ?, decided_at = ?, consumed_at = ?, expires_at = ?"
+        " WHERE id = ? AND decision = 'pending' AND consumed_at IS NULL",
         (
             decision.value,
             decided_at,
@@ -2892,6 +3096,18 @@ def decide_approval(conn: sqlite3.Connection, approval_id: str, decision: Decisi
         ),
     )
     conn.commit()
+    if cursor.rowcount == 0:
+        # Somebody else decided it between the read and the write.
+        current = get_approval(conn, approval_id)
+        if current is None:  # pragma: no cover - raced deletion
+            raise KeyError(f"unknown approval {approval_id}")
+        if current.decision == decision:
+            # The same answer twice is the same answer: the caller gets the
+            # state, and the work is not performed again.
+            return current
+        raise ApprovalDecidedError(
+            f"approval {approval_id} already decided ({current.decision.value})"
+        )
     project_id = approval_project(conn, approval_id)
     if project_id is not None:
         record_event(
