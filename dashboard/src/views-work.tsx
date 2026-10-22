@@ -269,16 +269,22 @@ export function WorkView() {
                         <div className="truncate text-[var(--step-0)] text-[var(--text)]">
                           {titleOf(task)}
                         </div>
-                        <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[var(--step-minus-2)] text-[var(--faint)]">
-                          <span className="truncate">
+                        <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[var(--step-minus-2)] text-[var(--faint)]">
+                          <span className="min-w-0 truncate">
                             {projectName.get(task.project_id) ?? "Workspace"}
                           </span>
                           <span aria-hidden>·</span>
-                          <span className="truncate">{owner?.persona || "Unassigned"}</span>
+                          <span className="min-w-0 truncate">{owner?.persona || "Unassigned"}</span>
                           {task.blocked_reason ? (
                             <>
-                              <span aria-hidden>·</span>
-                              <span className="truncate text-[var(--warn)]">
+                              {/* On a phone the reason takes its own line rather
+                                  than squeezing the workspace and owner to one
+                                  letter each. */}
+                              <span aria-hidden className="hidden sm:inline">·</span>
+                              <span
+                                className="min-w-0 basis-full truncate text-[var(--warn)] sm:basis-auto"
+                                title={task.blocked_reason}
+                              >
                                 {task.blocked_reason}
                               </span>
                             </>
