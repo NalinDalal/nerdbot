@@ -1096,7 +1096,11 @@ export function BotsView() {
               {mates.map((mate) => {
                 const tasks = (botTasks.data as Record<string, Task[]> | undefined)?.[mate.id] ?? [];
                 const active = tasks.filter(
-                  (t) => t.status === "pending" || t.status === "running" || t.status === "blocked",
+                  (t) =>
+                    t.status === "pending" ||
+                    t.status === "running" ||
+                    t.status === "blocked" ||
+                    t.status === "awaiting_approval",
                 );
                 const latest = tasks[0];
                 const busy = active.length > 0;

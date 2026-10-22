@@ -148,6 +148,8 @@ interface RollupEntry {
   blocked: number;
   done: number;
   failed: number;
+  /** Waiting on a human decision. */
+  awaiting: number;
   handoffs: Array<{
     fromId: string;
     fromPersona: string;
@@ -165,7 +167,15 @@ interface RollupEntry {
 function teamRollup(
   members: Array<{ id: string; persona: string; face: BotFace | null; tasks: Task[] }>,
 ): RollupEntry {
-  const entry: RollupEntry = { running: 0, queued: 0, blocked: 0, done: 0, failed: 0, handoffs: [] };
+  const entry: RollupEntry = {
+    running: 0,
+    queued: 0,
+    blocked: 0,
+    done: 0,
+    failed: 0,
+    awaiting: 0,
+    handoffs: [],
+  };
   const ownerByTaskId = new Map<string, { id: string; persona: string; face: BotFace | null }>();
   for (const member of members) {
     for (const task of member.tasks) {
@@ -176,6 +186,7 @@ function teamRollup(
   entry.running = tally.running;
   entry.queued = tally.queued;
   entry.blocked = tally.blocked;
+  entry.awaiting = tally.awaiting;
   entry.done = tally.done;
   entry.failed = tally.failed;
   for (const member of members) {
@@ -281,6 +292,12 @@ export function TeamDetailView({
               <div className="flex flex-wrap items-center gap-2 text-[var(--step-minus-1)]">
                 <StatusBadge status="running" label={`${rollup.running} running`} />
                 <StatusBadge status="pending" label={`${rollup.queued} queued`} />
+                {rollup.awaiting > 0 && (
+                  <StatusBadge
+                    status="awaiting_approval"
+                    label={`${rollup.awaiting} awaiting approval`}
+                  />
+                )}
                 {rollup.blocked > 0 && (
                   <StatusBadge status="blocked" label={`${rollup.blocked} blocked`} />
                 )}

@@ -1,5 +1,7 @@
 import type {
   Approval,
+  ApprovalInboxItem,
+  ApprovalResume,
   Artifact,
   Board,
   BoardMember,
@@ -343,9 +345,25 @@ export const api = {
   listRunApprovals: (runId: string) =>
     req<{ approvals: Approval[] }>(`/runs/${runId}/approvals`),
   decideApproval: (id: string, decision: "approved" | "approved_forever" | "denied") =>
-    post<Approval>(`/approvals/${id}/decision`, { decision }),
+    post<Approval & { resume: ApprovalResume | null; idempotent: boolean }>(
+      `/approvals/${id}/decision`,
+      { decision },
+    ),
   purgeApprovals: (projectId: string) =>
     post<{ purged: number }>(`/projects/${projectId}/approvals/purge`),
+  /** The owner's cross-workspace inbox: pending, expired and resolved. */
+  approvalsInbox: (state: "pending" | "expired" | "resolved" | "all" = "pending") =>
+    req<{ approvals: ApprovalInboxItem[]; state: string }>(
+      `/approvals?state=${encodeURIComponent(state)}`,
+    ),
+  /** Close the work whose request expired unanswered. */
+  sweepApprovals: () =>
+    post<{ closed: Array<Record<string, unknown>>; count: number }>("/approvals/sweep"),
+  /** Ask again: re-run the task that made the request. */
+  reaskApproval: (id: string) =>
+    post<{ run: Run; exit_code: number | null; artifact_id: string | null }>(
+      `/approvals/${id}/reask`,
+    ),
 
   listProviders: (projectId: string) =>
     req<{ providers: Provider[] }>(`/projects/${projectId}/providers`),
@@ -444,10 +462,13 @@ export const api = {
   appendMessage: (threadId: string, role: string, content: string) =>
     post<ChatMessage>(`/threads/${threadId}/messages`, { role, content }),
   sendChat: (threadId: string, content: string) =>
-    post<{ message: ChatMessage; provider_id: string | null; memory_used: MemoryProvenance[] }>(
-      `/threads/${threadId}/chat`,
-      { content },
-    ),
+    post<{
+      message: ChatMessage;
+      provider_id: string | null;
+      memory_used: MemoryProvenance[];
+      /** True when the reply came from the mock provider: canned text, no work done. */
+      mock?: boolean;
+    }>(`/threads/${threadId}/chat`, { content }),
   summarizeThread: (threadId: string) => post<ChatThread>(`/threads/${threadId}/summarize`),
   sendChatStream: (
     threadId: string,

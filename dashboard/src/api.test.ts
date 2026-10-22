@@ -148,6 +148,34 @@ describe("views", () => {
     expect(seen[2].url).toBe("http://api:8088/projects/prj_1/approvals/purge");
   });
 
+  it("approvals inbox is cross-workspace, and asks can be swept or asked again", async () => {
+    ok({ approvals: [{ id: "apr_1", state: "pending" }], state: "pending" });
+    const inbox = await api.approvalsInbox("pending");
+    expect(inbox.approvals[0].state).toBe("pending");
+    expect(seen[0].url).toBe("http://api:8088/approvals?state=pending");
+
+    ok({ closed: [{ approval_id: "apr_1" }], count: 1 });
+    const swept = await api.sweepApprovals();
+    expect(swept.count).toBe(1);
+    expect(seen[1].url).toBe("http://api:8088/approvals/sweep");
+
+    ok({ run: { id: "run_2" }, exit_code: null, artifact_id: null });
+    await api.reaskApproval("apr_1");
+    expect(seen[2].url).toBe("http://api:8088/approvals/apr_1/reask");
+  });
+
+  it("a decision reports what it did to the work", async () => {
+    ok({
+      id: "apr_1",
+      decision: "approved",
+      resume: { outcome: "carried_out", output: "created teammate tm_1" },
+      idempotent: false,
+    });
+    const result = await api.decideApproval("apr_1", "approved");
+    expect(result.resume?.outcome).toBe("carried_out");
+    expect(result.idempotent).toBe(false);
+  });
+
   it("providers view + create with secrets", async () => {
     ok({ providers: [{ id: "prv_1", config: { api_key: "[redacted]" } }] });
     const list = await api.listProviders("prj_1");

@@ -1,9 +1,11 @@
+import { toast } from "sonner";
 import { useState } from "react";
 import type { ReactNode } from "react";
 import { api } from "./api";
 import { notifyError } from "./app";
 import type { Run } from "./types";
 import {
+  ApprovalRow,
   EmptyState,
   ErrorState,
   LoadingState,
@@ -105,7 +107,7 @@ export function TaskDetailView({
   const teammates = useAsync(() => api.listTeammates(projectId), [projectId]);
   const delegations = useAsync(() => api.listTaskDelegations(taskId), [taskId]);
 
-  const act = async (label: string, fn: () => Promise<unknown>) => {
+  const act = async <T,>(label: string, fn: () => Promise<T>): Promise<T | null> => {
     setBusy(label);
     try {
       const result = await fn();
@@ -178,9 +180,9 @@ export function TaskDetailView({
 
   const data = view.data;
   const { task, runs, artifacts, issue, reviews, pr_packages, approvals, children, parent } = data;
-  // The approval this task is waiting on, if any: the owner decides it here
-  // instead of having to find it in the approvals view.
-  const pendingApproval = approvals?.find((a) => a.decision === "pending") ?? null;
+  // The approvals this task is holding. The owner decides them here, instead
+  // of having to find them in the approvals view.
+  const approvalRows = approvals ?? [];
   // Merge view-level delegations with the dedicated endpoint (deduped).
   const delegationRows = [
     ...data.delegations,
@@ -218,43 +220,50 @@ export function TaskDetailView({
         }
       />
 
-      {pendingApproval ? (
-        <div
-          className="mb-6 flex flex-wrap items-center gap-x-4 gap-y-3 rounded-xl border border-[var(--warn)] bg-[var(--warn-dim)] px-4 py-3"
-          role="status"
-        >
-          <div className="min-w-0">
-            <strong className="text-[var(--step-minus-1)] text-[var(--text)]">
-              This task is waiting for your decision
-            </strong>
-            <div className="mt-0.5 text-[var(--step-minus-1)] text-[var(--muted)]">
-              {pendingApproval.action}
-              {pendingApproval.requester ? ` · asked by ${pendingApproval.requester}` : ""}
-            </div>
+      {approvalRows.length > 0 ? (
+        <section className="mb-6">
+          <div className="mb-2 flex items-center justify-between">
+            <SectionLabel>Approvals</SectionLabel>
+            <span className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
+              {approvalRows.length} request{approvalRows.length === 1 ? "" : "s"}
+            </span>
           </div>
-          <div className="flex items-center gap-1.5">
-            <Button
-              variant="primary"
-              disabled={busy !== null}
-              onClick={() => void act("approval", () => api.decideApproval(pendingApproval.id, "approved"))}
-            >
-              Approve once
-            </Button>
-            <Button
-              disabled={busy !== null}
-              onClick={() => void act("approval", () => api.decideApproval(pendingApproval.id, "approved_forever"))}
-            >
-              Forever
-            </Button>
-            <Button
-              variant="danger"
-              disabled={busy !== null}
-              onClick={() => void act("approval", () => api.decideApproval(pendingApproval.id, "denied"))}
-            >
-              Reject
-            </Button>
+          <div className="flex flex-col gap-2">
+            {approvalRows.map((approval) => (
+              <ApprovalRow
+                key={approval.id}
+                approval={approval}
+                busy={busy !== null}
+                onDecide={async (decision) => {
+                  const result = await act("approval", () =>
+                    api.decideApproval(approval.id, decision),
+                  );
+                  const resume =
+                    result && typeof result === "object" && "resume" in result
+                      ? result.resume
+                      : null;
+                  if (resume && resume.outcome === "carried_out") {
+                    toast.success("Approved — the action was carried out.");
+                  } else if (resume && resume.outcome === "refused") {
+                    toast.error(`Approved, but the action did not run: ${resume.output}`);
+                  } else if (resume && resume.outcome === "waiting") {
+                    toast.message("Approved — one more decision is still needed.");
+                  } else if (decision === "denied") {
+                    toast.message("Rejected — nothing was performed.");
+                  }
+                }}
+                onReask={
+                  approval.tool_name
+                    ? async () => {
+                        await act("approval", () => api.reaskApproval(approval.id));
+                        toast.message("Asked again — a new request is waiting for you.");
+                      }
+                    : undefined
+                }
+              />
+            ))}
           </div>
-        </div>
+        </section>
       ) : null}
 
       {task.blocked_reason ? (
@@ -262,24 +271,33 @@ export function TaskDetailView({
           className="mb-6 flex flex-wrap items-center gap-3 rounded-xl border border-[var(--warn)] bg-[var(--warn-dim)] px-4 py-3"
           role="status"
         >
-          <strong className="text-[var(--step-minus-1)] text-[var(--warn)]">
-            This task is blocked
-          </strong>
-          <span className="text-[var(--step-minus-1)] text-[var(--text)]">
-            {task.blocked_reason}
-          </span>
-          {task.blocked_reason.includes("provider") ? (
-            <span className="text-[var(--step-minus-1)] text-[var(--muted)]">
-              Connect a working model key in{" "}
-              <a
-                className="text-[var(--accent)] hover:underline"
-                href={`#/p/${task.project_id}?tab=Providers`}
-              >
-                this workspace&rsquo;s Providers tab
-              </a>
-              , then run it again.
-            </span>
-          ) : null}
+          {task.status === "awaiting_approval" ? (
+            /* The reason already says it: "waiting for your approval of X". */
+            <strong className="text-[var(--step-minus-1)] text-[var(--warn)]">
+              {task.blocked_reason.charAt(0).toUpperCase() + task.blocked_reason.slice(1)}
+            </strong>
+          ) : (
+            <>
+              <strong className="text-[var(--step-minus-1)] text-[var(--warn)]">
+                This task is blocked
+              </strong>
+              <span className="text-[var(--step-minus-1)] text-[var(--text)]">
+                {task.blocked_reason}
+              </span>
+              {task.blocked_reason.includes("provider") ? (
+                <span className="text-[var(--step-minus-1)] text-[var(--muted)]">
+                  Connect a working model key in{" "}
+                  <a
+                    className="text-[var(--accent)] hover:underline"
+                    href={`#/p/${task.project_id}?tab=Providers`}
+                  >
+                    this workspace&rsquo;s Providers tab
+                  </a>
+                  , then run it again.
+                </span>
+              ) : null}
+            </>
+          )}
         </div>
       ) : null}
 

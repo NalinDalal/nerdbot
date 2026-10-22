@@ -898,7 +898,8 @@ function ExecutionView({
     ? mates?.find((m) => m.id === task.owner_teammate_id)
     : null;
   const terminal = task?.status === "done" || task?.status === "failed" || task?.status === "cancelled";
-  const awaitingDecision = task?.status === "blocked";
+  const awaitingDecision =
+    task?.status === "blocked" || task?.status === "awaiting_approval";
 
   if (view.error) {
     return (
@@ -1116,6 +1117,12 @@ function CommandCenter({
   const hasProvider = providers.length > 0;
   const [draft, setDraft] = useState("");
   const [selectedProviderId, setSelectedProviderId] = useState<"__default__" | string>("__default__");
+  // A mock provider answers with canned text and executes nothing. The reply
+  // says so, and this says so too, so the interface can label it instead of
+  // passing it off as work.
+  const isMockModel = providers.some(
+    (p) => p.kind === "mock" && (p.id === selectedProviderId || selectedProviderId === "__default__"),
+  );
   const [busy, setBusy] = useState(false);
   const [streaming, setStreaming] = useState("");
   const abortRef = useRef<AbortController | null>(null);
@@ -1239,6 +1246,17 @@ function CommandCenter({
               </div>
             )}
           </form>
+          {hasProvider && isMockModel ? (
+            <div
+              className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-[var(--info)] bg-[var(--info-dim)] px-4 py-2.5"
+              role="status"
+            >
+              <span className="text-[var(--step-minus-1)] text-[var(--text)]">
+                Demo mode. This workspace has no working model, so replies are canned and
+                nothing is really executed.
+              </span>
+            </div>
+          ) : null}
           {!hasProvider && (
             <div className="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-lg border border-[var(--warn)] bg-[var(--warn-dim)] px-4 py-2.5">
               <span className="text-[var(--step-minus-1)] text-[var(--text)]">
@@ -1369,6 +1387,9 @@ function CommandCenter({
               <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
                 {summary.data.summary.runningTasks} running · {summary.data.summary.queuedTasks} queued ·{" "}
                 {summary.data.summary.blockedTasks} blocked
+                {summary.data.summary.awaitingTasks > 0
+                  ? ` · ${summary.data.summary.awaitingTasks} awaiting approval`
+                  : ""}
               </span>
             ) : null}
           </div>

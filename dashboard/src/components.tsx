@@ -3,7 +3,7 @@ import type { ReactElement } from "react";
 import type { ReactNode } from "react";
 import { api, describeError } from "./api";
 import { BotAvatar } from "./bot/BotAvatar";
-import type { Permission, Task } from "./types";
+import type { Approval, Permission, Task } from "./types";
 import type { BotFace as BotFaceSpec } from "./types";
 
 export function StatusBadge({
@@ -40,6 +40,7 @@ export function taskStatusLabel(status: string): string {
     failed: "Failed",
     blocked: "Blocked",
     cancelled: "Cancelled",
+    awaiting_approval: "Awaiting approval",
   };
   return labels[status] ?? status;
 }
@@ -52,6 +53,7 @@ export function runStatusLabel(status: string): string {
     blocked: "Blocked",
     stopped: "Stopped",
     cancelled: "Cancelled",
+    awaiting_approval: "Awaiting approval",
   };
   return labels[status] ?? status;
 }
@@ -310,7 +312,14 @@ export function statusTone(status: string): "ok" | "bad" | "warn" | "info" | "ne
   if (status === "running" || status === "active") return "info";
   if (status === "done" || status === "ready") return "ok";
   if (status === "failed" || status === "denied" || status === "rejected") return "bad";
-  if (status === "blocked" || status === "pending" || status === "queued") return "warn";
+  if (
+    status === "blocked" ||
+    status === "pending" ||
+    status === "queued" ||
+    status === "awaiting_approval"
+  ) {
+    return "warn";
+  }
   if (status === "expired") return "bad";
   return "neutral";
 }
@@ -663,6 +672,148 @@ export function ShortId({ id }: { id: string }) {
   return <span className="mono text-[var(--step-minus-1)]" title={id}>{id.length > 18 ? `${id.slice(0, 18)}…` : id}</span>;
 }
 
+/* --- Approvals --- */
+
+/** What an approval is waiting for, in one word. */
+export function approvalStateLabel(state: string): string {
+  if (state === "pending") return "Awaiting you";
+  if (state === "expired") return "Expired";
+  if (state === "approved" || state === "approved_forever") return "Approved";
+  if (state === "denied") return "Rejected";
+  return state;
+}
+
+/**
+ * The state of an approval, from the server's rule: an undecided request
+ * whose time is up is DEAD, not pending — deciding it would fail. It still
+ * has to be visible, because a request nobody answered is exactly the kind
+ * of silence that makes a workspace feel stuck.
+ */
+export function approvalState(approval: {
+  decision?: string | null;
+  expires_at?: string | null;
+}): "pending" | "expired" | "resolved" {
+  if ((approval.decision ?? "pending") !== "pending") return "resolved";
+  if (!approval.expires_at) return "pending";
+  const expiry = new Date(approval.expires_at).getTime();
+  if (Number.isNaN(expiry)) return "pending";
+  return expiry > Date.now() ? "pending" : "expired";
+}
+
+export function ApprovalStateBadge({ state }: { state: string }) {
+  const variant =
+    state === "pending"
+      ? "warn"
+      : state === "expired"
+        ? "bad"
+        : state === "approved" || state === "approved_forever"
+          ? "ok"
+          : state === "denied"
+            ? "neutral"
+            : "info";
+  return <Badge variant={variant}>{approvalStateLabel(state)}</Badge>;
+}
+
+/** The three answers the owner can give, and nothing else.
+ *
+ *  "Forever" is a reusable permit for the same exact action; it is not a
+ *  blanket permission, and the row that carries it says which action it is
+ *  bound to. */
+export function ApprovalDecisionButtons({
+  onDecide,
+  busy,
+  size = "md",
+}: {
+  onDecide: (decision: "approved" | "approved_forever" | "denied") => void;
+  busy?: boolean;
+  size?: "sm" | "md";
+}) {
+  const label = size === "sm" ? "text-[var(--step-minus-2)]" : "text-[var(--step-minus-1)]";
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <Button
+        variant="primary"
+        disabled={busy}
+        onClick={() => onDecide("approved")}
+        className={label}
+      >
+        Approve once
+      </Button>
+      <Button disabled={busy} onClick={() => onDecide("approved_forever")} className={label}>
+        Forever
+      </Button>
+      <Button variant="danger" disabled={busy} onClick={() => onDecide("denied")} className={label}>
+        Reject
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * One approval, and what the owner can do about it.
+ *
+ * The state is the point: a request whose time is up is DEAD, not pending, so
+ * it says so and offers the way to ask again instead of a decision that
+ * would fail.
+ */
+export function ApprovalRow({
+  approval,
+  busy = false,
+  onDecide,
+  onReask,
+}: {
+  approval: Approval & {
+    teammate_persona?: string;
+    task_description?: string;
+    performed?: boolean;
+  };
+  busy?: boolean;
+  onDecide?: (decision: "approved" | "approved_forever" | "denied") => void;
+  onReask?: () => void;
+}) {
+  const state = approvalState(approval);
+  const askedBy = approval.teammate_persona || approval.requester || "the workspace";
+  return (
+    <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <strong className="text-[var(--step-0)] text-[var(--text)]">{approval.action}</strong>
+            <ApprovalStateBadge state={state} />
+            {approval.tool_name ? (
+              <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
+                {approval.performed ? "action performed" : "action not performed yet"}
+              </span>
+            ) : null}
+          </div>
+          <div className="mt-1 text-[var(--step-minus-1)] text-[var(--muted)]">
+            asked by {askedBy}
+            {approval.task_description ? ` · ${approval.task_description}` : ""}
+          </div>
+          {approval.digest ? (
+            <div className="mono mt-0.5 text-[var(--step-minus-2)] text-[var(--faint)]">
+              digest {approval.digest.slice(0, 16)}…
+            </div>
+          ) : null}
+        </div>
+        <div className="flex shrink-0 flex-col items-end gap-1.5">
+          {state === "pending" && onDecide ? (
+            <ApprovalDecisionButtons onDecide={onDecide} busy={busy} size="sm" />
+          ) : state === "expired" && onReask ? (
+            <Button onClick={onReask} disabled={busy}>
+              Ask again
+            </Button>
+          ) : (
+            <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
+              {approval.decided_at ? relativeTime(approval.decided_at) : ""}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* --- Shared table chrome --- */
 /* One definition for the flat data-table treatment used by every evidence
  * surface (runs, boards, tasks). Views import these instead of re-declaring
@@ -714,6 +865,9 @@ export function taskTally(tasks: Task[]): {
   done: number;
   failed: number;
   cancelled: number;
+  /** Waiting on a human decision. Not blocked: the work is fine, the
+   *  answer is missing. */
+  awaiting: number;
 } {
   let running = 0;
   let queued = 0;
@@ -721,15 +875,17 @@ export function taskTally(tasks: Task[]): {
   let done = 0;
   let failed = 0;
   let cancelled = 0;
+  let awaiting = 0;
   for (const task of tasks) {
     if (task.status === "running") running += 1;
+    else if (task.status === "awaiting_approval") awaiting += 1;
     else if (task.status === "blocked") blocked += 1;
     else if (task.status === "pending" || task.status === "ready") queued += 1;
     else if (task.status === "done") done += 1;
     else if (task.status === "failed") failed += 1;
     else if (task.status === "cancelled") cancelled += 1;
   }
-  return { running, queued, blocked, done, failed, cancelled };
+  return { running, queued, blocked, done, failed, cancelled, awaiting };
 }
 
 /* --- Async --- */

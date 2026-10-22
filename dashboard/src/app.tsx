@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { Toaster, toast } from "sonner";
 import { ApiError, api, describeError as apiDescribeError, getSession, setSession } from "./api";
 import { ConversationView } from "./views-chat";
+import { ApprovalsView } from "./views-approvals";
 import { CapabilitiesView } from "./views-projects";
 import { ProjectDetailView } from "./views-project";
 import { ProjectsView } from "./views-projects";
@@ -26,7 +27,8 @@ export type Route =
   | { name: "project"; projectId: string; tab?: string }
   | { name: "task"; projectId: string; taskId: string }
   | { name: "capabilities" }
-  | { name: "bots" };
+  | { name: "bots" }
+  | { name: "approvals" };
 
 export function parseHash(): Route {
   const hash = window.location.hash.replace(/^#\/?/, "");
@@ -54,6 +56,7 @@ export function parseHash(): Route {
   }
   if (parts[0] === "capabilities") return { name: "capabilities" };
   if (parts[0] === "bots") return { name: "bots" };
+  if (parts[0] === "approvals") return { name: "approvals" };
   return { name: "home" };
 }
 
@@ -99,6 +102,7 @@ const NAV_ITEMS: Array<{ label: string; routes: Array<Route["name"]>; href: stri
   { label: "Home", routes: ["home"], href: "#/" },
   { label: "Workspaces", routes: ["projects", "project", "task"], href: "#/projects" },
   { label: "AI fleet", routes: ["bots", "bot"], href: "#/bots" },
+  { label: "Approvals", routes: ["approvals"], href: "#/approvals" },
   { label: "Boards", routes: ["boards", "board"], href: "#/boards" },
   { label: "Teams", routes: ["teams", "team"], href: "#/teams" },
   { label: "Settings", routes: ["settings"], href: "#/settings" },
@@ -256,6 +260,9 @@ export default function App() {
       break;
     case "bots":
       content = <BotsView />;
+      break;
+    case "approvals":
+      content = <ApprovalsView />;
       break;
     default:
       content = <EmptyState title="Workspace" hint="Select a workspace area from the sidebar." />;

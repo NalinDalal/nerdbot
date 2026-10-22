@@ -292,6 +292,36 @@ export interface Approval {
   digest: string | null;
   /** Set once the approved exact action executed (one-use binding). */
   executed_at: string | null;
+  /** The bot that asked, when the request came from an agent run. */
+  teammate_id?: string;
+  /** The exact action that is waiting: the tool, and its arguments as JSON. */
+  tool_name?: string;
+  tool_arguments?: string;
+  /** When the resume started carrying the action out. */
+  resumed_at?: string | null;
+}
+
+/** One row of the owner's cross-workspace approvals inbox. */
+export interface ApprovalInboxItem extends Approval {
+  /** pending — decidable now; expired — nobody answered; resolved — decided. */
+  state: "pending" | "expired" | "resolved";
+  /** True when this approval holds an action that can be carried out. */
+  resumable: boolean;
+  /** True once the action has actually been performed. */
+  performed: boolean;
+  teammate_persona: string;
+  task_description: string;
+}
+
+/** What a decision did to the work that asked for it. */
+export interface ApprovalResume {
+  outcome: "carried_out" | "waiting" | "refused" | "expired" | "skipped";
+  output: string;
+  run_id: string;
+  task_id: string;
+  run_status: string;
+  task_status: string;
+  performed: string[];
 }
 
 export interface Capability {

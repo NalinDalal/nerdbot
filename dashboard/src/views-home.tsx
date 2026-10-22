@@ -45,6 +45,8 @@ export interface WorkspaceSummary {
   queuedTasks: number;
   runningTasks: number;
   blockedTasks: number;
+  /** Tasks waiting on a human decision. */
+  awaitingTasks: number;
 }
 
 /** What the async loader resolves to: the summary plus load honesty. */
@@ -71,12 +73,14 @@ export function summarize(
   let queuedTasks = 0;
   let runningTasks = 0;
   let blockedTasks = 0;
+  let awaitingTasks = 0;
   for (const bundle of data.bundles) {
     const name = bundle.project.repository || "workspace";
     const tally = taskTally(bundle.tasks);
     queuedTasks += tally.queued;
     runningTasks += tally.running;
     blockedTasks += tally.blocked;
+    awaitingTasks += tally.awaiting;
     for (const run of bundle.runs) {
       if (run.status === "running") {
         // One task can have one live run; mark and dedupe.
@@ -108,6 +112,7 @@ export function summarize(
     queuedTasks,
     runningTasks,
     blockedTasks,
+    awaitingTasks,
   };
 }
 
@@ -178,6 +183,7 @@ function emptySummary(): WorkspaceSummary {
     queuedTasks: 0,
     runningTasks: 0,
     blockedTasks: 0,
+    awaitingTasks: 0,
   };
 }
 
@@ -297,6 +303,7 @@ function botStatusFor(bot: Teammate, bundles: ProjectBundle[]): string {
     const mine = bundle.tasks.filter((t) => t.owner_teammate_id === bot.id);
     if (mine.some((t) => t.status === "running")) return "running";
     if (mine.some((t) => t.status === "ready")) return "ready";
+    if (mine.some((t) => t.status === "awaiting_approval")) return "blocked";
     if (mine.some((t) => t.status === "blocked")) return "blocked";
   }
   return bot.status;
