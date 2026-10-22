@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "./api";
 import { notifyError } from "./app";
 import {
@@ -39,6 +39,35 @@ export function ApprovalsView() {
       expired: expired.approvals.length,
       resolved: resolved.approvals.length,
     };
+  }, []);
+
+  /**
+   * Ask the server to heal what it can, once, when the inbox opens.
+   *
+   * A decision that landed but was never carried out — the server died
+   * between the two — is only found by the sweep, and nobody is going to
+   * press a button for it. The sweep is idempotent and it is the owner's
+   * own server, so asking on the way in is the honest thing to do.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .sweepApprovals()
+      .then((result) => {
+        if (cancelled) return;
+        if (result.count || result.recovered?.length) {
+          inbox.reload();
+          counts.reload();
+        }
+      })
+      .catch(() => {
+        /* A sweep that fails is not the inbox's problem to report. */
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Once, when the inbox opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const decide = async (

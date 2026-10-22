@@ -356,9 +356,14 @@ export const api = {
     req<{ approvals: ApprovalInboxItem[]; state: string }>(
       `/approvals?state=${encodeURIComponent(state)}`,
     ),
-  /** Close the work whose request expired unanswered. */
+  /** Close the work whose request expired unanswered, and recover the work
+   *  a crash left behind. */
   sweepApprovals: () =>
-    post<{ closed: Array<Record<string, unknown>>; count: number }>("/approvals/sweep"),
+    post<{
+      closed: Array<Record<string, unknown>>;
+      count: number;
+      recovered: Array<Record<string, unknown>>;
+    }>("/approvals/sweep"),
   /** Ask again: re-run the task that made the request. */
   reaskApproval: (id: string) =>
     post<{ run: Run; exit_code: number | null; artifact_id: string | null }>(
