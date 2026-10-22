@@ -54,6 +54,8 @@ Projects are optional contexts. General assistant chats use your default Home co
 - Admin actions (bot creation, deletion, permission changes, board deletion, etc.) are default-deny and approval-gated unless `tool_policy` sets `"auto"`.
 - Three owner decisions: Reject, Approve once (one-use, consumed at execution), or Approve forever (reusable).
 - Approvals are enforced by the backend, not just UI buttons.
+- **A decision does the work.** When a bot asks for a privileged action, its run and task stop in `awaiting_approval` — they never report a success for work that has not happened. The request carries the exact tool call and its arguments, and approving carries that action out, once, as the same bot, with the permission checked again. Rejecting and expiring perform nothing and leave the work recoverable.
+- One inbox for every request, across workspaces: `#/approvals`, and the same panel on the task page. Expired requests are visible as expired, with the way to ask again. See `docs/decisions/0011-approval-workflow.md`.
 
 ### Providers
 - Model connections per project: OpenAI-compatible, local, or mock.
@@ -74,6 +76,7 @@ Relevant architecture decision records:
 - `docs/decisions/0008-workspace-isolation.md:` workspace isolation and per-task Git workspaces
 - `docs/decisions/0009-shell-tool-approval-policy.md:` what the approval gate covers, and what bounds the shell instead
 - `docs/decisions/0010-bot-faces.md:` a bot's face is the owner's choice, and it lives in the dashboard
+- `docs/decisions/0011-approval-workflow.md:` an approval is a decision that does the work, not a record of one
 - `docs/ARCHITECTURE.md:` architecture boundary document and eight extension seams
 - `docs/PLAN.md:` phase plan and capability matrix
 
@@ -159,7 +162,7 @@ curl -H "Authorization: Bearer $NERDBOT_TOKEN" \
 ### Backend
 
 ```bash
-uv run pytest -q                 # 372 tests
+uv run pytest -q                 # 441 tests
 uv run ruff check backend/src/ tests/
 uv run mypy
 ```
@@ -168,10 +171,20 @@ uv run mypy
 
 ```bash
 cd dashboard
-npm run test        # vitest (50 tests)
+npm run test        # vitest (69 tests)
 npm run lint        # eslint
 npx tsc --noEmit    # typecheck
 npm run build       # tsc + vite → dist/
+```
+
+### Live checks
+
+Scripts that start the real product and drive it end to end. They need a
+provider the model can reach, so they script one on localhost.
+
+```bash
+uv run python scripts/live_approval_check.py   # a gated action, a restart, the decision
+uv run python scripts/live_cancel_check.py      # cancelling a run really stops it
 ```
 
 ### Combined verification
@@ -191,6 +204,7 @@ cd dashboard && npm run test && npm run lint && npx tsc --noEmit && npm run buil
 - MCP/OAuth connectors are not implemented; provider access is OpenAI-compatible, local, or mock.
 - Scheduled tasks (`NERDBOT_EXECUTOR=1`) run a background executor loop; continuous autonomous execution is opt-in.
 - Browser-driven interaction tests for critical flows are not yet in the repository.
+- An approval carries out the exact action it was asked for, but the model's conversation is not replayed afterwards: the run's output is the action's result, and a task that needed more than that should be retried. See `docs/decisions/0011-approval-workflow.md`.
 
 ## Security and data-handling notes
 
