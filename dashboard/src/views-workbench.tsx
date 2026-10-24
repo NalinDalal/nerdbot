@@ -72,6 +72,8 @@ export function WorkbenchView() {
   const termInstance = useRef<Terminal | null>(null);
   const fitAddon = useRef<FitAddon | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
+  useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
 
   useEffect(() => {
     if (!activeId || !termRef.current) return;
@@ -122,7 +124,29 @@ export function WorkbenchView() {
     };
   }, [activeId]);
 
-  if (projects.loading) return <LoadingState lines={3} />;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        saveFile();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [loadedPath, content]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!termRef.current || !termInstance.current || !fitAddon.current) return;
+    const ro = new ResizeObserver(() => {
+      fitAddon.current?.fit();
+      const sid = sessionIdRef.current;
+      if (activeId && sid && termInstance.current) {
+        api.resizeTerminal(activeId, sid, termInstance.current.cols, termInstance.current.rows).catch(() => {});
+      }
+    });
+    ro.observe(termRef.current);
+    return () => ro.disconnect();
+  }, [activeId]);
   if (projects.error) return <ErrorState error={projects.error} onRetry={projects.reload} />;
   if (!activeId) return <EmptyState title="No workspace" hint="Create a project first." />;
 
