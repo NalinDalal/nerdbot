@@ -51,6 +51,8 @@ export interface Task {
   issue_id: string | null;
   branch: string;
   workspace_path: string;
+  /** "checkout" is an isolated per-task tree; "workspace" is the live project root. */
+  workspace_mode: string;
   board_id: string;
   /** Set when this task was created by a parent's delegate_task tool. */
   parent_task_id: string;
@@ -436,4 +438,68 @@ export interface WorkspaceFile {
   path: string;
   size: number;
   modified: number;
+}
+
+export interface WorkspaceChange {
+  status: string;
+  path: string;
+}
+
+/** The live root a project's workbench opens. */
+export interface WorkspaceMeta {
+  project_id?: string;
+  root: string;
+  name: string;
+  exists: boolean;
+  git: boolean;
+  branch: string;
+  dirty: boolean;
+  changes: WorkspaceChange[];
+  file_count: number;
+  truncated: boolean;
+  attached: boolean;
+  busy: boolean;
+}
+
+export interface WorkspaceTree extends WorkspaceMeta {
+  files: WorkspaceFile[];
+  dirs: string[];
+}
+
+export interface WorkspaceFileContent {
+  path: string;
+  content: string;
+  size: number;
+}
+
+export interface WorkspaceDiff {
+  diff: string;
+  status: WorkspaceChange[];
+  git: boolean;
+  exists: boolean;
+}
+
+/** One durable progress step emitted while a run is executing. */
+export interface RunEvent {
+  seq: number;
+  run_id: string;
+  kind: string;
+  content: string;
+  timestamp: string;
+}
+
+export interface TerminalSessionInfo {
+  session_id: string;
+  project_id: string;
+  cwd: string;
+  shell: string;
+  cols: number;
+  rows: number;
+  alive: boolean;
+}
+
+export interface RunEventPage {
+  events: RunEvent[];
+  run: Run;
+  next: number;
 }

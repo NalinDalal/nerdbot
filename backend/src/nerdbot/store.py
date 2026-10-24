@@ -40,6 +40,7 @@ from .models import (
     KnowledgeChunk,
     KnowledgeSource,
     MemoryEntry,
+    MemoryTier,
     Notification,
     Project,
     Provider,
@@ -78,7 +79,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
   description TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
   owner_teammate_id TEXT, dependencies TEXT NOT NULL DEFAULT '[]', command TEXT NOT NULL DEFAULT '',
-  issue_id TEXT, branch TEXT NOT NULL DEFAULT '', workspace_path TEXT NOT NULL DEFAULT ''
+  issue_id TEXT, branch TEXT NOT NULL DEFAULT '', workspace_path TEXT NOT NULL DEFAULT '',
+  workspace_mode TEXT NOT NULL DEFAULT 'checkout'
 );
 CREATE TABLE IF NOT EXISTS runs (
   id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id),
@@ -89,6 +91,12 @@ CREATE TABLE IF NOT EXISTS runs (
   stderr TEXT NOT NULL DEFAULT '', duration_s REAL NOT NULL DEFAULT 0.0,
   cancel_requested INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS run_events (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'event', content TEXT NOT NULL DEFAULT '',
+  timestamp TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events(run_id, seq);
 CREATE TABLE IF NOT EXISTS memories (
   id TEXT PRIMARY KEY, scope TEXT NOT NULL, content TEXT NOT NULL, source TEXT NOT NULL,
   confidence REAL NOT NULL DEFAULT 0.5, timestamp TEXT NOT NULL
@@ -525,6 +533,34 @@ _PHASE19_COLUMNS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
+_PHASE21_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    # Where a task executes. "checkout" keeps the original isolated per-task
+    # Git workspace; "workspace" runs in the project's live root so the owner
+    # sees the same files they are editing. Defaulting to checkout preserves
+    # every existing task and test.
+    "tasks": [("workspace_mode", "TEXT NOT NULL DEFAULT 'checkout'")],
+}
+
+
+_PHASE20_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    # Bot persona files (ai-teammates model): a bot's identity, its active
+    # objectives, and its accumulated wisdom. These are the durable parts of
+    # a bot's persona — they survive runs, and they are what a bot reads at
+    # the start of every session so it does not start from zero.
+    "teammates": [
+        ("soul", "TEXT NOT NULL DEFAULT ''"),
+        ("goals", "TEXT NOT NULL DEFAULT ''"),
+        ("wisdom", "TEXT NOT NULL DEFAULT ''"),
+        ("persona_version", "INTEGER NOT NULL DEFAULT 0"),
+    ],
+    # Memory tiers: a bot's memory is no longer one flat list. Raw daily
+    # logs roll up into typed memories, and typed memories distil into
+    # wisdom. The tier column records which tier a row belongs to, so the
+    # recall path can scope its search and the compaction path knows what
+    # may be rewritten.
+    "memories": [("tier", "TEXT NOT NULL DEFAULT 'raw'")],
+}
+
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Idempotent migrations for databases created by older schemas."""
@@ -535,7 +571,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
                   _PHASE6_COLUMNS, _PHASE7_COLUMNS, _PHASE8_COLUMNS, _PHASE9_COLUMNS,
                   _PHASE10_COLUMNS, _PHASE11_COLUMNS, _PHASE12_COLUMNS, _PHASE13_COLUMNS,
                   _PHASE14_COLUMNS, _PHASE15_COLUMNS, _PHASE16_COLUMNS, _PHASE17_COLUMNS,
-                  _PHASE18_COLUMNS, _PHASE19_COLUMNS):
+                  _PHASE18_COLUMNS, _PHASE19_COLUMNS, _PHASE20_COLUMNS,
+                  _PHASE21_COLUMNS):
         for table, columns in phase.items():
             phases.setdefault(table, []).extend(columns)
     for table, columns in phases.items():
@@ -658,6 +695,28 @@ def get_project(conn: sqlite3.Connection, project_id: str) -> Project | None:
     return _project_from_row(row)
 
 
+def update_project_config(
+    conn: sqlite3.Connection, project_id: str, config: dict[str, Any]
+) -> Project:
+    """Replace a project's config after validating the project exists.
+
+    Workspace roots live here because the existing projects table already has
+    a JSON config and adding a second storage location would split the source
+    of truth. Replacement (not merge) keeps callers explicit; the API merges
+    before calling when it means to patch.
+    """
+    project = get_project(conn, project_id)
+    if project is None:
+        raise KeyError(f"unknown project {project_id}")
+    project.config = dict(config)
+    conn.execute(
+        "UPDATE projects SET config = ? WHERE id = ?",
+        (json.dumps(project.config), project_id),
+    )
+    conn.commit()
+    return project
+
+
 def list_projects(conn: sqlite3.Connection, owner: str | None = None) -> list[Project]:
     if owner is not None:
         rows = conn.execute(
@@ -698,7 +757,8 @@ def create_teammate(
     )
     conn.execute(
         "INSERT INTO teammates (id, project_id, persona, instructions, capabilities,"
-        " memory_scope, permissions, face) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        " memory_scope, permissions, face, soul, goals, wisdom, persona_version)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             mate.id,
             mate.project_id,
@@ -708,6 +768,10 @@ def create_teammate(
             mate.memory_scope,
             json.dumps(mate.permissions),
             json.dumps(mate.face.model_dump(mode="json")),
+            mate.soul,
+            mate.goals,
+            mate.wisdom,
+            mate.persona_version,
         ),
     )
     conn.commit()
@@ -731,6 +795,10 @@ def _teammate_from_row(row: sqlite3.Row) -> Teammate:
         else {},
         provider_id=row["provider_id"] if "provider_id" in keys else None,
         face=_face_from_row(row),
+        soul=row["soul"] if "soul" in keys else "",
+        goals=row["goals"] if "goals" in keys else "",
+        wisdom=row["wisdom"] if "wisdom" in keys else "",
+        persona_version=int(row["persona_version"]) if "persona_version" in keys and row["persona_version"] else 0,
     )
 
 
@@ -785,6 +853,10 @@ def update_teammate(
     provider_id: str | None = None,
     clear_provider: bool = False,
     face: dict[str, str] | None = None,
+    soul: str | None = None,
+    goals: str | None = None,
+    wisdom: str | None = None,
+    persona_version: int | None = None,
 ) -> Teammate:
     """``clear_provider=True`` explicitly detaches the model (PATCH with
     ``provider_id: null``); a param of None alone means "no change"."""
@@ -813,6 +885,14 @@ def update_teammate(
         mate.tool_policy = tool_policy
     if face is not None:
         mate.face = BotFace(**faces_mod.merge_face(face))
+    if soul is not None:
+        mate.soul = soul
+    if goals is not None:
+        mate.goals = goals
+    if wisdom is not None:
+        mate.wisdom = wisdom
+    if persona_version is not None:
+        mate.persona_version = persona_version
     if clear_provider:
         mate.provider_id = None
     elif provider_id is not None:
@@ -824,7 +904,8 @@ def update_teammate(
         mate.provider_id = provider_id
     conn.execute(
         "UPDATE teammates SET persona = ?, instructions = ?, capabilities = ?,"
-        " memory_scope = ?, permissions = ?, tool_policy = ?, provider_id = ?, face = ?"
+        " memory_scope = ?, permissions = ?, tool_policy = ?, provider_id = ?, face = ?,"
+        " soul = ?, goals = ?, wisdom = ?, persona_version = ?"
         " WHERE id = ?",
         (
             mate.persona,
@@ -835,6 +916,10 @@ def update_teammate(
             json.dumps(mate.tool_policy),
             mate.provider_id,
             json.dumps(mate.face.model_dump(mode="json")),
+            mate.soul,
+            mate.goals,
+            mate.wisdom,
+            mate.persona_version,
             mate.id,
         ),
     )
@@ -1051,9 +1136,12 @@ def create_task(
     issue_id: str | None = None,
     board_id: str = "",
     parent_task_id: str = "",
+    workspace_mode: str = "checkout",
 ) -> Task:
     if get_project(conn, project_id) is None:
         raise KeyError(f"unknown project {project_id}")
+    if workspace_mode not in ("checkout", "workspace"):
+        raise ValueError("workspace_mode must be 'checkout' or 'workspace'")
     deps = dependencies or []
     for dep in deps:
         drow = conn.execute("SELECT project_id FROM tasks WHERE id = ?", (dep,)).fetchone()
@@ -1095,11 +1183,12 @@ def create_task(
         issue_id=issue_id,
         board_id=board_id,
         parent_task_id=parent_task_id,
+        workspace_mode=workspace_mode,
     )
     conn.execute(
         "INSERT INTO tasks (id, project_id, description, status, owner_teammate_id,"
-        " dependencies, command, issue_id, branch, workspace_path, board_id, parent_task_id)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " dependencies, command, issue_id, branch, workspace_path, board_id, parent_task_id,"
+        " workspace_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             task.id,
             task.project_id,
@@ -1113,6 +1202,7 @@ def create_task(
             task.workspace_path,
             task.board_id,
             task.parent_task_id,
+            task.workspace_mode,
         ),
     )
     conn.commit()
@@ -1162,6 +1252,9 @@ def _task_from_row(row: sqlite3.Row) -> Task:
         workspace_path=row["workspace_path"]
         if "workspace_path" in keys and row["workspace_path"]
         else "",
+        workspace_mode=row["workspace_mode"]
+        if "workspace_mode" in keys and row["workspace_mode"]
+        else "checkout",
         board_id=row["board_id"] if "board_id" in keys else "",
         parent_task_id=row["parent_task_id"] if "parent_task_id" in keys and row["parent_task_id"] else "",
         blocked_reason=row["blocked_reason"] if "blocked_reason" in keys and row["blocked_reason"] else "",
@@ -2199,6 +2292,38 @@ def create_run(
     return run
 
 
+def append_run_event(
+    conn: sqlite3.Connection, run_id: str, kind: str, content: str
+) -> int:
+    """Append one durable progress event for a run.
+
+    The provider loop and orchestrator call this while a run is in flight, so
+    the dashboard can show what the agent is doing without waiting for the
+    final run row to be written. Content is bounded so a model cannot fill the
+    database with one tool result.
+    """
+    text = (content or "").strip()
+    if len(text) > 4000:
+        text = text[:4000] + "…"
+    cursor = conn.execute(
+        "INSERT INTO run_events (run_id, kind, content, timestamp) VALUES (?, ?, ?, ?)",
+        (run_id, (kind or "event")[:40], text, datetime.now(UTC).isoformat()),
+    )
+    conn.commit()
+    return int(cursor.lastrowid or 0)
+
+
+def list_run_events(
+    conn: sqlite3.Connection, run_id: str, after: int = 0, limit: int = 500
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT seq, run_id, kind, content, timestamp FROM run_events"
+        " WHERE run_id = ? AND seq > ? ORDER BY seq LIMIT ?",
+        (run_id, after, max(1, min(limit, 2000))),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def _run_from_row(r: sqlite3.Row) -> Run:
     keys = r.keys()
     return Run(
@@ -2365,23 +2490,23 @@ def run_cancel_requested(conn: sqlite3.Connection, run_id: str) -> bool:
 
 
 def write_memory(
-    conn: sqlite3.Connection, scope: str, content: str, source: str, confidence: float = 0.5
+    conn: sqlite3.Connection, scope: str, content: str, source: str, confidence: float = 0.5,
+    tier: str = MemoryTier.RAW,
 ) -> MemoryEntry:
     if not source:
         raise ValueError("memory write requires a provenance source")
+    if tier not in (MemoryTier.RAW, MemoryTier.TYPED, MemoryTier.WISDOM):
+        raise ValueError(f"unknown memory tier: {tier!r}")
     entry = MemoryEntry(
-        id=new_id("mem"), scope=scope, content=content, source=source, confidence=confidence
+        id=new_id("mem"), scope=scope, content=content, source=source,
+        confidence=confidence, tier=tier,
     )
     conn.execute(
-        "INSERT INTO memories (id, scope, content, source, confidence, timestamp)"
-        " VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO memories (id, scope, content, source, confidence, timestamp, tier)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
         (
-            entry.id,
-            entry.scope,
-            entry.content,
-            entry.source,
-            entry.confidence,
-            entry.timestamp.isoformat(),
+            entry.id, entry.scope, entry.content, entry.source,
+            entry.confidence, entry.timestamp.isoformat(), entry.tier,
         ),
     )
     conn.commit()
@@ -2401,17 +2526,49 @@ def recall_memory(conn: sqlite3.Connection, scope: str, limit: int = 20) -> list
         ).fetchall()
     except Exception as exc:
         raise MemoryReadError(f"memory recall failed for scope {scope!r}: {exc}") from exc
-    return [
-        MemoryEntry(
-            id=r["id"],
-            scope=r["scope"],
-            content=r["content"],
-            source=r["source"],
-            confidence=r["confidence"],
-            timestamp=datetime.fromisoformat(r["timestamp"]),
-        )
-        for r in rows
-    ]
+    return [_memory_from_row(r) for r in rows]
+
+
+def _memory_from_row(r: sqlite3.Row) -> MemoryEntry:
+    keys = r.keys()
+    tier = r["tier"] if "tier" in keys and r["tier"] else MemoryTier.RAW
+    return MemoryEntry(
+        id=r["id"], scope=r["scope"], content=r["content"], source=r["source"],
+        confidence=r["confidence"], timestamp=datetime.fromisoformat(r["timestamp"]),
+        tier=tier,
+    )
+
+
+def list_memories_by_tier(
+    conn: sqlite3.Connection, scope: str, tier: str, limit: int = 50,
+) -> list[MemoryEntry]:
+    """All memories at one tier for a scope, newest first."""
+    try:
+        rows = conn.execute(
+            "SELECT * FROM memories WHERE scope = ? AND tier = ?"
+            " ORDER BY timestamp DESC LIMIT ?",
+            (scope, tier, limit),
+        ).fetchall()
+    except Exception as exc:
+        raise MemoryReadError(f"memory recall failed for scope {scope!r}: {exc}") from exc
+    return [_memory_from_row(r) for r in rows]
+
+
+def set_memory_tier(conn: sqlite3.Connection, memory_id: str, tier: str) -> None:
+    """Rewrite the tier of a memory row. Used by compaction."""
+    if tier not in (MemoryTier.RAW, MemoryTier.TYPED, MemoryTier.WISDOM):
+        raise ValueError(f"unknown memory tier: {tier!r}")
+    conn.execute(
+        "UPDATE memories SET tier = ? WHERE id = ?", (tier, memory_id)
+    )
+    conn.commit()
+
+
+def delete_memory(conn: sqlite3.Connection, memory_id: str) -> bool:
+    """Delete a memory row. Returns True if a row was deleted."""
+    cur = conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+    conn.commit()
+    return cur.rowcount > 0
 
 
 # -- Artifacts / approvals / events ------------------------------------------

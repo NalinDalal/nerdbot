@@ -209,6 +209,22 @@ def _prompt_text(command: str, context: Any | None) -> str:
     return str(getattr(task, "description", "") or "").strip()
 
 
+def _emit_progress(context: Any | None, kind: str, text: str) -> None:
+    """Report one live-progress step without letting observability kill a run.
+
+    The callback writes to SQLite on the run's connection. A progress write
+    failing (disk full, another writer's lock) must never turn a working agent
+    loop into a failed task.
+    """
+    callback = getattr(context, "progress", None) if context is not None else None
+    if callback is None:
+        return
+    try:
+        callback(kind, text)
+    except Exception:
+        return
+
+
 class OpenAICompatibleAdapter:
     """Bounded agent loop over OpenAI-style /chat/completions with tools.
 
@@ -288,6 +304,7 @@ class OpenAICompatibleAdapter:
         messages.append({"role": "user", "content": prompt})
         transcript.append({"role": "user", "content": prompt})
         tools = self._tools_for(context)
+        _emit_progress(context, "model", f"using {model}")
         consecutive_failures = 0
         tool_call_corrections = 0
         turns = 0
@@ -306,6 +323,7 @@ class OpenAICompatibleAdapter:
                     # model call to come back.
                     raise RunCancelled(f"run cancelled after {turns} turn(s)")
                 turns += 1
+                _emit_progress(context, "turn", f"turn {turns} — asking the model")
                 try:
                     data = self._authed_post(client, api_key, model, messages, tools)
                 except ProviderToolCallRejected as exc:
@@ -327,12 +345,14 @@ class OpenAICompatibleAdapter:
                 calls = _parse_tool_calls(message)
                 if not calls:
                     text = str(message.get("content") or "").strip()
+                    _emit_progress(context, "final", text[:800] or "finished with no final text")
                     return self._finish(text, transcript, turns)
                 for call in calls:
                     if time.monotonic() >= deadline:
                         raise ProviderTimeoutError("agent loop wall-clock budget expired")
                     if cancel is not None and cancel.cancelled:
                         raise RunCancelled(f"run cancelled after {turns} turn(s)")
+                    _emit_progress(context, "tool", f"calling {call['name']}")
                     try:
                         result = self._execute_one(
                             workspace, call["name"], call["arguments"], context
@@ -351,6 +371,9 @@ class OpenAICompatibleAdapter:
                             raise ProviderToolError(
                                 f"{consecutive_failures} consecutive tool failures"
                             ) from exc
+                    _emit_progress(
+                        context, "tool", f"{call['name']}: {str(result)[:600] or '(no output)'}"
+                    )
                     transcript.append({"role": "tool", "tool": call["name"], "content": result})
                     messages.append(
                         {
@@ -404,11 +427,16 @@ class OpenAICompatibleAdapter:
                 run_id=getattr(context, "run_id", ""),
                 workspace_path=str(workspace),
             )
+        # Workspace tools: pass the database connection and the acting
+        # teammate's id so persona/memory tools can scope their writes.
+        mate = getattr(context, "teammate", None) if context is not None else None
         return agent_tools.execute_tool(
             workspace,
             name,
             arguments,
             transport=self._transport,
+            conn=getattr(context, "conn", None),
+            teammate_id=mate.id if mate is not None else "",
         )
 
     def _authed_post(

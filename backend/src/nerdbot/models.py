@@ -109,6 +109,26 @@ class Teammate(BaseModel):
     tool_policy: dict[str, Any] = Field(default_factory=dict)
     provider_id: str | None = None
     face: BotFace = Field(default_factory=BotFace)
+    # ai-teammates persona files: the durable parts of a bot's identity.
+    # soul is who the bot is; goals is what it is working toward; wisdom is
+    # what it has learned and distilled. A bot reads these at the start of
+    # every session so it does not start from zero.
+    soul: str = ""
+    goals: str = ""
+    wisdom: str = ""
+    persona_version: int = 0
+
+
+class MemoryTier:
+    """The three tiers of a bot's memory, in compaction order.
+
+    Raw logs are the daily record. Typed memories are distilled facts.
+    Wisdom is distilled principles — the stuff a bot carries forward.
+    """
+
+    RAW = "raw"
+    TYPED = "typed"
+    WISDOM = "wisdom"
 
 
 class Task(BaseModel):
@@ -122,6 +142,10 @@ class Task(BaseModel):
     issue_id: str | None = None
     branch: str = ""
     workspace_path: str = ""
+    # "checkout" is the original isolated per-task Git checkout. "workspace"
+    # executes directly in the project's live workspace root so the owner can
+    # watch files change in the same tree they are editing.
+    workspace_mode: str = "checkout"
     board_id: str = ""
     parent_task_id: str = ""
     # Why the task is blocked, in plain words ("openai-compatible provider
@@ -206,6 +230,7 @@ class MemoryEntry(BaseModel):
     source: str
     confidence: float = 0.5
     timestamp: datetime = Field(default_factory=_utcnow)
+    tier: str = MemoryTier.RAW
 
 
 class Artifact(BaseModel):

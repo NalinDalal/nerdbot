@@ -62,6 +62,49 @@ def dependencies_satisfied(conn: sqlite3.Connection, task: Task) -> bool:
     return True
 
 
+def prepare_task_workspace(
+    conn: sqlite3.Connection,
+    task: Task,
+    data_dir: str,
+) -> Path:
+    """Resolve the tree this task executes in.
+
+    ``workspace`` tasks use the project's live root (attached folder or the
+    NerdBot-owned default). ``checkout`` tasks keep the original isolated,
+    branched per-task workspace. The distinction is persisted on the task so
+    retries and file/diff reads agree with the run.
+    """
+    if task.workspace_mode == "workspace":
+        project = store.get_project(conn, task.project_id)
+        if project is None:
+            raise ValueError("project not found")
+        root = workspace.ensure_project_workspace(project, data_dir, initialize_git=False)
+        branch = workspace.current_branch(root) or "workspace"
+        if not task.workspace_path:
+            store.set_task_workspace(conn, task.id, branch, str(root))
+            task.workspace_path = str(root)
+            task.branch = branch
+        return root
+    root = workspace.create_isolated_workspace(data_dir, task.id)
+    branch = workspace.branch_name_for_task(task.id)
+    workspace.ensure_branch(root, branch)
+    if not task.workspace_path:
+        store.set_task_workspace(conn, task.id, branch, str(root))
+        task.workspace_path = str(root)
+        task.branch = branch
+    return root
+
+
+def task_workspace_root(conn: sqlite3.Connection, task: Task, data_dir: str) -> Path:
+    """Read-only resolution used by the API surfaces (no checkout creation)."""
+    if task.workspace_mode == "workspace":
+        project = store.get_project(conn, task.project_id)
+        if project is None:
+            raise ValueError("project not found")
+        return workspace.configured_project_root(project, data_dir)
+    return workspace.workspace_path_for_task(data_dir, task.id)
+
+
 def schedule_run(
     conn: sqlite3.Connection,
     task_id: str,
@@ -145,10 +188,45 @@ def schedule_run(
         store.set_task_status(conn, task_id, TaskStatus.BLOCKED, "dependencies not satisfied")
         return run, None, None
 
-    ws = workspace.create_isolated_workspace(data_dir, task_id)
-    workspace.ensure_branch(ws, workspace.branch_name_for_task(task_id))
-    if not task.workspace_path:
-        store.set_task_workspace(conn, task_id, workspace.branch_name_for_task(task_id), str(ws))
+    try:
+        ws = prepare_task_workspace(conn, task, data_dir)
+    except (ValueError, OSError, RuntimeError) as exc:
+        reason = f"workspace unavailable: {exc}"
+        store.finish_run(conn, run.id, RunStatus.BLOCKED, None, reason)
+        run.status = RunStatus.BLOCKED
+        run.output_excerpt = reason
+        store.set_task_status(conn, task_id, TaskStatus.BLOCKED, reason)
+        store.append_run_event(conn, run.id, "blocked", reason)
+        _finalize_child_delegation(conn, task, run, reason, failed=True)
+        return run, None, None
+
+    # The model must know which tree its tools are bound to. Without this the
+    # live workspace and the isolated checkout look identical from the prompt.
+    ctx.system_message += (
+        "\n\n## Execution workspace\n"
+        f"{ws}\n"
+        "All file reads, writes and commands happen in this directory. "
+        "Keep changes inside it."
+    )
+    ctx.progress = lambda kind, text: store.append_run_event(conn, run.id, kind, text)
+    store.append_run_event(
+        conn, run.id, "run", f"workspace mode={task.workspace_mode} root={ws}"
+    )
+
+    # One live run per project: two agents rewriting the same files would make
+    # the diff unreviewable and the owner's edits race the model.
+    live_lock = False
+    if task.workspace_mode == "workspace":
+        if not workspace.acquire_workspace_lock(task.project_id):
+            reason = "workspace is busy with another live run"
+            store.finish_run(conn, run.id, RunStatus.BLOCKED, None, reason)
+            run.status = RunStatus.BLOCKED
+            run.output_excerpt = reason
+            store.set_task_status(conn, task_id, TaskStatus.BLOCKED, reason)
+            store.append_run_event(conn, run.id, "blocked", reason)
+            return run, None, None
+        live_lock = True
+
     started = time.monotonic()
     # The cancel token is this run's stop switch: the API signals it from
     # another request, the runtime polls it and kills the process group.
@@ -158,17 +236,20 @@ def schedule_run(
         # A cancel that arrived before this run registered itself still
         # applies: the request is durable, and it is honoured here.
         cancel.cancel()
+    store.append_run_event(conn, run.id, "run", "executing")
     try:
         result = active.start_run(
             task.command, ws, timeout_s=timeout_s, context=ctx, cancel=cancel
         )
     except RunCancelled as exc:
+        store.append_run_event(conn, run.id, "cancelled", str(exc))
         return (run, None, _finish_cancelled(conn, run, task, exc, ws, data_dir, started))
     except BlockedError as exc:
         store.finish_run(conn, run.id, RunStatus.BLOCKED, None, f"blocked: {exc.reason}")
         run.status = RunStatus.BLOCKED
         run.output_excerpt = f"blocked: {exc.reason}"
         store.set_task_status(conn, task_id, TaskStatus.BLOCKED, str(exc.reason))
+        store.append_run_event(conn, run.id, "blocked", str(exc.reason))
         _finalize_child_delegation(conn, task, run, f"blocked: {exc.reason}", failed=True)
         return run, None, None
     except ExecutionError as exc:
@@ -188,6 +269,7 @@ def schedule_run(
         run.status = RunStatus.FAILED
         run.output_excerpt = str(exc)
         store.set_task_status(conn, task_id, TaskStatus.FAILED)
+        store.append_run_event(conn, run.id, "error", str(exc))
         _finalize_child_delegation(conn, task, run, str(exc), failed=True)
         return run, None, failed
     except Exception as exc:  # explicit failure, never silent success
@@ -196,10 +278,13 @@ def schedule_run(
         run.status = RunStatus.FAILED
         run.output_excerpt = message
         store.set_task_status(conn, task_id, TaskStatus.FAILED)
+        store.append_run_event(conn, run.id, "error", message)
         _finalize_child_delegation(conn, task, run, message, failed=True)
         return run, None, None
     finally:
         runtime_mod.unregister_run(run.id)
+        if live_lock:
+            workspace.release_workspace_lock(task.project_id)
 
     # The turn asked for something only the owner can allow. The run is
     # WAITING, not finished: it must not report a success while the request
@@ -209,6 +294,12 @@ def schedule_run(
 
     duration_s = time.monotonic() - started
     ok = result.exit_code == 0
+    store.append_run_event(
+        conn,
+        run.id,
+        "result",
+        f"exit={result.exit_code} duration={duration_s:.2f}s\n{str(result.output or '')[:1000]}",
+    )
     current = store.get_task(conn, task_id)
     blocked_during_run = current is not None and current.status == TaskStatus.BLOCKED
     if blocked_during_run:

@@ -222,6 +222,10 @@ _IMPORT_COLUMNS: dict[str, frozenset[str]] = {
             "provider_id",
             "created_at",
             "face",
+            "soul",
+            "goals",
+            "wisdom",
+            "persona_version",
         }
     ),
     "issues": frozenset(
@@ -264,7 +268,9 @@ _IMPORT_COLUMNS: dict[str, frozenset[str]] = {
     "notifications": frozenset(
         {"id", "project_id", "channel", "kind", "payload", "status", "created_at"}
     ),
-    "memories": frozenset({"id", "scope", "content", "source", "confidence", "timestamp"}),
+    "memories": frozenset(
+        {"id", "scope", "content", "source", "confidence", "timestamp", "tier"}
+    ),
     "providers": frozenset(
         {"id", "project_id", "kind", "name", "config", "capabilities", "status", "created_at"}
     ),
@@ -280,6 +286,7 @@ _IMPORT_COLUMNS: dict[str, frozenset[str]] = {
             "issue_id",
             "branch",
             "workspace_path",
+            "workspace_mode",
             "board_id",
             "parent_task_id",
             "blocked_reason",

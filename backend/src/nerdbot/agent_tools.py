@@ -79,6 +79,50 @@ def tool_schemas() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "update_persona",
+                "description": (
+                    "Update your own persona files — SOUL (who you are), "
+                    "GOALS (what you are working toward), or WISDOM (what you "
+                    "have learned). Use this at the end of a session to carry "
+                    "yourself forward. These are your record, not instructions: "
+                    "your standing instructions take precedence when they disagree."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "soul": {"type": "string", "description": "Who you are."},
+                        "goals": {"type": "string", "description": "What you are working toward."},
+                        "wisdom": {"type": "string", "description": "What you have learned."},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "remember",
+                "description": (
+                    "Save a memory for future sessions. Memories are scoped to "
+                    "your identity and are recalled at the start of every run."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "content": {"type": "string"},
+                        "source": {"type": "string"},
+                        "tier": {
+                            "type": "string",
+                            "enum": ["raw", "typed", "wisdom"],
+                            "default": "raw",
+                        },
+                    },
+                    "required": ["content", "source"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "fetch_url",
                 "description": "Fetch a public http(s) URL as text. SSRF-guarded.",
                 "parameters": {
@@ -114,6 +158,8 @@ def execute_tool(
     name: str,
     arguments: dict[str, Any],
     transport: Any | None = None,
+    conn: Any = None,
+    teammate_id: str = "",
 ) -> str:
     """Execute one tool call. Returns untrusted, bounded result text.
 
@@ -162,6 +208,37 @@ def execute_tool(
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
         return f"wrote {len(content.encode('utf-8'))} bytes to {relpath!r}"
+    if name == "update_persona":
+        if conn is None or not teammate_id:
+            raise ValueError("update_persona requires a database and a teammate id")
+        from . import persona as persona_mod
+
+        persona_mod.save_persona(
+            conn, teammate_id,
+            soul=arguments.get("soul"),
+            goals=arguments.get("goals"),
+            wisdom=arguments.get("wisdom"),
+            bump_version=True,
+        )
+        return "persona updated"
+    if name == "remember":
+        if conn is None or not teammate_id:
+            raise ValueError("remember requires a database and a teammate id")
+        from . import store
+        from .models import MemoryTier
+
+        content = arguments.get("content", "")
+        source = arguments.get("source", "")
+        tier = arguments.get("tier", MemoryTier.RAW)
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("remember requires non-empty content")
+        if not isinstance(source, str) or not source.strip():
+            raise ValueError("remember requires a provenance source")
+        if tier not in (MemoryTier.RAW, MemoryTier.TYPED, MemoryTier.WISDOM):
+            raise ValueError(f"unknown tier: {tier!r}")
+        scope = f"teammate:{teammate_id}"
+        entry = store.write_memory(conn, scope, content, source, tier=tier)
+        return f"remembered as {entry.id} [{tier}]"
     if name == "fetch_url":
         from . import fetch as fetch_mod
 

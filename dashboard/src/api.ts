@@ -26,6 +26,7 @@ import type {
   Provider,
   Review,
   Run,
+  RunEventPage,
   Schedule,
   Task,
   TaskView,
@@ -33,8 +34,13 @@ import type {
   TeamCounts,
   TeamMember,
   Teammate,
+  TerminalSessionInfo,
   ThreadView,
+  WorkspaceDiff,
   WorkspaceFile,
+  WorkspaceFileContent,
+  WorkspaceMeta,
+  WorkspaceTree,
 } from "./types";
 
 export interface Session {
@@ -202,8 +208,16 @@ export const api = {
       }`,
     ),
 
-  createProject: (repository: string, config: Record<string, unknown> = {}) =>
-    post<Project>("/projects", { repository, config }),
+  createProject: (
+    repository: string,
+    config: Record<string, unknown> = {},
+    workspaceRoot?: string,
+  ) =>
+    post<Project>("/projects", {
+      repository,
+      config,
+      ...(workspaceRoot ? { workspace_root: workspaceRoot } : {}),
+    }),
 
   listTeammates: (projectId: string) =>
     req<{ teammates: Teammate[] }>(`/projects/${projectId}/teammates`),
@@ -293,6 +307,10 @@ export const api = {
   createTask: (projectId: string, body: Record<string, unknown>) =>
     post<TaskView["task"]>(`/projects/${projectId}/tasks`, body),
   taskView: (taskId: string) => req<TaskView>(`/tasks/${taskId}`),
+  runTaskAsync: (taskId: string) =>
+    post<{ started: boolean; task_id: string }>(`/tasks/${taskId}/runs/async`),
+  runEvents: (runId: string, after = 0) =>
+    req<RunEventPage>(`/runs/${runId}/events?after=${after}`),
   assignTask: (taskId: string, ownerTeammateId: string | null) =>
     post<TaskView["task"]>(`/tasks/${taskId}/assign`, { owner_teammate_id: ownerTeammateId }),
   updateTask: (taskId: string, body: Record<string, unknown>) =>
@@ -308,6 +326,56 @@ export const api = {
   deleteWorkspace: (taskId: string) =>
     req<{ removed: boolean }>(`/tasks/${taskId}/workspace`, { method: "DELETE" }),
   ensureWorkspace: (taskId: string) => post<{ path: string; branch: string }>(`/tasks/${taskId}/workspace`, {}),
+  /** The live project workspace (not a per-task checkout). */
+  projectWorkspace: (projectId: string) =>
+    req<WorkspaceMeta>(`/projects/${projectId}/workspace`),
+  projectWorkspaceTree: (projectId: string) =>
+    req<WorkspaceTree>(`/projects/${projectId}/workspace/tree`),
+  projectWorkspaceFile: (projectId: string, path: string) =>
+    req<WorkspaceFileContent>(
+      `/projects/${projectId}/workspace/file?path=${encodeURIComponent(path)}`,
+    ),
+  saveProjectWorkspaceFile: (projectId: string, path: string, content: string) =>
+    req<{ path: string; size: number }>(`/projects/${projectId}/workspace/file`, {
+      method: "PUT",
+      body: { path, content },
+    }),
+  attachProjectWorkspace: (projectId: string, path: string, initializeGit = false) =>
+    post<WorkspaceMeta>(`/projects/${projectId}/workspace/attach`, {
+      path,
+      initialize_git: initializeGit,
+    }),
+  projectWorkspaceDiff: (projectId: string) =>
+    req<WorkspaceDiff>(`/projects/${projectId}/workspace/diff`),
+  createTerminal: (projectId: string, cols = 100, rows = 26) =>
+    post<TerminalSessionInfo>(`/projects/${projectId}/terminal`, { cols, rows }),
+  sendTerminalInput: (projectId: string, sessionId: string, data: string) =>
+    post<{ written: number }>(
+      `/projects/${projectId}/terminal/${sessionId}/input`,
+      { data },
+    ),
+  resizeTerminal: (projectId: string, sessionId: string, cols: number, rows: number) =>
+    post<{ cols: number; rows: number }>(
+      `/projects/${projectId}/terminal/${sessionId}/resize`,
+      { cols, rows },
+    ),
+  closeTerminal: (projectId: string, sessionId: string) =>
+    req<{ closed: boolean }>(`/projects/${projectId}/terminal/${sessionId}`, {
+      method: "DELETE",
+    }),
+  /** Fetch-based SSE: EventSource cannot carry the bearer header. */
+  streamTerminal: (
+    projectId: string,
+    sessionId: string,
+    handlers: {
+      onSnapshot?: (data: string) => void;
+      onData: (data: string) => void;
+      onExit?: () => void;
+    },
+    signal?: AbortSignal,
+  ): Promise<void> =>
+    streamTerminal(projectId, sessionId, handlers, signal),
+
   /** The files across every task checkout in a workspace. */
   projectWorkspaceFiles: (projectId: string) =>
     req<{
@@ -483,6 +551,87 @@ export const api = {
   ): Promise<string> =>
     streamChat(threadId, content, onChunk, opts),
 };
+
+async function streamTerminal(
+  projectId: string,
+  sessionId: string,
+  handlers: {
+    onSnapshot?: (data: string) => void;
+    onData: (data: string) => void;
+    onExit?: () => void;
+  },
+  signal?: AbortSignal,
+): Promise<void> {
+  const current = getSession();
+  if (!current) throw new ApiError(0, "Not connected. Enter your API token first.");
+  let res: Response;
+  try {
+    res = await fetch(
+      joinUrl(
+        current.baseUrl,
+        `/projects/${projectId}/terminal/${sessionId}/stream`,
+      ),
+      {
+        headers: { Authorization: `Bearer ${current.token}` },
+        signal,
+      },
+    );
+  } catch (err) {
+    if ((err as { name?: string })?.name === "AbortError") return;
+    throw new ApiError(
+      0,
+      err instanceof Error ? `Network error: ${err.message}` : "Network error",
+    );
+  }
+  if (!res.ok || !res.body) {
+    let detail = `Terminal stream failed (${res.status})`;
+    try {
+      const data = (await res.json()) as { detail?: unknown };
+      if (typeof data.detail === "string") detail = data.detail;
+    } catch {
+      /* keep default */
+    }
+    throw new ApiError(res.status, detail);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    let chunk: Awaited<ReturnType<typeof reader.read>>;
+    try {
+      chunk = await reader.read();
+    } catch (err) {
+      if ((err as { name?: string })?.name === "AbortError") return;
+      throw err;
+    }
+    if (chunk.done) return;
+    buffer += decoder.decode(chunk.value, { stream: true });
+    let boundary = buffer.indexOf("\n\n");
+    while (boundary >= 0) {
+      const block = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      const data = block
+        .split("\n")
+        .filter((line) => line.startsWith("data: "))
+        .map((line) => line.slice(6))
+        .join("\n");
+      if (data) {
+        try {
+          const event = JSON.parse(data) as {
+            type?: string;
+            data?: string;
+          };
+          if (event.type === "snapshot" && event.data) handlers.onSnapshot?.(event.data);
+          else if (event.type === "data" && event.data) handlers.onData(event.data);
+          else if (event.type === "exit") handlers.onExit?.();
+        } catch {
+          /* a malformed frame is ignored, the stream continues */
+        }
+      }
+      boundary = buffer.indexOf("\n\n");
+    }
+  }
+}
 
 async function streamChat(
   threadId: string,

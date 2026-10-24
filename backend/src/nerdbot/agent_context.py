@@ -11,9 +11,10 @@ teammate's permissions so a model never sees tools it cannot use.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from . import gates, store
+from . import gates, persona as persona_mod, store
 from .models import (
     Approval,
     BoardMessage,
@@ -50,6 +51,10 @@ class AgentContext:
     # and recorded here, so the run knows at the end of the turn that it is
     # waiting on the owner.
     pending_approvals: list[Approval] = field(default_factory=list)
+    # Optional live progress sink: (kind, text). The orchestrator wires this
+    # to durable run_events so the workbench can show tool/model activity while
+    # a run is still executing. Failures are swallowed by the provider loop.
+    progress: Callable[[str, str], None] | None = None
 
 
 def memory_scopes_for(
@@ -159,6 +164,16 @@ def _system_message(
         sections.append(header)
         if mate.instructions:
             sections.append(f"## Standing instructions\n{mate.instructions}")
+        # Persona files: the bot's own record of itself from previous
+        # sessions. Framed as untrusted context — they are the bot's memory,
+        # not instructions, and standing instructions win when they disagree.
+        try:
+            persona = persona_mod.load_persona(conn, mate.id)
+            framed = persona_mod.persona_context(mate.id, persona)
+            if framed:
+                sections.append(framed)
+        except KeyError:
+            pass  # the bot does not exist; nothing to load
     else:
         sections.append(
             "You are an unowned NerdBot task worker. Complete the task with the "

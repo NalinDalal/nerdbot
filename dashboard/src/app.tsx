@@ -19,11 +19,13 @@ import { TeamsView, TeamDetailView } from "./views-teams";
 import { BotDetailView, BotsView } from "./views-bot";
 import { BoardsView, BoardDetailView } from "./views-boards";
 import { WorkView } from "./views-work";
+import { WorkbenchView } from "./views-workbench";
 import { EmptyState, useTheme, ThemeButton } from "./components";
 
 export type Route =
   | { name: "home" }
   | { name: "work" }
+  | { name: "workbench" }
   | { name: "chat"; projectId?: string }
   | { name: "teams" }
   | { name: "team"; teamId: string }
@@ -47,6 +49,7 @@ export function parseHash(): Route {
   const parts = path.split("/").filter(Boolean);
   if (parts.length === 0) return { name: "home" };
   if (parts[0] === "work") return { name: "work" };
+  if (parts[0] === "workbench") return { name: "workbench" };
   if (parts[0] === "chat") {
     return parts[1]
       ? { name: "chat", projectId: parts[1] }
@@ -123,6 +126,7 @@ const NAV_ITEMS: Array<{
 }> = [
   { label: "Home", routes: ["home"], href: "#/" },
   { label: "Work", routes: ["work", "task"], href: "#/work" },
+  { label: "Workbench", routes: ["workbench"], href: "#/workbench" },
   { label: "Fleet", routes: ["bots", "bot"], href: "#/bots" },
   { label: "Approvals", routes: ["approvals"], href: "#/approvals" },
   {
@@ -252,6 +256,9 @@ export default function App() {
       break;
     case "work":
       content = <WorkView />;
+      break;
+    case "workbench":
+      content = <WorkbenchView />;
       break;
     case "teams":
       content = <TeamsView />;

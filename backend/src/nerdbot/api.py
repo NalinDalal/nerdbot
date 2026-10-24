@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+import queue
 import sqlite3
 import threading
 import uuid
@@ -33,9 +35,11 @@ from . import knowledge as knowledge_mod
 from . import metrics as metrics_mod
 from . import notify as notify_mod
 from . import permissions as permissions_mod
+from . import persona as persona_mod
 from . import providers as providers_impl
 from . import runtime as runtime_mod
 from . import secrets as secrets_mod
+from . import terminal as terminal_mod
 from . import workspace as workspace_mgr
 from .auth import PRINCIPAL, expected_token, principal_from_header, require_project_owner
 from .integrations.github import (
@@ -51,6 +55,7 @@ from .models import (
     BOARD_MEMBER_ROLES,
     BoardMemberRole,
     Decision,
+    MemoryTier,
     Provider,
     ProviderKind,
     ProviderStatus,
@@ -96,6 +101,38 @@ def _run_wall_clock_s() -> float:
     return value
 
 
+def _run_task_in_background(
+    task_id: str, db_path: str, data_dir: str, timeout_s: float
+) -> None:
+    """Run one task on its own database connection.
+
+    Request-scoped connections are closed when the response returns, so the
+    worker owns its connection. The work is intentionally synchronous inside
+    the thread: the existing orchestrator/runtime contract is unchanged.
+    """
+    conn = store.connect(db_path)
+    try:
+        orchestrator.schedule_run(
+            conn, task_id, data_dir=data_dir, timeout_s=timeout_s
+        )
+    except Exception as exc:  # never let a daemon thread die silently
+        try:
+            task = store.get_task(conn, task_id)
+            if task is not None:
+                runs = store.list_runs_for_task(conn, task_id)
+                if runs:
+                    store.append_run_event(
+                        conn,
+                        runs[-1].id,
+                        "error",
+                        f"background run failed: {type(exc).__name__}: {exc}",
+                    )
+        except Exception:
+            pass
+    finally:
+        conn.close()
+
+
 def _provider_error_to_http(exc: Exception) -> HTTPException | None:
     """Map typed model/provider failures to actionable HTTP statuses.
 
@@ -129,6 +166,7 @@ class MemoryBody(BaseModel):
     content: str
     source: str
     confidence: float = 0.5
+    tier: str = MemoryTier.RAW
 
 
 def _enforce_memory_scope(
@@ -244,6 +282,7 @@ def create_app() -> FastAPI:
             _executor_stop.set()
             if _executor_thread is not None:
                 _executor_thread.join(timeout=5.0)
+            terminal_mod.close_all()
 
     app = FastAPI(title="NerdBot Workspace", lifespan=lifespan)
 
@@ -321,12 +360,36 @@ def create_app() -> FastAPI:
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
+        config = dict(body.config or {})
+        attached = (body.workspace_root or "").strip()
+        root: Path | None = None
+        if attached:
+            root = Path(attached).expanduser()
+            if not root.is_absolute():
+                raise HTTPException(
+                    status_code=400, detail="workspace_root must be an absolute path"
+                )
+            root = root.resolve()
+            if not root.is_dir():
+                raise HTTPException(
+                    status_code=400, detail=f"workspace_root is not a directory: {root}"
+                )
+            config["workspace_root"] = str(root)
+        repository = body.repository or (root.name if root is not None else "")
         project = store.create_project(
             conn,
             owner=principal,
-            repository=body.repository or "",
-            config=dict(body.config or {}),
+            repository=repository,
+            config=config,
         )
+        try:
+            # The default tree is NerdBot-owned, so create it now; an attached
+            # folder already exists and is only validated, never initialized.
+            workspace_mgr.ensure_project_workspace(
+                project, _data_dir(), initialize_git=bool(config.get("initialize_git"))
+            )
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return project.model_dump(mode="json")
 
     @app.post("/projects/{project_id}/teammates")
@@ -395,6 +458,14 @@ def create_app() -> FastAPI:
         principal: str = Depends(principal_from_header),
         acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
     ) -> dict[str, Any]:
+        """Partial update.
+
+        Kept as a raw dict rather than a declared schema because one field
+        needs a sentinel that a typed model cannot express: ``provider_id:
+        null`` is an explicit DETACH, while an absent ``provider_id`` is "no
+        change". A typed ``str | None`` collapses the two, and the product
+        relies on the distinction — see tests/test_providers_byok.py.
+        """
         require_project_owner(conn, _mate_project(conn, teammate_id), principal)
         updates: dict[str, Any] = {
             "persona": body.get("persona"),
@@ -406,6 +477,10 @@ def create_app() -> FastAPI:
             "provider_id": body.get("provider_id"),
             # provider_id: null is an explicit DETACH (absent = no change)
             "clear_provider": ("provider_id" in body and body["provider_id"] is None),
+            "soul": body.get("soul"),
+            "goals": body.get("goals"),
+            "wisdom": body.get("wisdom"),
+            "persona_version": body.get("persona_version"),
         }
         if body.get("face") is not None:
             updates["face"] = _validated_face(body.get("face"))
@@ -439,6 +514,54 @@ def create_app() -> FastAPI:
             conn, teammate_id, TeammateStatus.ARCHIVED, acting=acting
         )
         return mate.model_dump(mode="json")
+
+    # -- Persona (ai-teammates model) -----------------------------------------
+
+    @app.get("/teammates/{teammate_id}/persona")
+    def get_persona(
+        teammate_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, _mate_project(conn, teammate_id), principal)
+        return persona_mod.load_persona(conn, teammate_id)
+
+    @app.put("/teammates/{teammate_id}/persona")
+    def put_persona(
+        teammate_id: str,
+        body: schemas.PersonaWrite,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, _mate_project(conn, teammate_id), principal)
+        return persona_mod.save_persona(
+            conn, teammate_id,
+            soul=body.soul, goals=body.goals, wisdom=body.wisdom,
+            bump_version=body.bump_version,
+        )
+
+    @app.post("/teammates/{teammate_id}/compact")
+    def compact_teammate_memory(
+        teammate_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, _mate_project(conn, teammate_id), principal)
+        return persona_mod.compact_memory(conn, teammate_id)
+
+    @app.get("/teammates/{teammate_id}/memory/tiers")
+    def list_memory_tiers(
+        teammate_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, _mate_project(conn, teammate_id), principal)
+        scope = f"teammate:{teammate_id}"
+        out: dict[str, list[dict[str, Any]]] = {}
+        for tier in (MemoryTier.RAW, MemoryTier.TYPED, MemoryTier.WISDOM):
+            entries = store.list_memories_by_tier(conn, scope, tier, limit=50)
+            out[tier] = [e.model_dump(mode="json") for e in entries]
+        return out
 
     # -- Teams -----------------------------------------------------------------
 
@@ -995,6 +1118,7 @@ def create_app() -> FastAPI:
                 dependencies=list(body.dependencies or []),
                 command=body.command or "",
                 issue_id=body.issue_id or None,
+                workspace_mode=body.workspace_mode or "checkout",
             )
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1026,6 +1150,36 @@ def create_app() -> FastAPI:
             "artifact_id": artifact_id,
             "task_status": (store.get_task(conn, task_id) or task).status.value,
         }
+
+    @app.post("/tasks/{task_id}/runs/async")
+    def run_task_async(
+        task_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """Start a run and return immediately.
+
+        The synchronous ``POST /tasks/{id}/runs`` remains the contract for
+        scripts and the existing dashboard. The workbench uses this endpoint so
+        it can show live progress instead of holding one HTTP request open for
+        the whole agent loop.
+        """
+        task = store.get_task(conn, task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="task not found")
+        require_project_owner(conn, task.project_id, principal)
+        if task.status == TaskStatus.DONE:
+            raise HTTPException(
+                status_code=400, detail=f"task {task_id} is done; use retry to run it again"
+            )
+        thread = threading.Thread(
+            target=_run_task_in_background,
+            args=(task_id, _db_path(), _data_dir(), _run_wall_clock_s()),
+            daemon=True,
+            name=f"nerdbot-run-{task_id}",
+        )
+        thread.start()
+        return {"started": True, "task_id": task_id}
 
     @app.post("/tasks/{task_id}/retry")
     def retry_task(
@@ -1473,6 +1627,27 @@ def create_app() -> FastAPI:
         ]
         return {"run": run.model_dump(mode="json"), "artifacts": artifacts}
 
+    @app.get("/runs/{run_id}/events")
+    def get_run_events(
+        run_id: str,
+        after: int = 0,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        run = store.get_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        task = store.get_task(conn, run.task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="task not found")
+        require_project_owner(conn, task.project_id, principal)
+        events = store.list_run_events(conn, run_id, after=after)
+        return {
+            "events": events,
+            "run": run.model_dump(mode="json"),
+            "next": events[-1]["seq"] if events else after,
+        }
+
     @app.get("/artifacts/{artifact_id}")
     def get_artifact(
         artifact_id: str,
@@ -1542,6 +1717,11 @@ def create_app() -> FastAPI:
         if task is None:
             raise HTTPException(status_code=404, detail="task not found")
         require_project_owner(conn, task.project_id, principal)
+        if task.workspace_mode == "workspace":
+            raise HTTPException(
+                status_code=400,
+                detail="a live workspace belongs to the project, not this task",
+            )
         removed = workspace_mgr.cleanup_workspace(_data_dir(), task_id)
         store.record_event(conn, task.project_id, "workspace", task_id, "workspace.cleaned")
         return {"removed": removed}
@@ -1557,6 +1737,11 @@ def create_app() -> FastAPI:
         if task is None:
             raise HTTPException(status_code=404, detail="task not found")
         require_project_owner(conn, task.project_id, principal)
+        if task.workspace_mode == "workspace":
+            raise HTTPException(
+                status_code=400,
+                detail="this task runs in the live workspace; there is no checkout to seed",
+            )
         try:
             path, branch = orchestrator.ensure_task_workspace(
                 conn,
@@ -1818,7 +2003,9 @@ def create_app() -> FastAPI:
     ) -> dict[str, Any]:
         _ = principal
         _enforce_memory_scope(conn, acting, body.scope)
-        entry = store.write_memory(conn, body.scope, body.content, body.source, body.confidence)
+        entry = store.write_memory(
+            conn, body.scope, body.content, body.source, body.confidence, tier=body.tier
+        )
         return entry.model_dump(mode="json")
 
     @app.get("/memory")
@@ -2936,6 +3123,275 @@ def create_app() -> FastAPI:
         }
         return {"projects": projects, "counts": counts}
 
+    @app.get("/projects/{project_id}/workspace")
+    def get_project_workspace(
+        project_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """The live root this project's workbench opens.
+
+        Default workspaces are created on first read. Attached folders must
+        already exist; they are never recreated at a surprising path.
+        """
+        require_project_owner(conn, project_id, principal)
+        project = store.get_project(conn, project_id)
+        if project is None:  # pragma: no cover - ownership already checked
+            raise HTTPException(status_code=404, detail="project not found")
+        try:
+            root = workspace_mgr.ensure_project_workspace(
+                project, _data_dir(), initialize_git=False
+            )
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        meta = workspace_mgr.workspace_meta(root)
+        meta["project_id"] = project_id
+        meta["attached"] = workspace_mgr.is_owned_by_config(project)
+        meta["busy"] = workspace_mgr.workspace_busy(project_id)
+        return meta
+
+    @app.post("/projects/{project_id}/workspace/attach")
+    def attach_project_workspace(
+        project_id: str,
+        body: schemas.WorkspaceAttach,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        project = store.get_project(conn, project_id)
+        if project is None:  # pragma: no cover
+            raise HTTPException(status_code=404, detail="project not found")
+        if workspace_mgr.workspace_busy(project_id):
+            raise HTTPException(
+                status_code=409, detail="a live run is using this workspace"
+            )
+        raw = (body.path or "").strip()
+        if not raw:
+            raise HTTPException(status_code=400, detail="path is required")
+        root = Path(raw).expanduser()
+        if not root.is_absolute():
+            raise HTTPException(status_code=400, detail="path must be absolute")
+        root = root.resolve()
+        if root == Path(root.anchor):
+            raise HTTPException(status_code=400, detail="refusing to attach a filesystem root")
+        if not root.is_dir():
+            raise HTTPException(status_code=400, detail=f"not a directory: {root}")
+        previous = dict(project.config)
+        config = dict(previous)
+        config["workspace_root"] = str(root)
+        config["initialize_git"] = bool(body.initialize_git)
+        updated = store.update_project_config(conn, project_id, config)
+        try:
+            workspace_mgr.ensure_project_workspace(
+                updated, _data_dir(), initialize_git=bool(body.initialize_git)
+            )
+        except (OSError, ValueError) as exc:
+            store.update_project_config(conn, project_id, previous)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        store.record_event(conn, project_id, "workspace", project_id, "workspace.attached")
+        meta = workspace_mgr.workspace_meta(root)
+        meta["project_id"] = project_id
+        meta["attached"] = True
+        meta["busy"] = False
+        return meta
+
+    @app.get("/projects/{project_id}/workspace/tree")
+    def get_project_workspace_tree(
+        project_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        project = store.get_project(conn, project_id)
+        if project is None:  # pragma: no cover
+            raise HTTPException(status_code=404, detail="project not found")
+        try:
+            root = workspace_mgr.ensure_project_workspace(
+                project, _data_dir(), initialize_git=False
+            )
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        listing = workspace_mgr.list_workspace_files(root)
+        meta = workspace_mgr.workspace_meta(root)
+        meta["project_id"] = project_id
+        meta["attached"] = workspace_mgr.is_owned_by_config(project)
+        meta["busy"] = workspace_mgr.workspace_busy(project_id)
+        return {**meta, **listing}
+
+    @app.get("/projects/{project_id}/workspace/file")
+    def read_project_workspace_file(
+        project_id: str,
+        path: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        project = store.get_project(conn, project_id)
+        if project is None:  # pragma: no cover
+            raise HTTPException(status_code=404, detail="project not found")
+        root = workspace_mgr.configured_project_root(project, _data_dir())
+        try:
+            return workspace_mgr.read_workspace_text(root, path)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="file not found") from exc
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.put("/projects/{project_id}/workspace/file")
+    def write_project_workspace_file(
+        project_id: str,
+        body: schemas.WorkspaceFileWrite,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        project = store.get_project(conn, project_id)
+        if project is None:  # pragma: no cover
+            raise HTTPException(status_code=404, detail="project not found")
+        if workspace_mgr.workspace_busy(project_id):
+            raise HTTPException(
+                status_code=409, detail="a live run is using this workspace"
+            )
+        root = workspace_mgr.configured_project_root(project, _data_dir())
+        try:
+            result = workspace_mgr.write_workspace_text(
+                root, body.path or "", body.content or ""
+            )
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        store.record_event(
+            conn, project_id, "workspace", result["path"], "workspace.file.saved"
+        )
+        return result
+
+    @app.get("/projects/{project_id}/workspace/diff")
+    def get_project_workspace_diff(
+        project_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        project = store.get_project(conn, project_id)
+        if project is None:  # pragma: no cover
+            raise HTTPException(status_code=404, detail="project not found")
+        root = workspace_mgr.configured_project_root(project, _data_dir())
+        if not root.is_dir():
+            return {"diff": "", "status": [], "git": False, "exists": False}
+        return {
+            "diff": workspace_mgr.workspace_diff(root),
+            "status": workspace_mgr.git_status_entries(root),
+            "git": workspace_mgr.is_git_repo(root),
+            "exists": True,
+        }
+
+    @app.post("/projects/{project_id}/terminal")
+    def create_project_terminal(
+        project_id: str,
+        body: schemas.TerminalCreate,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        project = store.get_project(conn, project_id)
+        if project is None:  # pragma: no cover
+            raise HTTPException(status_code=404, detail="project not found")
+        try:
+            root = workspace_mgr.ensure_project_workspace(
+                project, _data_dir(), initialize_git=False
+            )
+            session = terminal_mod.create_session(
+                project_id,
+                root,
+                cols=body.cols or terminal_mod.DEFAULT_COLS,
+                rows=body.rows or terminal_mod.DEFAULT_ROWS,
+            )
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return terminal_mod.shell_info(session)
+
+    @app.get("/projects/{project_id}/terminal/{session_id}/stream")
+    def stream_project_terminal(
+        project_id: str,
+        session_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> StreamingResponse:
+        require_project_owner(conn, project_id, principal)
+        try:
+            session = terminal_mod.get_session(session_id, project_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="terminal session not found") from exc
+        snapshot, subscriber = session.subscribe()
+
+        def generate() -> Any:
+            def emit(payload: dict[str, Any]) -> str:
+                return f"data: {json.dumps(payload)}\n\n"
+
+            try:
+                if snapshot:
+                    yield emit({"type": "snapshot", "data": snapshot})
+                while True:
+                    try:
+                        item = subscriber.get(timeout=15.0)
+                    except queue.Empty:
+                        yield ": ping\n\n"
+                        continue
+                    if item is None:
+                        yield emit({"type": "exit"})
+                        break
+                    yield emit({"type": "data", "data": item})
+            finally:
+                session.unsubscribe(subscriber)
+
+        return StreamingResponse(generate(), media_type="text/event-stream")
+
+    @app.post("/projects/{project_id}/terminal/{session_id}/input")
+    def write_project_terminal(
+        project_id: str,
+        session_id: str,
+        body: schemas.TerminalInput,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        try:
+            session = terminal_mod.get_session(session_id, project_id)
+            written = session.write(body.data or "")
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="terminal session not found") from exc
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"written": written}
+
+    @app.post("/projects/{project_id}/terminal/{session_id}/resize")
+    def resize_project_terminal(
+        project_id: str,
+        session_id: str,
+        body: schemas.TerminalResize,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        try:
+            session = terminal_mod.get_session(session_id, project_id)
+            session.resize(body.cols or session.cols, body.rows or session.rows)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="terminal session not found") from exc
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"cols": session.cols, "rows": session.rows}
+
+    @app.delete("/projects/{project_id}/terminal/{session_id}")
+    def close_project_terminal(
+        project_id: str,
+        session_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        closed = terminal_mod.close_session(session_id, project_id)
+        return {"closed": closed}
+
     @app.get("/projects/{project_id}/tasks")
     def list_project_tasks(
         project_id: str,
@@ -3046,7 +3502,7 @@ def create_app() -> FastAPI:
         if task is None:
             raise HTTPException(status_code=404, detail="task not found")
         require_project_owner(conn, task.project_id, principal)
-        root = workspace_mgr.workspace_path_for_task(_data_dir(), task_id)
+        root = orchestrator.task_workspace_root(conn, task, _data_dir())
         if not root.is_dir():
             return {"files": [], "root": str(root)}
         files: list[dict[str, Any]] = []
@@ -3075,7 +3531,7 @@ def create_app() -> FastAPI:
         if task is None:
             raise HTTPException(status_code=404, detail="task not found")
         require_project_owner(conn, task.project_id, principal)
-        root = workspace_mgr.workspace_path_for_task(_data_dir(), task_id)
+        root = orchestrator.task_workspace_root(conn, task, _data_dir())
         target = (root / path).resolve()
         if target != root and root not in target.parents:
             raise HTTPException(status_code=400, detail="path escapes workspace")
@@ -3099,7 +3555,7 @@ def create_app() -> FastAPI:
         if task is None:
             raise HTTPException(status_code=404, detail="task not found")
         require_project_owner(conn, task.project_id, principal)
-        root = workspace_mgr.workspace_path_for_task(_data_dir(), task_id)
+        root = orchestrator.task_workspace_root(conn, task, _data_dir())
         if not root.is_dir():
             return {"diff": "", "exists": False}
         try:

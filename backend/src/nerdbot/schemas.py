@@ -41,6 +41,9 @@ class _Body(BaseModel):
 class ProjectCreate(_Body):
     repository: str | None = None
     config: dict[str, Any] | None = None
+    # Optional convenience field: an owner can create a project already bound
+    # to an existing folder. The handler validates and stores it in config.
+    workspace_root: str | None = None
 
 
 class TaskCreate(_Body):
@@ -49,6 +52,33 @@ class TaskCreate(_Body):
     owner_teammate_id: str | None = None
     dependencies: list[str] | None = None
     issue_id: str | None = None
+    # "checkout" (default) keeps the isolated per-task workspace; "workspace"
+    # executes in the project's live root.
+    workspace_mode: str | None = None
+
+
+class WorkspaceAttach(_Body):
+    path: str | None = None
+    initialize_git: bool | None = None
+
+
+class WorkspaceFileWrite(_Body):
+    path: str | None = None
+    content: str | None = None
+
+
+class TerminalCreate(_Body):
+    cols: int | None = None
+    rows: int | None = None
+
+
+class TerminalInput(_Body):
+    data: str | None = None
+
+
+class TerminalResize(_Body):
+    cols: int | None = None
+    rows: int | None = None
 
 
 class TeammateCreate(_Body):
@@ -63,6 +93,44 @@ class TeammateCreate(_Body):
     # face the catalogue does not know is a bad request, not a malformed
     # body.
     face: dict[str, Any] | None = None
+
+
+class TeammateUpdate(_Body):
+    """Partial update: only the fields the caller actually sent are applied."""
+
+    persona: str | None = None
+    instructions: str | None = None
+    capabilities: list[str] | None = None
+    memory_scope: str | None = None
+    permissions: list[str] | None = None
+    tool_policy: dict[str, Any] | None = None
+    provider_id: str | None = None
+    clear_provider: bool | None = None
+    face: dict[str, Any] | None = None
+    # ai-teammates persona files. A bot's soul, goals and wisdom are the
+    # durable parts of its identity; they survive runs and are read at the
+    # start of every session. They are plain text, not parsed.
+    soul: str | None = None
+    goals: str | None = None
+    wisdom: str | None = None
+    persona_version: int | None = None
+
+
+class PersonaWrite(_Body):
+    """One persona file at a time. ``bump_version`` records that the persona
+    changed; the version is informational, not authoritative."""
+
+    soul: str | None = None
+    goals: str | None = None
+    wisdom: str | None = None
+    bump_version: bool = True
+
+
+class MemoryWrite(_Body):
+    content: str | None = None
+    source: str | None = None
+    confidence: float | None = None
+    tier: str | None = None
 
 
 class ThreadCreate(_Body):
