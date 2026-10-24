@@ -21,6 +21,7 @@ export function WorkbenchView() {
   const meta = useAsync(() => (activeId ? api.projectWorkspace(activeId) : Promise.resolve(null)), [activeId]);
   const tree = useAsync(() => (activeId ? api.projectWorkspaceTree(activeId) : Promise.resolve(null)), [activeId]);
   const diff = useAsync(() => (activeId ? api.projectWorkspaceDiff(activeId) : Promise.resolve(null)), [activeId]);
+  const teammates = useAsync(() => (activeId ? api.listTeammates(activeId) : Promise.resolve(null)), [activeId]);
 
   const [path, setPath] = useState("README.md");
   const [content, setContent] = useState("");
@@ -126,67 +127,78 @@ export function WorkbenchView() {
   if (!activeId) return <EmptyState title="No workspace" hint="Create a project first." />;
 
   return (
-    <div className="grid h-full grid-cols-1 gap-4 md:grid-cols-3">
-      <aside className="border border-[var(--border-dim)] rounded-md p-3 overflow-auto">
-        <h3 className="text-sm font-semibold mb-2">Files</h3>
+    <div className="flex h-full flex-col gap-4">
+      <header className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">Workbench</h2>
+        <span className="text-xs text-[var(--muted)]">{meta.data?.root}</span>
+      </header>
+      <div className="grid h-full grid-cols-1 gap-4 lg:grid-cols-[260px_1fr_320px]">
+      <aside className="border border-[var(--border-dim)] rounded-lg p-4 overflow-auto">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)] mb-3">Files</h3>
         {tree.loading ? <LoadingState lines={3} /> : tree.error ? <ErrorState error={tree.error} onRetry={tree.reload} /> : (
-          <ul className="text-xs space-y-1">
+          <ul className="text-sm space-y-1">
             {(tree.data?.files ?? []).map((f: { path: string }) => (
               <li key={f.path}>
-                <button className="hover:underline text-left" onClick={() => loadFile(f.path)}>{f.path}</button>
+                <button className="hover:underline text-left w-full truncate" onClick={() => loadFile(f.path)}>{f.path}</button>
               </li>
             ))}
           </ul>
         )}
-        <div className="mt-4">
-          <h3 className="text-sm font-semibold mb-2">Workspace</h3>
-          <div className="text-xs text-[var(--muted)]">{meta.data?.root}</div>
-        </div>
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)] mt-6 mb-3">Bits</h3>
+        {teammates.loading ? <LoadingState lines={2} /> : teammates.error ? <ErrorState error={teammates.error} onRetry={teammates.reload} /> : (
+          <ul className="text-sm space-y-1">
+            {(teammates.data?.teammates ?? []).map((t) => (
+              <li key={t.id} className="flex items-center justify-between">
+                <span className="truncate">{t.persona}</span>
+                <span className="text-xs text-[var(--muted)]">{t.status}</span>
+              </li>
+            ))}
+          </ul>
+        )}
       </aside>
 
-      <main className="border border-[var(--border-dim)] rounded-md p-3 flex flex-col gap-3 overflow-auto">
+      <main className="border border-[var(--border-dim)] rounded-lg p-4 flex flex-col gap-3 overflow-auto min-h-0">
         <div className="flex gap-2 items-center">
           <input className="flex-1 border rounded px-2 py-1 text-sm" value={path} onChange={(e) => setPath(e.target.value)} />
           <Button variant="ghost" onClick={() => loadFile(path)}>Open</Button>
           <Button variant="primary" onClick={saveFile}>Save</Button>
         </div>
-        <textarea className="flex-1 min-h-[200px] border rounded p-2 text-xs font-mono" value={content} onChange={(e) => setContent(e.target.value)} />
+        <textarea className="flex-1 min-h-[240px] border rounded p-3 text-xs font-mono" value={content} onChange={(e) => setContent(e.target.value)} />
         <div className="flex gap-2 items-center">
           <input className="flex-1 border rounded px-2 py-1 text-sm" placeholder="command / task" value={cmd} onChange={(e) => setCmd(e.target.value)} />
           <Button variant="primary" onClick={runTask}>Run task</Button>
         </div>
         {out && <div className="text-xs text-[var(--muted)]">{out}</div>}
-        <div className="border border-[var(--border-dim)] rounded-md p-2">
-          <div className="text-xs font-semibold mb-1">Terminal {sessionId ? `(${sessionId})` : ""}</div>
-          <div ref={termRef} className="h-48 w-full" />
+        <div className="border border-[var(--border-dim)] rounded-lg p-3">
+          <div className="text-xs font-semibold mb-2">Terminal {sessionId ? `(${sessionId.slice(0,8)})` : ""}</div>
+          <div ref={termRef} className="h-64 w-full" />
         </div>
       </main>
 
-      <aside className="border border-[var(--border-dim)] rounded-md p-3 overflow-auto">
-        <h3 className="text-sm font-semibold mb-2">Diff</h3>
-        <pre className="text-xs whitespace-pre-wrap">{diff.data?.diff ?? ""}</pre>
-        <div className="mt-4">
-          <h3 className="text-sm font-semibold mb-2">Task context</h3>
-          {taskView.loading ? <LoadingState lines={2} /> : taskView.error ? <ErrorState error={taskView.error} onRetry={taskView.reload} /> : taskView.data ? (
-            <div className="text-xs space-y-2">
-              <div>Status: {taskView.data.task.status}</div>
-              <div>Approvals: {taskView.data.approvals.length}</div>
-              <ul className="space-y-1">
-                {taskView.data.approvals.map((a) => (
-                  <li key={a.id}>{a.action} — {a.decision}</li>
-                ))}
-              </ul>
-              <div>Artifacts: {taskView.data.artifacts.length}</div>
-              <ul className="space-y-1">
-                {taskView.data.artifacts.map((a) => (
-                  <li key={a.id}>{a.type}: {a.summary}</li>
-                ))}
-              </ul>
-              <div>Runs: {taskView.data.runs.length}</div>
-            </div>
-          ) : <div className="text-xs text-[var(--muted)]">Run a task to see context.</div>}
-        </div>
+      <aside className="border border-[var(--border-dim)] rounded-lg p-4 overflow-auto">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)] mb-3">Diff</h3>
+        <pre className="text-xs whitespace-pre-wrap mb-4">{diff.data?.diff ?? ""}</pre>
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)] mb-3">Task context</h3>
+        {taskView.loading ? <LoadingState lines={2} /> : taskView.error ? <ErrorState error={taskView.error} onRetry={taskView.reload} /> : taskView.data ? (
+          <div className="text-sm space-y-2">
+            <div>Status: {taskView.data.task.status}</div>
+            <div>Approvals: {taskView.data.approvals.length}</div>
+            <ul className="space-y-1 text-xs">
+              {taskView.data.approvals.map((a) => (
+                <li key={a.id}>{a.action} — {a.decision}</li>
+              ))}
+            </ul>
+            <div>Artifacts: {taskView.data.artifacts.length}</div>
+            <ul className="space-y-1 text-xs">
+              {taskView.data.artifacts.map((a) => (
+                <li key={a.id}>{a.type}: {a.summary}</li>
+              ))}
+            </ul>
+            <div>Runs: {taskView.data.runs.length}</div>
+          </div>
+        ) : <div className="text-xs text-[var(--muted)]">Run a task to see context.</div>}
       </aside>
+    </div>
     </div>
   );
 }
