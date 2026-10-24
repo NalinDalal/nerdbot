@@ -159,7 +159,7 @@ export function WorkbenchView() {
       <div className="grid h-full grid-cols-1 gap-4 lg:grid-cols-[260px_1fr_320px]">
       <aside className="border border-[var(--border-dim)] rounded-lg p-4 overflow-auto">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)] mb-3">Files</h3>
-        {tree.loading ? <LoadingState lines={3} /> : tree.error ? <ErrorState error={tree.error} onRetry={tree.reload} /> : (
+        {tree.loading ? <LoadingState lines={3} /> : tree.error ? <ErrorState error={tree.error} onRetry={tree.reload} /> : (tree.data?.files?.length ? (
           <ul className="text-sm space-y-1">
             {(tree.data?.files ?? []).map((f: { path: string }) => (
               <li key={f.path}>
@@ -167,7 +167,7 @@ export function WorkbenchView() {
               </li>
             ))}
           </ul>
-        )}
+        ) : <EmptyState title="No files" hint="Workspace is empty." />)}
         <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)] mt-6 mb-3">Bits</h3>
         {teammates.loading ? <LoadingState lines={2} /> : teammates.error ? <ErrorState error={teammates.error} onRetry={teammates.reload} /> : (
           <ul className="text-sm space-y-1">
