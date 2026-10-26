@@ -72,7 +72,7 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
                     <td className={TABLE_TD}>
                       {count?.tasks ?? 0}
                       {count?.running ? (
-                        <span className="ml-1.5 text-[var(--step-minus-2)] text-[var(--info)]">
+                        <span className="ml-1.5 text-step--2 text-[var(--info)]">
                           {count.running} running
                         </span>
                       ) : null}
@@ -159,9 +159,9 @@ export function CapabilitiesView() {
       ) : health.data ? (
         <div className="mb-6 flex flex-wrap items-center gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
           <Badge variant={health.data.status === "ok" ? "ok" : "bad"}>{health.data.status}</Badge>
-          <span className="mono text-[var(--step-minus-1)] text-[var(--muted)]">version {health.data.version}</span>
-          <span className="mono text-[var(--step-minus-1)] text-[var(--muted)]">db {health.data.db}</span>
-          <span className="mono text-[var(--step-minus-1)] text-[var(--muted)]">restarts {health.data.restarts}</span>
+          <span className="mono text-step--1 text-[var(--muted)]">version {health.data.version}</span>
+          <span className="mono text-step--1 text-[var(--muted)]">db {health.data.db}</span>
+          <span className="mono text-step--1 text-[var(--muted)]">restarts {health.data.restarts}</span>
           {health.data.secret_key ? (
             <Badge variant="info">secret key {health.data.secret_key}</Badge>
           ) : (
@@ -183,11 +183,11 @@ export function CapabilitiesView() {
                 index > 0 ? "border-t border-[var(--border-dim)]" : ""
               }`}
             >
-              <span className="mono w-56 shrink-0 text-[var(--step-minus-1)] text-[var(--text)]">{cap.id}</span>
+              <span className="mono w-56 shrink-0 text-step--1 text-[var(--text)]">{cap.id}</span>
               <Badge variant={cap.status === "ready" ? "ok" : cap.status === "stub" ? "warn" : "neutral"}>
                 {cap.status}
               </Badge>
-              <span className="text-[var(--step-minus-1)] text-[var(--muted)]">{cap.description}</span>
+              <span className="text-step--1 text-[var(--muted)]">{cap.description}</span>
             </div>
           ))}
         </div>

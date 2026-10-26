@@ -54,6 +54,7 @@ export default {
         24: "var(--space-24)",
       },
       fontSize: {
+        "step--3": ["var(--step-minus-3)", { lineHeight: "1.35" }],
         "step--2": ["var(--step-minus-2)", { lineHeight: "1.4" }],
         "step--1": ["var(--step-minus-1)", { lineHeight: "1.45" }],
         "step-0": ["var(--step-0)", { lineHeight: "1.55" }],

@@ -345,7 +345,7 @@ export function TaskDetailView({
         <div className="mb-2 flex flex-wrap items-baseline justify-between gap-3">
           <SectionLabel>Output</SectionLabel>
           {latestRun ? (
-            <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
+            <span className="text-step--2 text-[var(--faint)]">
               {runStatusLabel(latestRun.status)} · {Number(latestRun.duration_s ?? 0).toFixed(1)}s ·{" "}
               {relativeTime(latestRun.started_at)}
             </span>
@@ -354,7 +354,7 @@ export function TaskDetailView({
         {latestRun ? (
           <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
             {latestRun.status === "failed" && latestRun.exit_code !== null ? (
-              <div className="mb-3 rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-[var(--step-minus-1)] text-[var(--danger)]">
+              <div className="mb-3 rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-step--1 text-[var(--danger)]">
                 Run failed with exit code <span className="mono">{latestRun.exit_code}</span>.
               </div>
             ) : null}
@@ -370,13 +370,13 @@ export function TaskDetailView({
                   )}
                 </div>
                 {latestOutput.length > 4000 ? (
-                  <p className="mt-2 text-[var(--step-minus-2)] text-[var(--faint)]">
+                  <p className="mt-2 text-step--2 text-[var(--faint)]">
                     Showing the first 4000 characters. The full output is in the run artifacts.
                   </p>
                 ) : null}
               </>
             ) : (
-              <p className="text-[var(--step-minus-1)] text-[var(--muted)]">
+              <p className="text-step--1 text-[var(--muted)]">
                 The run finished without output.
               </p>
             )}
@@ -398,7 +398,7 @@ export function TaskDetailView({
         <section className="mb-6">
           <div className="mb-2 flex items-center justify-between">
             <SectionLabel>Waiting on you</SectionLabel>
-            <span className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
+            <span className="mono text-step--2 text-[var(--faint)]">
               {pendingApprovals.length} request{pendingApprovals.length === 1 ? "" : "s"}
             </span>
           </div>
@@ -447,19 +447,19 @@ export function TaskDetailView({
         >
           {task.status === "awaiting_approval" ? (
             /* The reason already says it: "waiting for your approval of X". */
-            <strong className="text-[var(--step-minus-1)] text-[var(--warn)]">
+            <strong className="text-step--1 text-[var(--warn)]">
               {task.blocked_reason.charAt(0).toUpperCase() + task.blocked_reason.slice(1)}
             </strong>
           ) : (
             <>
-              <strong className="text-[var(--step-minus-1)] text-[var(--warn)]">
+              <strong className="text-step--1 text-[var(--warn)]">
                 This task is blocked
               </strong>
-              <span className="text-[var(--step-minus-1)] text-[var(--text)]">
+              <span className="text-step--1 text-[var(--text)]">
                 {task.blocked_reason}
               </span>
               {task.blocked_reason.includes("provider") ? (
-                <span className="text-[var(--step-minus-1)] text-[var(--muted)]">
+                <span className="text-step--1 text-[var(--muted)]">
                   Connect a working model key in{" "}
                   <a
                     className="text-[var(--accent)] hover:underline"
@@ -478,7 +478,7 @@ export function TaskDetailView({
       {issue ? (
         <div className="mb-6 flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
           <strong className="text-[var(--text)]">{issue.title}</strong>
-          <span className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
+          <span className="mono text-step--2 text-[var(--faint)]">
             {issue.source}
             {issue.external_id ? ` · ${issue.external_id}` : ""}
           </span>
@@ -492,7 +492,7 @@ export function TaskDetailView({
           {owner ? (
             <BotChip persona={owner.persona || "bot"} id={owner.id} status={owner.status} face={owner.face} />
           ) : (
-            <span className="text-[var(--step-minus-1)] text-[var(--muted)]">
+            <span className="text-step--1 text-[var(--muted)]">
               Unassigned. Pick a bot to own this task.
             </span>
           )}
@@ -580,7 +580,7 @@ export function TaskDetailView({
         <div className="mb-2 flex items-baseline justify-between">
           <SectionLabel>Runs</SectionLabel>
           {latestRun ? (
-            <span className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
+            <span className="mono text-step--2 text-[var(--faint)]">
               {runs.length} total · latest {relativeTime(latestRun.started_at)}
             </span>
           ) : null}
@@ -594,7 +594,7 @@ export function TaskDetailView({
         <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
           <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
             <strong className="text-[var(--text)]">Delegate to another bot</strong>
-            <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
+            <span className="text-step--2 text-[var(--faint)]">
               Bounded depth (max 5), cycle-checked.
             </span>
           </div>
@@ -672,7 +672,7 @@ export function TaskDetailView({
                           <td className={`${TD} max-w-[260px] text-[var(--muted)]`}>
                             {d.result ? d.result.slice(0, 200) : "—"}
                             {d.finished_at ? (
-                              <div className="mt-0.5 text-[var(--step-minus-2)] text-[var(--faint)]">
+                              <div className="mt-0.5 text-step--2 text-[var(--faint)]">
                                 finished {relativeTime(d.finished_at)}
                               </div>
                             ) : null}
@@ -700,7 +700,7 @@ export function TaskDetailView({
                   </tbody>
                 </table>
               </div>
-              <p className="mt-2 text-[var(--step-minus-1)] text-[var(--muted)]">
+              <p className="mt-2 text-step--1 text-[var(--muted)]">
                 Accepting a delegation makes the target bot the task owner. Child results flow back
                 through the response channel (see the project&apos;s Messages tab).
               </p>
@@ -715,7 +715,7 @@ export function TaskDetailView({
       <section className="mb-6">
         <SectionLabel className="mb-2">Delegation tree</SectionLabel>
         <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
-          <div className="flex flex-wrap items-center gap-2 text-[var(--step-minus-1)]">
+          <div className="flex flex-wrap items-center gap-2 text-step--1">
             <span className="text-[var(--muted)]">Parent:</span>
             {parent ? (
               <a
@@ -729,11 +729,11 @@ export function TaskDetailView({
             )}
           </div>
           <div className="mt-3">
-            <span className="text-[var(--step-minus-1)] text-[var(--muted)]">
+            <span className="text-step--1 text-[var(--muted)]">
               Children ({children.length}):
             </span>
             {children.length === 0 ? (
-              <div className="mt-1 text-[var(--step-minus-1)] text-[var(--faint)]">
+              <div className="mt-1 text-step--1 text-[var(--faint)]">
                 No child tasks yet. Bots create them when they delegate with a command.
               </div>
             ) : (
@@ -743,7 +743,7 @@ export function TaskDetailView({
                   return (
                     <div
                       key={child.id}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg px-3 py-2 text-[var(--step-minus-1)] transition-colors hover:bg-[var(--surface-2)]"
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg px-3 py-2 text-step--1 transition-colors hover:bg-[var(--surface-2)]"
                     >
                       <span className="min-w-0">
                         <a
@@ -753,7 +753,7 @@ export function TaskDetailView({
                           {child.description || "Untitled"}
                         </a>{" "}
                         <span className="text-[var(--text-soft)]">{child.description || "Untitled"}</span>{" "}
-                        <span className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
+                        <span className="mono text-step--2 text-[var(--faint)]">
                           via {link
                             ? `${teammates.data?.teammates.find((m) => m.id === link.to_teammate_id)?.persona || link.to_teammate_id.slice(0, 10)} · ${link.status}`
                             : "delegation"}
@@ -814,14 +814,14 @@ export function TaskDetailView({
             {reviews.map((review) => (
               <div key={review.id} className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="mono text-[var(--step-minus-2)] text-[var(--faint)]">{review.id}</span>
+                  <span className="mono text-step--2 text-[var(--faint)]">{review.id}</span>
                   <StatusBadge status={review.verdict} />
                 </div>
-                <div className="mt-1.5 text-[var(--step-minus-1)] text-[var(--text-soft)]">
+                <div className="mt-1.5 text-step--1 text-[var(--text-soft)]">
                   {review.notes || "No notes"}
                 </div>
                 {review.risks.length > 0 ? (
-                  <div className="mt-1 text-[var(--step-minus-2)] text-[var(--faint)]">
+                  <div className="mt-1 text-step--2 text-[var(--faint)]">
                     Risks: {review.risks.join(", ")}
                   </div>
                 ) : null}
@@ -841,10 +841,10 @@ export function TaskDetailView({
             {pr_packages.map((pkg) => (
               <div key={pkg.id} className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
                 <strong className="text-[var(--text)]">{pkg.title}</strong>
-                <div className="mono mt-1 text-[var(--step-minus-2)] text-[var(--faint)]">
+                <div className="mono mt-1 text-step--2 text-[var(--faint)]">
                   {pkg.base_branch} ← {pkg.head_branch} · digest {pkg.digest.slice(0, 12)}…
                 </div>
-                <div className="mt-1 text-[var(--step-minus-2)] text-[var(--muted)]">{pkg.patch_summary}</div>
+                <div className="mt-1 text-step--2 text-[var(--muted)]">{pkg.patch_summary}</div>
               </div>
             ))}
           </div>
@@ -859,7 +859,7 @@ export function TaskDetailView({
           <pre className={LOG_BLOCK}>{JSON.stringify(rollup, null, 2)}</pre>
         </section>
       ) : null}
-      <div className="mt-6 text-[var(--step-minus-1)]">
+      <div className="mt-6 text-step--1">
         <a
           href={`#/p/${projectId}`}
           className="text-[var(--muted)] hover:text-[var(--text)] hover:underline"
@@ -897,7 +897,7 @@ function WorkspacePanel({ taskId }: { taskId: string }) {
       <div className="mb-2 flex items-center justify-between gap-3">
         <div className="flex items-baseline gap-2">
           <SectionLabel>Task checkout</SectionLabel>
-          <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
+          <span className="text-step--2 text-[var(--faint)]">
             this task&apos;s isolated working copy
           </span>
         </div>
@@ -930,7 +930,7 @@ function WorkspacePanel({ taskId }: { taskId: string }) {
           ) : diff.data?.exists && diff.data.diff ? (
             <pre className={LOG_BLOCK}>{diff.data.diff.slice(0, 8000)}</pre>
           ) : (
-            <div className="mt-2 text-[var(--step-minus-1)] text-[var(--muted)]">
+            <div className="mt-2 text-step--1 text-[var(--muted)]">
               No uncommitted changes (or the workspace does not exist yet; use Ensure workspace).
             </div>
           )}
@@ -942,7 +942,7 @@ function WorkspacePanel({ taskId }: { taskId: string }) {
         <ErrorState error={files.error} onRetry={files.reload} />
       ) : files.data && files.data.files.length > 0 ? (
         <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
-          <div className="mono mb-3 text-[var(--step-minus-2)] text-[var(--faint)]">{files.data.root}</div>
+          <div className="mono mb-3 text-step--2 text-[var(--faint)]">{files.data.root}</div>
           <div className="flex flex-wrap gap-1.5">
             {files.data.files.map((f) => (
               <Button
@@ -957,9 +957,9 @@ function WorkspacePanel({ taskId }: { taskId: string }) {
           </div>
           {openPath ? (
             <div className="mt-3">
-              <strong className="mono text-[var(--step-minus-1)] text-[var(--text)]">{openPath}</strong>
+              <strong className="mono text-step--1 text-[var(--text)]">{openPath}</strong>
               {contentError ? (
-                <div className="mt-2 rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-[var(--step-minus-1)] text-[var(--danger)]" role="alert">
+                <div className="mt-2 rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-step--1 text-[var(--danger)]" role="alert">
                   {contentError}
                 </div>
               ) : content === null ? (

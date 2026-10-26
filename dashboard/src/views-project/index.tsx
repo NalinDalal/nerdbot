@@ -59,12 +59,12 @@ export function ProjectDetailView({
       <div className="mx-auto w-full max-w-[var(--max-width-wide)] px-6 py-6 md:px-8 md:py-8">
         <a
           href="#/settings"
-          className="mb-3 inline-flex items-center gap-1 text-[var(--step-minus-1)] text-[var(--muted)] transition-colors hover:text-[var(--text)]"
+          className="mb-3 inline-flex items-center gap-1 text-step--1 text-[var(--muted)] transition-colors hover:text-[var(--text)]"
         >
           <span aria-hidden>←</span> Settings
         </a>
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-[var(--step-2)] font-semibold tracking-tight text-[var(--text)]">
+          <h1 className="text-step-2 font-semibold tracking-tight text-[var(--text)]">
             {workspaceName}
           </h1>
         </div>
@@ -81,7 +81,7 @@ export function ProjectDetailView({
               aria-controls="project-tab-panel"
               aria-selected={tab === name}
               onClick={() => setTab(name)}
-              className={`rounded-md px-3 py-1.5 text-[var(--step-minus-1)] font-medium transition-colors ${
+              className={`rounded-md px-3 py-1.5 text-step--1 font-medium transition-colors ${
                 tab === name
                   ? "bg-[var(--surface-3)] text-[var(--text)] shadow-sm"
                   : "text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text-soft)]"

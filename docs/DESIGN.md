@@ -44,12 +44,18 @@ Fluid type scale (`clamp()`):
 
 | Step | Token | Use | line-height | letter-spacing |
 |------|-------|-----|-------------|----------------|
-| --step-minus-1 | clamp(0.8rem, 0.78rem + 0.1vw, 0.85rem) | caption / meta | 1.4 | 0.05em |
-| --step-0 | clamp(1rem, 0.98rem + 0.12vw, 1.125rem) | body | 1.6 | default |
-| --step-1 | clamp(1.25rem, 1.15rem + 0.35vw, 1.6rem) | lead / small heading | 1.25 | -0.01em |
-| --step-2 | clamp(1.5rem, 1.35rem + 0.6vw, 2rem) | h3 | 1.2 | -0.01em |
-| --step-3 | clamp(1.9rem, 1.65rem + 1vw, 2.75rem) | h2 | 1.15 | -0.01em |
-| --step-4 | clamp(2.4rem, 1.95rem + 1.9vw, 4rem) | h1 | 1.1 | -0.02em |
+| --step-minus-3 | clamp(0.62rem, 0.6rem + 0.08vw, 0.68rem) | micro / counts | 1.35 | 0.05em |
+| --step-minus-2 | clamp(0.72rem, 0.7rem + 0.08vw, 0.76rem) | labels / captions | 1.4 | 0.05em |
+| --step-minus-1 | clamp(0.8rem, 0.78rem + 0.1vw, 0.85rem) | caption / meta | 1.45 | 0.05em |
+| --step-0 | clamp(1rem, 0.98rem + 0.12vw, 1.125rem) | body | 1.55 | default |
+| --step-1 | clamp(1.25rem, 1.15rem + 0.35vw, 1.6rem) | lead / small heading | 1.5 | -0.01em |
+| --step-2 | clamp(1.5rem, 1.35rem + 0.6vw, 2rem) | h3 | 1.15 | -0.01em |
+| --step-3 | clamp(1.9rem, 1.65rem + 1vw, 2.75rem) | h2 | 1.1 | -0.01em |
+| --step-4 | clamp(2.4rem, 1.95rem + 1.9vw, 4rem) | h1 | 1.05 | -0.02em |
+
+Apply a step with the Tailwind class (`text-step--2`, `text-step-0`, `text-step-1`, ...).
+Never write `text-[var(--step-*)]`: Tailwind resolves that as a **color** utility, so the
+font size is silently dropped and the element inherits body size.
 
 Hierarchy in blocks: headline (step-4), sentence (step-0), hint (step-minus-1). Never five sizes
 of bold. All-caps labels use positive tracking. Align left; never justify. No em dashes in

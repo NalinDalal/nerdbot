@@ -148,7 +148,7 @@ export function ApprovalsView() {
 
       {notice ? (
         <div
-          className="mb-4 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-[var(--step-minus-1)] text-[var(--text-soft)]"
+          className="mb-4 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-step--1 text-[var(--text-soft)]"
           role="status"
         >
           {notice}
@@ -165,14 +165,14 @@ export function ApprovalsView() {
               role="tab"
               aria-selected={state === tab}
               onClick={() => setState(tab)}
-              className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[var(--step-minus-1)] transition-colors ${
+              className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-step--1 transition-colors ${
                 state === tab
                   ? "bg-[var(--surface-3)] text-[var(--text)]"
                   : "text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text-soft)]"
               }`}
             >
               {label}
-              <span className="text-[var(--step-minus-2)] text-[var(--faint)]">{count}</span>
+              <span className="text-step--2 text-[var(--faint)]">{count}</span>
             </button>
           );
         })}

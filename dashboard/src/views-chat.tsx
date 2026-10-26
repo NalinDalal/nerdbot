@@ -102,10 +102,10 @@ export function ConversationView({
           painted underneath it. */}
       <header className="flex flex-wrap items-end justify-between gap-3 border-b border-[var(--border-dim)] py-3 pl-14 pr-4 md:px-6">
         <div className="min-w-0">
-          <h1 className="text-[var(--step-1)] font-semibold tracking-tight">
+          <h1 className="text-step-1 font-semibold tracking-tight">
             {isHome ? "Home" : workspaceName || "Conversation"}
           </h1>
-          <p className="mt-0.5 text-[var(--step-0)] text-[var(--muted)]">
+          <p className="mt-0.5 text-step-0 text-[var(--muted)]">
             {isHome
               ? "Ask, delegate, or pick up where you left off."
               : "This workspace's conversation."}
@@ -121,7 +121,7 @@ export function ConversationView({
       <div className="px-4 pt-3 md:px-6">
         <div className="mx-auto w-full max-w-[860px]">
         {summary.loadFailed && !summary.loading ? (
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-[var(--step-minus-1)] text-[var(--danger)]">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-step--1 text-[var(--danger)]">
             <span>Couldn't load some fleet data. This page may be incomplete.</span>
             <Button onClick={summary.reload}>Retry</Button>
           </div>
@@ -146,7 +146,7 @@ export function ConversationView({
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search conversations"
               aria-label="Search conversations"
-              className="h-8 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-[var(--step-minus-1)] outline-none transition-colors placeholder:text-[var(--faint)] focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
+              className="h-8 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-step--1 outline-none transition-colors placeholder:text-[var(--faint)] focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
             />
           </div>
           <div className="px-3 pb-1 pt-4">
@@ -174,16 +174,16 @@ export function ConversationView({
                       : "text-[var(--text-soft)] hover:bg-[var(--surface-2)]"
                   }`}
                 >
-                  <span className="truncate text-[var(--step-minus-1)] font-medium">
+                  <span className="truncate text-step--1 font-medium">
                     {thread.title || "Untitled"}
                   </span>
-                  <span className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
+                  <span className="mono text-step--2 text-[var(--faint)]">
                     {relativeTime(thread.created_at)}
                   </span>
                 </button>
               ))}
             {threads.data && (threads.data.threads ?? []).length === 0 && !threads.loading ? (
-              <p className="px-2.5 py-2 text-[var(--step-minus-1)] text-[var(--faint)]">
+              <p className="px-2.5 py-2 text-step--1 text-[var(--faint)]">
                 No conversations yet
               </p>
             ) : null}
@@ -251,10 +251,10 @@ export function ConversationView({
                         index > 0 ? "border-t border-[var(--border-dim)]" : ""
                       }`}
                     >
-                      <span className="truncate text-[var(--step-minus-1)] text-[var(--text)]">
+                      <span className="truncate text-step--1 text-[var(--text)]">
                         {t.title || "Untitled"}
                       </span>
-                      <span className="mono shrink-0 text-[var(--step-minus-2)] text-[var(--faint)]">
+                      <span className="mono shrink-0 text-step--2 text-[var(--faint)]">
                         {relativeTime(t.created_at)}
                       </span>
                     </button>
@@ -320,7 +320,7 @@ function NewThreadModal({
             onChange={(e) => setTitle(e.target.value)}
             placeholder="Evening check-in"
             autoFocus
-            className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-0)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
+            className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step-0 outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
           />
         </Field>
         <Field label="Model provider">
@@ -328,7 +328,7 @@ function NewThreadModal({
             value="__default__"
             disabled
             aria-label="Model provider"
-            className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-0)] opacity-70"
+            className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step-0 opacity-70"
           >
             <option value="__default__">Default model</option>
             {providers.map((provider) => (
@@ -337,7 +337,7 @@ function NewThreadModal({
               </option>
             ))}
           </select>
-          <p className="text-[var(--step-minus-1)] text-[var(--faint)]">
+          <p className="text-step--1 text-[var(--faint)]">
             The default provider is used for this thread. Change it later in the thread header.
           </p>
         </Field>
@@ -384,7 +384,7 @@ function ModelChip({
         aria-expanded={open}
         aria-label="Model provider"
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-[var(--step-minus-1)] text-[var(--text-soft)] transition-colors hover:border-[var(--faint)] disabled:pointer-events-none disabled:opacity-50"
+        className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-step--1 text-[var(--text-soft)] transition-colors hover:border-[var(--faint)] disabled:pointer-events-none disabled:opacity-50"
       >
         <span aria-hidden className="text-[var(--faint)]">Model:</span> {label}
         <span aria-hidden className="text-[var(--faint)]">{open ? "▴" : "▾"}</span>
@@ -413,7 +413,7 @@ function ModelChip({
                     onChange(option.id);
                     setOpen(false);
                   }}
-                  className={`flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-[var(--step-minus-1)] transition-colors ${
+                  className={`flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-step--1 transition-colors ${
                     selected
                       ? "bg-[var(--surface-3)] text-[var(--text)]"
                       : "text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
@@ -438,7 +438,7 @@ function ModelChip({
 /* --- Thread pane --- */
 
 const PROVIDER_SELECT_CLASS =
-  "rounded-md border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-[var(--step-minus-1)] text-[var(--text-soft)] outline-none transition-colors hover:border-[var(--faint)] focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]";
+  "rounded-md border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-step--1 text-[var(--text-soft)] outline-none transition-colors hover:border-[var(--faint)] focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]";
 
 function ThreadPane({
   threadId,
@@ -636,10 +636,10 @@ function ThreadPane({
       {/* Thread header */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border-dim)] px-4 py-2.5 md:px-6">
         <div className="min-w-0">
-          <div className="truncate text-[var(--step-0)] font-semibold">
+          <div className="truncate text-step-0 font-semibold">
             {view.data?.thread.title || "Untitled"}
           </div>
-          <div className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
+          <div className="mono text-step--2 text-[var(--faint)]">
             {relativeTime(view.data?.thread.created_at ?? "")}
             {view.data?.thread.provider_id ? ` · ${view.data.thread.provider_id.slice(0, 10)}…` : ""}
           </div>
@@ -672,10 +672,10 @@ function ThreadPane({
 
       {view.data?.thread.summary ? (
         <div className="mx-4 mt-3 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 md:mx-6">
-          <div className="text-[var(--step-minus-2)] uppercase tracking-wider text-[var(--faint)]">
+          <div className="text-step--2 uppercase tracking-wider text-[var(--faint)]">
             Summary · recalled by other threads
           </div>
-          <div className="mt-1 whitespace-pre-wrap text-[var(--step-minus-1)] text-[var(--text-soft)]">
+          <div className="mt-1 whitespace-pre-wrap text-step--1 text-[var(--text-soft)]">
             {view.data.thread.summary}
           </div>
         </div>
@@ -724,7 +724,7 @@ function ThreadPane({
               {attachedFiles.map((f, i) => (
                 <span
                   key={i}
-                  className="inline-flex items-center gap-1 rounded-full bg-[var(--surface-2)] px-2 py-0.5 text-[var(--step-minus-2)] text-[var(--muted)]"
+                  className="inline-flex items-center gap-1 rounded-full bg-[var(--surface-2)] px-2 py-0.5 text-step--2 text-[var(--muted)]"
                 >
                   <span className="mono">{f.name}</span>
                   <button
@@ -746,7 +746,7 @@ function ThreadPane({
                 onClick={() => setContextPanel("bots")}
                 title="Mention a bot"
                 aria-label="Mention a bot"
-                className="rounded-md px-2 py-1.5 text-[var(--step-minus-1)] text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
+                className="rounded-md px-2 py-1.5 text-step--1 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
               >
                 ∞ Bots
               </button>
@@ -755,7 +755,7 @@ function ThreadPane({
                 onClick={handleAttachFile}
                 title="Attach local file"
                 aria-label="Attach local file"
-                className="rounded-md px-2 py-1.5 text-[var(--step-minus-1)] text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
+                className="rounded-md px-2 py-1.5 text-step--1 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
               >
                 +
               </button>
@@ -782,14 +782,14 @@ function ThreadPane({
               spellCheck
               rows={1}
               autoComplete="off"
-              className="max-h-40 min-h-[36px] w-full min-w-0 resize-none bg-transparent py-1.5 text-[var(--step-0)] leading-relaxed outline-none placeholder:text-[var(--faint)] disabled:opacity-50 sm:w-auto sm:flex-1"
+              className="max-h-40 min-h-[36px] w-full min-w-0 resize-none bg-transparent py-1.5 text-step-0 leading-relaxed outline-none placeholder:text-[var(--faint)] disabled:opacity-50 sm:w-auto sm:flex-1"
             />
             <div className="flex items-center gap-1.5 justify-end pb-0.5">
               <button
                 type="button"
                 onClick={createTaskFromChat}
                 title="Create a task from this conversation"
-                className="rounded-md px-2.5 py-1.5 text-[var(--step-minus-1)] text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
+                className="rounded-md px-2.5 py-1.5 text-step--1 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
               >
                 Task
               </button>
@@ -812,10 +812,10 @@ function ThreadPane({
             </div>
           </div>
           <div className="mt-1.5 flex items-center justify-between px-1">
-            <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
+            <span className="text-step--2 text-[var(--faint)]">
               Enter to send · Shift+Enter for a new line
             </span>
-            <label className="flex cursor-pointer items-center gap-1.5 text-[var(--step-minus-2)] text-[var(--faint)]">
+            <label className="flex cursor-pointer items-center gap-1.5 text-step--2 text-[var(--faint)]">
               <input
                 type="checkbox"
                 checked={useStream}
@@ -845,7 +845,7 @@ function Message({ message, streaming = false }: { message: ChatMessage; streami
   return (
     <div className={`flex flex-col ${isUser ? "items-end" : "items-start"}`}>
       <div
-        className={`max-w-[85%] rounded-2xl px-4 py-3 text-[var(--step-0)] leading-relaxed ${
+        className={`max-w-[85%] rounded-2xl px-4 py-3 text-step-0 leading-relaxed ${
           isUser
             ? "border border-[var(--accent)] bg-[var(--accent-dim)] text-[var(--text)]"
             : "border border-[var(--border)] bg-[var(--surface)] text-[var(--text-soft)]"
@@ -856,7 +856,7 @@ function Message({ message, streaming = false }: { message: ChatMessage; streami
           <div className="mt-2 inline-block h-4 w-2 animate-pulse rounded-[1px] bg-[var(--accent)]" aria-hidden />
         ) : null}
       </div>
-      <div className={`mono mt-1 text-[var(--step-minus-2)] text-[var(--faint)] ${isUser ? "mr-1" : "ml-1"}`}>
+      <div className={`mono mt-1 text-step--2 text-[var(--faint)] ${isUser ? "mr-1" : "ml-1"}`}>
         {isUser ? "you" : "nerdbot"}
         {streaming ? " · streaming…" : ""}
       </div>
@@ -913,7 +913,7 @@ function ExecutionView({
     return (
       <div className="mx-4 mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-sm md:mx-6">
         <div className="flex items-center justify-between border-b border-[var(--border-dim)] px-4 py-2">
-          <span className="text-[var(--step-minus-2)] font-medium uppercase tracking-[0.14em] text-[var(--faint)]">
+          <span className="text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--faint)]">
             Execution
           </span>
           <button
@@ -934,14 +934,14 @@ function ExecutionView({
   return (
     <div className="mx-4 mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-sm md:mx-6">
       <div className="flex items-center justify-between border-b border-[var(--border-dim)] px-4 py-2">
-        <span className="text-[var(--step-minus-2)] font-medium uppercase tracking-[0.14em] text-[var(--faint)]">
+        <span className="text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--faint)]">
           Execution
         </span>
         <div className="flex items-center gap-2">
           {task ? (
             <button
               onClick={() => openTask(task.project_id, task.id)}
-              className="text-[var(--step-minus-1)] text-[var(--accent)] hover:underline"
+              className="text-step--1 text-[var(--accent)] hover:underline"
             >
               Open task →
             </button>
@@ -955,7 +955,7 @@ function ExecutionView({
           </button>
         </div>
       </div>
-      <div className="flex flex-col gap-3 px-4 py-3 text-[var(--step-minus-1)]">
+      <div className="flex flex-col gap-3 px-4 py-3 text-step--1">
         <div>
           <div className="font-medium text-[var(--text)]">{task?.description || "Loading task…"}</div>
           <div className="mt-1.5 flex flex-wrap items-center gap-3">
@@ -985,7 +985,7 @@ function ExecutionView({
         {latestRun && (
           <div className="rounded-lg bg-[var(--surface-2)] px-3 py-2">
             <div className="mono truncate text-[var(--text-soft)]">{latestRun.command || "(no command)"}</div>
-            <div className="mono mt-1 line-clamp-3 text-[var(--step-minus-2)] text-[var(--faint)]">
+            <div className="mono mt-1 line-clamp-3 text-step--2 text-[var(--faint)]">
               {latestRun.output_excerpt?.slice(0, 240) || "(no output)"}
             </div>
           </div>
@@ -996,7 +996,7 @@ function ExecutionView({
             <div className="flex flex-col gap-1.5">
               {artifacts.map((art) => (
                 <div key={art.id} className="rounded-md bg-[var(--surface-2)] px-3 py-1.5">
-                  <div className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
+                  <div className="mono text-step--2 text-[var(--faint)]">
                     {art.type} · {art.location}
                   </div>
                   <div className="text-[var(--text-soft)]">{art.summary}</div>
@@ -1047,7 +1047,7 @@ function ContextPanel({
         aria-label={type === "bots" ? "Teammates / bots" : "Project files"}
       >
         <div className="flex items-center justify-between border-b border-[var(--border-dim)] px-4 py-3">
-          <span className="text-[var(--step-0)] font-semibold">
+          <span className="text-step-0 font-semibold">
             {type === "bots" ? "Teammates / bots" : "Project files"}
           </span>
           <button
@@ -1073,10 +1073,10 @@ function ContextPanel({
                   <div className="flex min-w-0 items-center gap-2.5">
                     <BotFace face={mate.face} size={32} />
                     <div className="min-w-0">
-                      <div className="truncate text-[var(--step-minus-1)] font-medium text-[var(--text)]">
+                      <div className="truncate text-step--1 font-medium text-[var(--text)]">
                         {mate.persona || mate.id}
                       </div>
-                      <div className="mono truncate text-[var(--step-minus-2)] text-[var(--faint)]">
+                      <div className="mono truncate text-step--2 text-[var(--faint)]">
                         {mate.instructions?.slice(0, 80) || ""}
                       </div>
                     </div>
@@ -1089,7 +1089,7 @@ function ContextPanel({
             </div>
           )
         ) : (
-          <div className="p-4 text-[var(--step-minus-1)] text-[var(--muted)]">
+          <div className="p-4 text-step--1 text-[var(--muted)]">
             Attach files from an active task workspace. Open a task from the execution view first.
           </div>
         )}
@@ -1240,7 +1240,7 @@ function CommandCenter({
               </div>
             </div>
             {streaming && (
-              <div className="mono mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-minus-1)] text-[var(--text-soft)]">
+              <div className="mono mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step--1 text-[var(--text-soft)]">
                 {streaming}
                 <span className="ml-0.5 inline-block h-4 w-2 animate-pulse rounded-[1px] bg-[var(--accent)] align-middle" aria-hidden />
               </div>
@@ -1251,14 +1251,14 @@ function CommandCenter({
               className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-[var(--info)] bg-[var(--info-dim)] px-4 py-2.5"
               role="status"
             >
-              <span className="text-[var(--step-minus-1)] text-[var(--text)]">
+              <span className="text-step--1 text-[var(--text)]">
                 Demo mode. This workspace has no working model, so replies are canned and
                 nothing is really executed.
               </span>
             </div>
           ) : null}
           {!hasProvider && (
-            <p className="mt-2 flex flex-wrap items-center gap-2 text-[var(--step-minus-1)] text-[var(--muted)]">
+            <p className="mt-2 flex flex-wrap items-center gap-2 text-step--1 text-[var(--muted)]">
               <span>This workspace has no model. A bot cannot think without one.</span>
               <button
                 type="button"
@@ -1305,7 +1305,7 @@ function CommandCenter({
                   onChange={(e) => setProvName(e.target.value)}
                   placeholder="Name (e.g. groq)"
                   aria-label="Provider name"
-                  className="w-40 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-[var(--step-minus-1)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
+                  className="w-40 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-step--1 outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
                 />
                 <input
                   value={provBaseUrl}
@@ -1313,14 +1313,14 @@ function CommandCenter({
                   placeholder="Base URL (e.g. https://api.groq.com/openai/v1)"
                   aria-label="Base URL"
                   required
-                  className="mono min-w-64 flex-1 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-[var(--step-minus-1)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
+                  className="mono min-w-64 flex-1 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-step--1 outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
                 />
                 <input
                   value={provModel}
                   onChange={(e) => setProvModel(e.target.value)}
                   placeholder="Model (optional)"
                   aria-label="Model"
-                  className="w-44 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-[var(--step-minus-1)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
+                  className="w-44 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-step--1 outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
                 />
                 <input
                   type="password"
@@ -1329,7 +1329,7 @@ function CommandCenter({
                   placeholder="API key"
                   aria-label="API key"
                   autoComplete="off"
-                  className="w-48 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-[var(--step-minus-1)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
+                  className="w-48 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-step--1 outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
                 />
                 <Button variant="primary" type="submit" disabled={provBusy || !provBaseUrl.trim()}>
                   {provBusy ? "Connecting…" : "Connect"}
@@ -1338,7 +1338,7 @@ function CommandCenter({
                   Cancel
                 </Button>
               </form>
-              <p className="mt-2 text-[var(--step-minus-2)] text-[var(--faint)]">
+              <p className="mt-2 text-step--2 text-[var(--faint)]">
                 Keys are stored Fernet-encrypted at rest when the server has NERDBOT_SECRET_KEY set.
               </p>
             </div>
@@ -1353,7 +1353,7 @@ function CommandCenter({
             <SectionLabel>Work</SectionLabel>
             <a
               href="#/work"
-              className="text-[var(--step-minus-1)] text-[var(--muted)] hover:text-[var(--text)]"
+              className="text-step--1 text-[var(--muted)] hover:text-[var(--text)]"
             >
               Open work →
             </a>
@@ -1378,7 +1378,7 @@ function CommandCenter({
                   }`}
                 >
                   <div
-                    className={`text-[var(--step-1)] font-semibold tracking-tight ${
+                    className={`text-step-1 font-semibold tracking-tight ${
                       item.value === 0
                         ? "text-[var(--faint)]"
                         : item.label === "Needs you"
@@ -1390,7 +1390,7 @@ function CommandCenter({
                   >
                     {item.value}
                   </div>
-                  <div className="text-[var(--step-minus-2)] text-[var(--faint)]">{item.label}</div>
+                  <div className="text-step--2 text-[var(--faint)]">{item.label}</div>
                 </a>
               ))}
             </div>
@@ -1405,7 +1405,7 @@ function CommandCenter({
           <div className="mb-2 flex items-center justify-between gap-3">
             <div className="flex flex-wrap items-baseline gap-2">
               <SectionLabel>Conversations</SectionLabel>
-              <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
+              <span className="text-step--2 text-[var(--faint)]">
                 every workspace
               </span>
             </div>
@@ -1416,7 +1416,7 @@ function CommandCenter({
             ) : null}
           </div>
           {sorted.length === 0 ? (
-            <p className="rounded-xl border border-dashed border-[var(--border-dim)] px-4 py-6 text-center text-[var(--step-minus-1)] text-[var(--faint)]">
+            <p className="rounded-xl border border-dashed border-[var(--border-dim)] px-4 py-6 text-center text-step--1 text-[var(--faint)]">
               No recent conversations yet. Start one above.
             </p>
           ) : (            <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
@@ -1430,15 +1430,15 @@ function CommandCenter({
                     index > 0 ? "border-t border-[var(--border-dim)]" : ""
                   }`}
                 >
-                  <span className="truncate text-[var(--step-minus-1)] text-[var(--text)]">
+                  <span className="truncate text-step--1 text-[var(--text)]">
                     {t.title || "Untitled"}
                   </span>
                   {t.project_id !== projectId ? (
-                    <span className="mono shrink-0 text-[var(--step-minus-2)] text-[var(--faint)]">
+                    <span className="mono shrink-0 text-step--2 text-[var(--faint)]">
                       {projectLabel(t.project_id)}
                     </span>
                   ) : null}
-                  <span className="mono shrink-0 text-[var(--step-minus-2)] text-[var(--faint)]">
+                  <span className="mono shrink-0 text-step--2 text-[var(--faint)]">
                     {relativeTime(t.created_at)}
                   </span>
                 </button>

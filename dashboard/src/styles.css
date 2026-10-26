@@ -6,6 +6,7 @@
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
   /* Fluid type scale (clamp) */
+  --step-minus-3: clamp(0.62rem, 0.6rem + 0.08vw, 0.68rem);
   --step-minus-2: clamp(0.72rem, 0.7rem + 0.08vw, 0.76rem);
   --step-minus-1: clamp(0.8rem, 0.78rem + 0.1vw, 0.85rem);
   --step-0: clamp(1rem, 0.98rem + 0.12vw, 1.125rem);
@@ -83,7 +84,6 @@
   --width-sidebar: 240px;
   --width-conversation-sidebar: 288px;
   --max-width-read: 68ch;
-  --max-width-narrow: 48ch;
   --max-width-wide: 960px;
 }
 
@@ -192,21 +192,6 @@ a:hover {
   font-family: var(--font-mono);
 }
 
-.muted {
-  color: var(--muted);
-}
-
-.text-soft {
-  color: var(--text-soft);
-}
-
-.faint-text {
-  color: var(--faint);
-}
-
-/* Compat layer removed: all views now use the shared token exports in
- * components.tsx (TABLE_*, CARD_SHELL, PILL_SHELL, ERROR_BOX, FORM_*).
- */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -216,4 +201,23 @@ a:hover {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* ===== Terminal chrome (workbench) ===== */
+/* xterm.css sets its own defaults; bring the chrome onto the design system
+ * so the terminal reads as part of the workspace in both themes. */
+#workbench-terminal {
+  border: 1px solid var(--border-dim);
+}
+#workbench-terminal .xterm-focus-glow {
+  display: none !important;
+}
+#workbench-terminal .xterm .xterm-scrollbar-state {
+  background: transparent !important;
+}
+#workbench-terminal .xterm .xterm-scrollbar .xterm-scrollbar-area {
+  opacity: 0.45 !important;
+}
+#workbench-terminal .xterm .xterm-scrollbar .xterm-scrollbar-area:not(:hover) {
+  transition: background-color 200ms ease;
 }

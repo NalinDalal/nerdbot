@@ -15,7 +15,7 @@ export interface FormField {
 }
 
 const CONTROL_CLASS =
-  "w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-0)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]";
+  "w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step-0 outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]";
 
 type ControlEvent = React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>;
 
@@ -106,7 +106,7 @@ export function EntityForm({
             />
           )}
           {field.hint ? (
-            <div className="text-[var(--step-minus-1)] text-[var(--faint)]">{field.hint}</div>
+            <div className="text-step--1 text-[var(--faint)]">{field.hint}</div>
           ) : null}
         </Field>
       ))}

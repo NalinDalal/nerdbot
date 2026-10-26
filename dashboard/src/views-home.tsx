@@ -240,7 +240,7 @@ export function AttentionBanner({
     >
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
         <span
-          className={`inline-flex items-center gap-2 text-[var(--step-minus-1)] font-medium uppercase tracking-[0.14em] ${
+          className={`inline-flex items-center gap-2 text-step--1 font-medium uppercase tracking-[0.14em] ${
             urgent ? "text-[var(--warn)]" : "text-[var(--info)]"
           }`}
         >
@@ -250,19 +250,19 @@ export function AttentionBanner({
           {urgent ? "Needs your attention" : "The fleet is working"}
         </span>
         {activeRuns.length > 0 && (
-          <span className="text-[var(--step-minus-1)] text-[var(--text-soft)]">
+          <span className="text-step--1 text-[var(--text-soft)]">
             <strong className="text-[var(--text)]">{count(activeRuns.length, "run")}</strong> in flight ·{" "}
             {summary.queuedTasks > 0 && count(summary.queuedTasks, "task queued")}
           </span>
         )}
         {pendingApprovals.length > 0 && (
-          <span className="text-[var(--step-minus-1)] text-[var(--text-soft)]">
+          <span className="text-step--1 text-[var(--text-soft)]">
             <strong className="text-[var(--warn)]">{count(pendingApprovals.length, "decision", "decisions")}</strong>{" "}
             awaiting your approval
           </span>
         )}
         {failedRuns.length > 0 && (
-          <span className="text-[var(--step-minus-1)] text-[var(--text-soft)]">
+          <span className="text-step--1 text-[var(--text-soft)]">
             <strong className="text-[var(--danger)]">{count(failedRuns.length, "failed run", "failed runs")}</strong>
           </span>
         )}
@@ -273,7 +273,7 @@ export function AttentionBanner({
           {shownFailures.map(({ run, task, projectName, projectId, attempts }) => (
             <div
               key={run.id}
-              className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[var(--step-minus-1)]"
+              className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-step--1"
             >
               <span className="flex min-w-0 flex-1 items-baseline gap-2">
                 <span className="truncate text-[var(--text)]">
@@ -295,7 +295,7 @@ export function AttentionBanner({
             </div>
           ))}
           {failuresByTask.size > 3 ? (
-            <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
+            <span className="text-step--2 text-[var(--faint)]">
               and {failuresByTask.size - 3} more
             </span>
           ) : null}
@@ -307,7 +307,7 @@ export function AttentionBanner({
           {pendingApprovals.map(({ approval, projectName }) => (
             <div
               key={approval.id}
-              className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-3 py-1.5 text-[var(--step-minus-1)]"
+              className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-3 py-1.5 text-step--1"
             >
               <div className="flex min-w-0 flex-wrap items-baseline gap-x-2">
                 <span className="text-[var(--text)]">{approval.action}</span>
@@ -375,7 +375,7 @@ function CountChip({ tone, n, children }: { tone: "info" | "warn" | "bad"; n: nu
         ? "border-[var(--danger)] text-[var(--danger)] bg-[var(--danger-dim)]"
         : "border-[var(--info)] text-[var(--info)] bg-[var(--info-dim)]";
   return (
-    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[var(--step-minus-1)] font-medium ${color}`}>
+    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-step--1 font-medium ${color}`}>
       <strong>{n}</strong> {children}
     </span>
   );
@@ -418,16 +418,16 @@ export function ExecutionRollup({
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <span className="font-medium text-[var(--text)]">{bundle.team.name || "Unnamed team"}</span>
-                <span className="text-[var(--step-minus-1)] text-[var(--faint)]">team</span>
+                <span className="text-step--1 text-[var(--faint)]">team</span>
               </div>
               <div className="mt-0.5">
                 {bundle.teammates.length > 0 ? (
-                  <span className="text-[var(--step-minus-1)] text-[var(--muted)]">
+                  <span className="text-step--1 text-[var(--muted)]">
                     {counts.running > 0 ? `${counts.running} running · ` : ""}
                     {count(busyBots, "bot")} on deck
                   </span>
                 ) : (
-                  <span className="text-[var(--step-minus-1)] text-[var(--muted)]">no bots assigned</span>
+                  <span className="text-step--1 text-[var(--muted)]">no bots assigned</span>
                 )}
               </div>
             </div>

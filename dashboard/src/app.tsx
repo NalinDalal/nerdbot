@@ -100,7 +100,7 @@ function NavItem({
     <button
       onClick={onClick}
       aria-current={active ? "page" : undefined}
-      className={`relative flex w-full items-center rounded-md py-1.5 pl-3 pr-2.5 text-left text-[var(--step-minus-1)] transition-colors ${
+      className={`relative flex w-full items-center rounded-md py-1.5 pl-3 pr-2.5 text-left text-step--1 transition-colors ${
         active
           ? "bg-[var(--surface-2)] text-[var(--text)]"
           : "text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text-soft)]"
@@ -168,7 +168,7 @@ function Sidebar({
     >
       <div className="flex h-full flex-col overflow-y-auto px-3 py-4">
         <div className="mb-5 flex items-center justify-between px-2">
-          <strong className="font-semibold tracking-tight text-[var(--step-1)] text-[var(--text)]">
+          <strong className="font-semibold tracking-tight text-step-1 text-[var(--text)]">
             NerdBot
           </strong>
           <button
@@ -194,12 +194,12 @@ function Sidebar({
         <div className="mt-auto flex flex-col gap-1 border-t border-[var(--border-dim)] pt-3">
           <button
             onClick={onDisconnect}
-            className="flex w-full items-center rounded-md px-3 py-1.5 text-left text-[var(--muted)] text-[var(--step-minus-1)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text-soft)]"
+            className="flex w-full items-center rounded-md px-3 py-1.5 text-left text-[var(--muted)] text-step--1 transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text-soft)]"
           >
             Disconnect
           </button>
           <div className="flex items-center gap-2 px-3 py-1.5">
-            <span className="text-[var(--faint)] text-[var(--step-minus-2)]">
+            <span className="text-[var(--faint)] text-step--2">
               Theme
             </span>
             <ThemeButton onThemeChange={onThemeChange} />
@@ -414,15 +414,15 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }) {
     <div className="flex h-full bg-[var(--bg)] text-[var(--text)]">
       <main className="flex h-full flex-1 flex-col items-center justify-center px-6">
         <div className="w-full max-w-[460px]">
-          <h1 className="mb-2 font-semibold tracking-tight text-[var(--step-4)]">
+          <h1 className="mb-2 font-semibold tracking-tight text-step-4">
             NerdBot
           </h1>
-          <p className="mb-6 text-[var(--muted)] text-[var(--step-0)]">
+          <p className="mb-6 text-[var(--muted)] text-step-0">
             Connect to a running NerdBot API server.
           </p>
           {error ? (
             <div
-              className="mb-4 rounded-lg border border-[var(--danger)] bg-[var(--danger-dim)] px-4 py-3 text-[var(--step-0)]"
+              className="mb-4 rounded-lg border border-[var(--danger)] bg-[var(--danger-dim)] px-4 py-3 text-step-0"
               role="alert"
             >
               {error}
@@ -430,18 +430,18 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }) {
           ) : null}
           <form onSubmit={connect} className="space-y-4">
             <div>
-              <span className="mb-1.5 block font-medium tracking-wide text-[var(--muted)] text-[var(--step-minus-1)] uppercase">
+              <span className="mb-1.5 block font-medium tracking-wide text-[var(--muted)] text-step--1 uppercase">
                 API base URL
               </span>
               <input
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
                 required
-                className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-0)] text-[var(--text)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
+                className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step-0 text-[var(--text)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
               />
             </div>
             <div>
-              <span className="mb-1.5 block font-medium tracking-wide text-[var(--muted)] text-[var(--step-minus-1)] uppercase">
+              <span className="mb-1.5 block font-medium tracking-wide text-[var(--muted)] text-step--1 uppercase">
                 API token (kept in this browser's local storage
                 only)
               </span>
@@ -451,11 +451,11 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }) {
                 onChange={(e) => setToken(e.target.value)}
                 required
                 autoComplete="off"
-                className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-0)] text-[var(--text)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
+                className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step-0 text-[var(--text)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
               />
             </div>
             <button
-              className="mt-2 inline-flex w-full items-center justify-center rounded-md border border-[var(--accent)] bg-[var(--accent)] px-3 py-2 font-semibold text-[var(--step-minus-1)] text-[var(--text-inverse)] transition-colors hover:border-[var(--accent-hover)] hover:bg-[var(--accent-hover)] disabled:pointer-events-none disabled:opacity-50"
+              className="mt-2 inline-flex w-full items-center justify-center rounded-md border border-[var(--accent)] bg-[var(--accent)] px-3 py-2 font-semibold text-step--1 text-[var(--text-inverse)] transition-colors hover:border-[var(--accent-hover)] hover:bg-[var(--accent-hover)] disabled:pointer-events-none disabled:opacity-50"
               type="submit"
               disabled={busy}
             >

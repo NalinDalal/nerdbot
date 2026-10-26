@@ -163,18 +163,18 @@ export function WorkView() {
           onClick={() => navigate("#/approvals")}
           className="mb-5 flex w-full flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--warn)] bg-[var(--warn-dim)] px-4 py-3 text-left"
         >
-          <span className="text-[var(--step-minus-1)] text-[var(--text)]">
+          <span className="text-step--1 text-[var(--text)]">
             <strong>{decisions.length}</strong>{" "}
             {decisions.length === 1 ? "decision is" : "decisions are"} waiting for you
           </span>
-          <span className="text-[var(--step-minus-1)] font-medium text-[var(--warn)]">
+          <span className="text-step--1 font-medium text-[var(--warn)]">
             Review →
           </span>
         </button>
       ) : null}
 
       {data.data.failedWorkspaces.length > 0 ? (
-        <div className="mb-5 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-2.5 text-[var(--step-minus-1)] text-[var(--muted)]">
+        <div className="mb-5 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-2.5 text-step--1 text-[var(--muted)]">
           Could not read tasks from {data.data.failedWorkspaces.join(", ")}. The rest of the
           list is current.
         </div>
@@ -244,10 +244,10 @@ export function WorkView() {
           {(filter === "all" ? groups : groups.slice(0, 1)).map((group) => (
             <section key={group.id}>
               <div className="mb-2 flex flex-wrap items-baseline gap-2">
-                <h2 className="text-[var(--step-0)] font-semibold tracking-tight text-[var(--text)]">
+                <h2 className="text-step-0 font-semibold tracking-tight text-[var(--text)]">
                   {group.label}
                 </h2>
-                <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
+                <span className="text-step--2 text-[var(--faint)]">
                   {group.rows.length} · {group.hint}
                 </span>
               </div>
@@ -266,10 +266,10 @@ export function WorkView() {
                     >
                       <StatusDot status={task.status} />
                       <div className="min-w-0 flex-1">
-                        <div className="truncate text-[var(--step-0)] text-[var(--text)]">
+                        <div className="truncate text-step-0 text-[var(--text)]">
                           {titleOf(task)}
                         </div>
-                        <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[var(--step-minus-2)] text-[var(--faint)]">
+                        <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-step--2 text-[var(--faint)]">
                           <span className="min-w-0 truncate">
                             {projectName.get(task.project_id) ?? "Workspace"}
                           </span>
@@ -336,14 +336,14 @@ function FilterTab({
       role="tab"
       aria-selected={active}
       onClick={onClick}
-      className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[var(--step-minus-1)] transition-colors ${
+      className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-step--1 transition-colors ${
         active
           ? "bg-[var(--surface-3)] text-[var(--text)]"
           : "text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text-soft)]"
       }`}
     >
       {label}
-      <span className="text-[var(--step-minus-2)] text-[var(--faint)]">{count}</span>
+      <span className="text-step--2 text-[var(--faint)]">{count}</span>
     </button>
   );
 }
@@ -390,7 +390,7 @@ function NewTaskModal({
     <Modal title="New task" onClose={onClose}>
       <form onSubmit={submit} className="flex flex-col gap-4">
         <label className="flex flex-col gap-1.5">
-          <span className="text-[var(--step-minus-1)] text-[var(--muted)]">Workspace</span>
+          <span className="text-step--1 text-[var(--muted)]">Workspace</span>
           <select
             value={projectId}
             onChange={(event) => {
@@ -408,7 +408,7 @@ function NewTaskModal({
           </select>
         </label>
         <label className="flex flex-col gap-1.5">
-          <span className="text-[var(--step-minus-1)] text-[var(--muted)]">What needs doing</span>
+          <span className="text-step--1 text-[var(--muted)]">What needs doing</span>
           <textarea
             value={description}
             onChange={(event) => setDescription(event.target.value)}
@@ -420,7 +420,7 @@ function NewTaskModal({
           />
         </label>
         <label className="flex flex-col gap-1.5">
-          <span className="text-[var(--step-minus-1)] text-[var(--muted)]">Bot</span>
+          <span className="text-step--1 text-[var(--muted)]">Bot</span>
           <select
             value={owner}
             onChange={(event) => setOwner(event.target.value)}

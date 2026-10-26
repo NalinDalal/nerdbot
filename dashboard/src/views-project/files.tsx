@@ -45,11 +45,11 @@ export function FilesTab({ projectId }: { projectId: string }) {
               <div className="mb-2 flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
                 <a
                   href={`#/p/${projectId}/t/${checkout.task_id}`}
-                  className="text-[var(--step-0)] font-medium text-[var(--text)] hover:underline"
+                  className="text-step-0 font-medium text-[var(--text)] hover:underline"
                 >
                   {checkout.task_description || "Untitled task"}
                 </a>
-                <span className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
+                <span className="mono text-step--2 text-[var(--faint)]">
                   <ShortId id={checkout.task_id} />
                   {checkout.branch ? ` · ${checkout.branch}` : ""}
                 </span>
@@ -69,12 +69,12 @@ export function FilesTab({ projectId }: { projectId: string }) {
                         className="transition-colors hover:bg-[var(--surface-2)]"
                       >
                         <td className={TABLE_TD}>
-                          <span className="mono block truncate text-[var(--step-minus-1)] text-[var(--text-soft)]" title={file.path}>
+                          <span className="mono block truncate text-step--1 text-[var(--text-soft)]" title={file.path}>
                             {file.path}
                           </span>
                         </td>
                         <td className={TABLE_TD}>
-                          <span className="text-[var(--step-minus-1)] text-[var(--muted)]">
+                          <span className="text-step--1 text-[var(--muted)]">
                             {file.size} B
                           </span>
                         </td>

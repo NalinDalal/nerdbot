@@ -119,7 +119,7 @@ export function NotificationsTab({ projectId }: { projectId: string }) {
                   <div className="flex items-center gap-3" style={{ gap: 6 }}>
                     <StatusBadge status={note.status} />
                     {note.locked ? (
-                      <span className="inline-flex items-center rounded-full bg-[var(--surface-3)] px-2 py-0.5 text-[var(--step-minus-2)] font-medium text-[var(--muted)]">locked</span>
+                      <span className="inline-flex items-center rounded-full bg-[var(--surface-3)] px-2 py-0.5 text-step--2 font-medium text-[var(--muted)]">locked</span>
                     ) : null}
                   </div>
                 </td>

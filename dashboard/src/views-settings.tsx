@@ -136,7 +136,7 @@ export function SettingsView() {
                     <div className="truncate font-medium text-[var(--text)]">
                       {project.repository || "Workspace"}
                     </div>
-                    <div className="mt-0.5 text-[var(--step-minus-2)] text-[var(--faint)]">
+                    <div className="mt-0.5 text-step--2 text-[var(--faint)]">
                       {providers.length === 0
                         ? "No model connected"
                         : `${usable.length} of ${providers.length} usable`}
@@ -149,7 +149,7 @@ export function SettingsView() {
                       {providers.map((provider) => (
                         <span
                           key={provider.id}
-                          className="inline-flex items-center gap-1.5 rounded-md bg-[var(--surface-2)] px-2 py-1 text-[var(--step-minus-2)] text-[var(--text-soft)]"
+                          className="inline-flex items-center gap-1.5 rounded-md bg-[var(--surface-2)] px-2 py-1 text-step--2 text-[var(--text-soft)]"
                         >
                           <span className="max-w-[10rem] truncate">{provider.name}</span>
                           <button
@@ -205,7 +205,7 @@ export function SettingsView() {
                   >
                     {project.repository || "Workspace"}
                   </a>
-                  <div className="mt-0.5 text-[var(--step-minus-2)] text-[var(--faint)]">
+                  <div className="mt-0.5 text-step--2 text-[var(--faint)]">
                     {counts
                       ? `${counts.bots} bot${counts.bots === 1 ? "" : "s"} · ${counts.tasks} task${
                           counts.tasks === 1 ? "" : "s"
@@ -215,7 +215,7 @@ export function SettingsView() {
                 </div>
                 <a
                   href={`#/p/${project.id}`}
-                  className="text-[var(--step-minus-1)] text-[var(--muted)] hover:text-[var(--text)]"
+                  className="text-step--1 text-[var(--muted)] hover:text-[var(--text)]"
                 >
                   Open →
                 </a>
@@ -246,7 +246,7 @@ export function SettingsView() {
               <Badge variant={health.data.status === "ok" ? "ok" : "bad"}>
                 {health.data.status}
               </Badge>
-              <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
+              <span className="text-step--2 text-[var(--faint)]">
                 version {health.data.version}
               </span>
             </div>
@@ -262,18 +262,18 @@ export function SettingsView() {
               </KeyValue>
             </dl>
             {health.data.secret_key === "absent" ? (
-              <p className="mt-2 text-[var(--step-minus-1)] text-[var(--muted)]">
+              <p className="mt-2 text-step--1 text-[var(--muted)]">
                 Pasted keys cannot be stored until the server has a secret key. An environment
                 variable works without it.
               </p>
             ) : null}
             <details className="mt-3 border-t border-[var(--border-dim)] pt-3">
-              <summary className="cursor-pointer text-[var(--step-minus-1)] text-[var(--muted)]">
+              <summary className="cursor-pointer text-step--1 text-[var(--muted)]">
                 Connection and security details
               </summary>
               <div className="mt-3 space-y-3">
                 <div>
-                  <div className="mb-1 text-[var(--step-minus-1)] text-[var(--muted)]">API base</div>
+                  <div className="mb-1 text-step--1 text-[var(--muted)]">API base</div>
                   <CodeBlock>{"http://127.0.0.1:8080   (the dashboard is served by the API)"}</CodeBlock>
                 </div>
                 <dl className="divide-y divide-[var(--border-dim)]">
@@ -329,7 +329,7 @@ function AdvancedLink({ href, title, hint }: { href: string; title: string; hint
       className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3 transition-colors hover:border-[var(--faint)]"
     >
       <div className="font-medium text-[var(--text)]">{title}</div>
-      <div className="mt-0.5 text-[var(--step-minus-1)] text-[var(--muted)]">{hint}</div>
+      <div className="mt-0.5 text-step--1 text-[var(--muted)]">{hint}</div>
     </a>
   );
 }
@@ -384,7 +384,7 @@ function ConnectModelModal({
     <Modal title="Connect a model" onClose={onClose}>
       <form onSubmit={submit} className="flex flex-col gap-4">
         <label className="flex flex-col gap-1.5">
-          <span className="text-[var(--step-minus-1)] text-[var(--muted)]">Workspace</span>
+          <span className="text-step--1 text-[var(--muted)]">Workspace</span>
           <select
             value={projectId}
             onChange={(event) => setProjectId(event.target.value)}
@@ -400,7 +400,7 @@ function ConnectModelModal({
         </label>
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="flex flex-col gap-1.5">
-            <span className="text-[var(--step-minus-1)] text-[var(--muted)]">Name</span>
+            <span className="text-step--1 text-[var(--muted)]">Name</span>
             <input
               value={name}
               onChange={(event) => setName(event.target.value)}
@@ -409,7 +409,7 @@ function ConnectModelModal({
             />
           </label>
           <label className="flex flex-col gap-1.5">
-            <span className="text-[var(--step-minus-1)] text-[var(--muted)]">Model</span>
+            <span className="text-step--1 text-[var(--muted)]">Model</span>
             <input
               value={model}
               onChange={(event) => setModel(event.target.value)}
@@ -419,7 +419,7 @@ function ConnectModelModal({
           </label>
         </div>
         <label className="flex flex-col gap-1.5">
-          <span className="text-[var(--step-minus-1)] text-[var(--muted)]">Base URL</span>
+          <span className="text-step--1 text-[var(--muted)]">Base URL</span>
           <input
             value={baseUrl}
             onChange={(event) => setBaseUrl(event.target.value)}
@@ -430,7 +430,7 @@ function ConnectModelModal({
         </label>
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="flex flex-col gap-1.5">
-            <span className="text-[var(--step-minus-1)] text-[var(--muted)]">
+            <span className="text-step--1 text-[var(--muted)]">
               Key environment variable
             </span>
             <input
@@ -444,7 +444,7 @@ function ConnectModelModal({
             />
           </label>
           <label className="flex flex-col gap-1.5">
-            <span className="text-[var(--step-minus-1)] text-[var(--muted)]">
+            <span className="text-step--1 text-[var(--muted)]">
               Or paste a key
             </span>
             <input
@@ -460,7 +460,7 @@ function ConnectModelModal({
             />
           </label>
         </div>
-        <p className="text-[var(--step-minus-2)] text-[var(--faint)]">
+        <p className="text-step--2 text-[var(--faint)]">
           An environment variable keeps the key out of the database. A pasted key is encrypted
           when the server has a secret key.
         </p>
@@ -504,7 +504,7 @@ function NewWorkspaceModal({
     <Modal title="New workspace" onClose={onClose}>
       <form onSubmit={submit} className="flex flex-col gap-4">
         <label className="flex flex-col gap-1.5">
-          <span className="text-[var(--step-minus-1)] text-[var(--muted)]">Name</span>
+          <span className="text-step--1 text-[var(--muted)]">Name</span>
           <input
             value={name}
             onChange={(event) => setName(event.target.value)}

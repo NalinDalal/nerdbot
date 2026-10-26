@@ -102,7 +102,7 @@ export function TeamsView() {
                         {team.name || "Unnamed team"}
                       </button>
                       {team.description ? (
-                        <div className="text-[var(--step-minus-1)] text-[var(--muted)]">
+                        <div className="text-step--1 text-[var(--muted)]">
                           {team.description}
                         </div>
                       ) : null}
@@ -289,7 +289,7 @@ export function TeamDetailView({
         <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
           {rollup ? (
             <div className="flex flex-col gap-4">
-              <div className="flex flex-wrap items-center gap-2 text-[var(--step-minus-1)]">
+              <div className="flex flex-wrap items-center gap-2 text-step--1">
                 <StatusBadge status="running" label={`${rollup.running} running`} />
                 <StatusBadge status="pending" label={`${rollup.queued} queued`} />
                 {rollup.awaiting > 0 && (
@@ -308,14 +308,14 @@ export function TeamDetailView({
               </div>
               {rollup.handoffs.length > 0 && (
                 <div>
-                  <div className="text-[var(--step-minus-2)] uppercase tracking-[0.14em] text-[var(--faint)]">
+                  <div className="text-step--2 uppercase tracking-[0.14em] text-[var(--faint)]">
                     Agent-to-agent handoffs
                   </div>
                   <div className="mt-1.5 flex flex-col gap-1.5">
                     {rollup.handoffs.map(({ fromPersona, fromFace, toPersona, toFace, child }) => (
                       <div
                         key={`${child.id}`}
-                        className="flex flex-wrap items-center gap-2 rounded-lg bg-[var(--surface-2)] px-3 py-2 text-[var(--step-minus-1)]"
+                        className="flex flex-wrap items-center gap-2 rounded-lg bg-[var(--surface-2)] px-3 py-2 text-step--1"
                       >
                         <BotChip persona={fromPersona} id={fromPersona} status="done" face={fromFace} />
                         <span className="text-[var(--faint)]" aria-hidden>→</span>
@@ -334,7 +334,7 @@ export function TeamDetailView({
                 </div>
               )}
               {rollup.running === 0 && rollup.queued === 0 && rollup.blocked === 0 && rollup.handoffs.length === 0 && (
-                <p className="text-[var(--step-minus-1)] text-[var(--muted)]">
+                <p className="text-step--1 text-[var(--muted)]">
                   Nothing in flight for this team right now.
                 </p>
               )}
@@ -348,7 +348,7 @@ export function TeamDetailView({
       {/* Bots */}
       <section className="mb-8">
         <SectionLabel className="mb-2">Bots in this team</SectionLabel>
-        <p className="mb-3 max-w-[72ch] text-[var(--step-minus-1)] text-[var(--muted)]">
+        <p className="mb-3 max-w-[72ch] text-step--1 text-[var(--muted)]">
           These bots share the team&rsquo;s workspaces and hand tasks off to one another.
           Membership grants no permissions. Each bot acts within its own configured tool permissions.
         </p>
@@ -363,11 +363,11 @@ export function TeamDetailView({
               >
                 <div className="min-w-0 flex-1">
                   <BotChip persona={bot.persona || "Unnamed bot"} id={bot.id} status={bot.status} face={bot.face} />
-                  <div className="mt-1 truncate text-[var(--step-minus-2)] text-[var(--faint)]" title={bot.instructions || ""}>
+                  <div className="mt-1 truncate text-step--2 text-[var(--faint)]" title={bot.instructions || ""}>
                     {bot.instructions?.slice(0, 110) || "No instructions"}
                   </div>
                 </div>
-                <div className="mono max-w-[220px] truncate text-[var(--step-minus-2)] text-[var(--faint)]" title={bot.permissions.join(", ")}>
+                <div className="mono max-w-[220px] truncate text-step--2 text-[var(--faint)]" title={bot.permissions.join(", ")}>
                   {bot.permissions.length > 0 ? `${bot.permissions.length} perms` : "no perms"}
                 </div>
                 <div className="flex items-center gap-2">
@@ -412,7 +412,7 @@ export function TeamDetailView({
                 .catch(notifyError);
             }}
             aria-label="Bot to add"
-            className="max-w-xs rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-minus-1)] outline-none focus:border-[var(--border-focus)]"
+            className="max-w-xs rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step--1 outline-none focus:border-[var(--border-focus)]"
           >
             <option value="">Add a bot…</option>
             {addable.map((bot) => (
@@ -422,7 +422,7 @@ export function TeamDetailView({
             ))}
           </select>
           {addable.length === 0 && teammates.length === 0 && (
-            <span className="text-[var(--step-minus-1)] text-[var(--faint)]">
+            <span className="text-step--1 text-[var(--faint)]">
               No bots available to add.
             </span>
           )}
@@ -450,7 +450,7 @@ export function TeamDetailView({
                   >
                     {project.repository || "workspace"}
                   </button>
-                  <div className="mono text-[var(--step-minus-2)] text-[var(--faint)]">{project.id}</div>
+                  <div className="mono text-step--2 text-[var(--faint)]">{project.id}</div>
                 </div>
                 <Button
                   variant="danger"
@@ -490,7 +490,7 @@ export function TeamDetailView({
             onChange={(e) => setAttachProjectId(e.target.value)}
             placeholder="prj_…"
             aria-label="Project ID to attach"
-            className="w-64 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-minus-1)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
+            className="w-64 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step--1 outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
           />
           <Button type="submit" variant="default">
             Attach workspace
@@ -501,7 +501,7 @@ export function TeamDetailView({
       {members.length > 0 ? (
         <section>
           <SectionLabel className="mb-2">Membership rows</SectionLabel>
-          <div className="mono rounded-xl border border-dashed border-[var(--border-dim)] px-4 py-3 text-[var(--step-minus-2)] text-[var(--faint)]">
+          <div className="mono rounded-xl border border-dashed border-[var(--border-dim)] px-4 py-3 text-step--2 text-[var(--faint)]">
             {members.map((m) => (
               <div key={m.id} className="py-0.5">
                 {m.teammate_id ? `bot ${m.teammate_id}` : `workspace ${m.project_id}`}

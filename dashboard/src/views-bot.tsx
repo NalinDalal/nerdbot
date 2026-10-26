@@ -160,7 +160,7 @@ export function BotDetailView({
           onClick={() => {
             window.location.hash = "#/bots";
           }}
-          className="mb-3 inline-flex items-center gap-1 text-[var(--step-minus-1)] text-[var(--muted)] transition-colors hover:text-[var(--text)]"
+          className="mb-3 inline-flex items-center gap-1 text-step--1 text-[var(--muted)] transition-colors hover:text-[var(--text)]"
         >
           <span aria-hidden>←</span> Fleet
         </button>
@@ -174,13 +174,13 @@ export function BotDetailView({
             label={`The face of ${mate.persona || "this bot"}`}
           />
           <div className="min-w-0 flex-1">
-            <div className="mb-1 text-[var(--step-minus-2)] uppercase tracking-[0.16em] text-[var(--faint)]">
+            <div className="mb-1 text-step--2 uppercase tracking-[0.16em] text-[var(--faint)]">
               Bot
             </div>
-            <h1 className="text-[var(--step-1)] font-semibold tracking-tight text-[var(--text)]">
+            <h1 className="text-step-1 font-semibold tracking-tight text-[var(--text)]">
               {mate.persona || "Unnamed bot"}
             </h1>
-            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[var(--step-minus-1)] text-[var(--muted)]">
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-step--1 text-[var(--muted)]">
               <StatusDot
                 status={mate.status}
                 label={mate.status}
@@ -206,17 +206,17 @@ export function BotDetailView({
 
       {mate.instructions ? (
         <details className="mb-6 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
-          <summary className="cursor-pointer text-[var(--step-minus-1)] font-medium text-[var(--text-soft)]">
+          <summary className="cursor-pointer text-step--1 font-medium text-[var(--text-soft)]">
             Instructions
           </summary>
-          <p className="mt-3 whitespace-pre-wrap text-[var(--step-0)] leading-relaxed text-[var(--text-soft)]">
+          <p className="mt-3 whitespace-pre-wrap text-step-0 leading-relaxed text-[var(--text-soft)]">
             {mate.instructions}
           </p>
         </details>
       ) : null}
 
       <details className="mb-6">
-        <summary className="mb-2 cursor-pointer text-[var(--step-minus-2)] uppercase tracking-[0.14em] text-[var(--faint)]">
+        <summary className="mb-2 cursor-pointer text-step--2 uppercase tracking-[0.14em] text-[var(--faint)]">
           Access and permissions
         </summary>
         <BotAccess mate={mate} boards={(boards.data as { boards: Board[] }).boards} />
@@ -277,7 +277,7 @@ export function BotDetailView({
           </form>
         )}
         {unclaimed && (
-          <div className="mb-3 flex items-center gap-3 rounded-lg border border-[var(--warn)] bg-[var(--warn-dim)] px-3 py-2 text-[var(--step-minus-1)] text-[var(--warn)]">
+          <div className="mb-3 flex items-center gap-3 rounded-lg border border-[var(--warn)] bg-[var(--warn-dim)] px-3 py-2 text-step--1 text-[var(--warn)]">
             <span className="min-w-0 flex-1 truncate">Unclaimed: {unclaimed.description}</span>
             <Button onClick={() => void claim(unclaimed.id)}>Claim &amp; assign to me</Button>
           </div>
@@ -299,7 +299,7 @@ export function BotDetailView({
                     {t.description || "Untitled"}
                   </button>
                   {t.command ? (
-                    <div className="mono truncate text-[var(--step-minus-2)] text-[var(--faint)]">{t.command}</div>
+                    <div className="mono truncate text-step--2 text-[var(--faint)]">{t.command}</div>
                   ) : null}
                 </div>
                 <StatusBadge status={t.status} label={undefined} />
@@ -345,17 +345,17 @@ export function BotDetailView({
               >
                 <StatusDot status={r.status} pulse={r.status === "running"} label={undefined} />
                 <button
-                  className="min-w-0 flex-1 truncate text-left text-[var(--step-minus-1)] text-[var(--muted)] hover:text-[var(--text)]"
+                  className="min-w-0 flex-1 truncate text-left text-step--1 text-[var(--muted)] hover:text-[var(--text)]"
                   onClick={() => openTask(mate.project_id, r.task_id)}
                   title="Open task"
                 >
                   {taskList.find((t) => t.id === r.task_id)?.description?.trim() || "Task"}
                 </button>
-                <span className="mono text-[var(--step-minus-2)] text-[var(--faint)]">exit {r.exit_code ?? "—"}</span>
-                <span className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
+                <span className="mono text-step--2 text-[var(--faint)]">exit {r.exit_code ?? "—"}</span>
+                <span className="mono text-step--2 text-[var(--faint)]">
                   {Number(r.duration_s ?? 0).toFixed(1)}s
                 </span>
-                <span className="mono text-[var(--step-minus-2)] text-[var(--faint)]">{relativeTime(r.started_at)}</span>
+                <span className="mono text-step--2 text-[var(--faint)]">{relativeTime(r.started_at)}</span>
               </div>
             ))}
           </div>
@@ -369,7 +369,7 @@ export function BotDetailView({
         <div className="mb-2 flex items-center justify-between">
           <SectionLabel>Private memory</SectionLabel>
         </div>
-        <p className="mb-3 max-w-[72ch] text-[var(--step-minus-1)] text-[var(--muted)]">
+        <p className="mb-3 max-w-[72ch] text-step--1 text-[var(--muted)]">
           Only this bot reads and writes this memory. Notes here are recalled in its future runs.
         </p>
         <form onSubmit={addMemory} className="mb-3 flex flex-wrap items-center gap-2">
@@ -395,8 +395,8 @@ export function BotDetailView({
           <div className="flex flex-col gap-2">
             {memList.map((entry) => (
               <div key={entry.id} className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
-                <p className="whitespace-pre-wrap text-[var(--step-minus-1)] text-[var(--text-soft)]">{entry.content}</p>
-                <p className="mt-1 text-[var(--step-minus-2)] text-[var(--faint)]">
+                <p className="whitespace-pre-wrap text-step--1 text-[var(--text-soft)]">{entry.content}</p>
+                <p className="mt-1 text-step--2 text-[var(--faint)]">
                   {entry.source} · confidence {entry.confidence} · {relativeTime(entry.timestamp)}
                 </p>
               </div>
@@ -511,13 +511,13 @@ function BotAccess({ mate, boards }: { mate: Teammate; boards: Board[] }) {
     <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <SectionLabel>Access</SectionLabel>
-        <span className="text-[var(--step-minus-1)] text-[var(--muted)]">
+        <span className="text-step--1 text-[var(--muted)]">
           permissions the server enforces for this bot
         </span>
       </div>
 
       <div className="mt-3">
-        <div className="mb-1.5 text-[var(--step-minus-2)] font-medium uppercase tracking-[0.14em] text-[var(--faint)]">
+        <div className="mb-1.5 text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--faint)]">
           Granted ({granted.length})
         </div>
         {granted.length > 0 ? (
@@ -533,7 +533,7 @@ function BotAccess({ mate, boards }: { mate: Teammate; boards: Board[] }) {
                       ? catalogue.byName.get(perm)?.summary
                       : "unknown permission. The server does not recognise it, so it grants nothing"
                 }
-                className={`inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-0.5 text-[var(--step-minus-2)] font-medium text-[var(--text-soft)] ${
+                className={`inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-0.5 text-step--2 font-medium text-[var(--text-soft)] ${
                   catalogue.isAdmin(perm) ? "border-[var(--warn)] text-[var(--warn)]" : ""
                 }`}
               >
@@ -543,25 +543,25 @@ function BotAccess({ mate, boards }: { mate: Teammate; boards: Board[] }) {
             ))}
           </div>
         ) : (
-          <p className="text-[var(--step-minus-1)] text-[var(--muted)]">
+          <p className="text-step--1 text-[var(--muted)]">
             No permissions. Every gated tool call for this bot is denied.
           </p>
         )}
         {unknownHeld.length > 0 ? (
-          <div className="mt-2 rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-[var(--step-minus-1)] text-[var(--danger)]" role="alert">
+          <div className="mt-2 rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-step--1 text-[var(--danger)]" role="alert">
             Unknown permission name(s) held by this bot: {unknownHeld.join(", ")}. The server does not
             recognise them, so they grant nothing.
           </div>
         ) : null}
         {granted.some((p) => catalogue.isAdmin(p)) ? (
-          <p className="mt-1.5 text-[var(--step-minus-2)] text-[var(--faint)]">
+          <p className="mt-1.5 text-step--2 text-[var(--faint)]">
             * admin permission: granted, but each use still needs the owner&apos;s exact-action approval.
           </p>
         ) : null}
       </div>
 
       <div className="mt-3">
-        <div className="mb-1.5 text-[var(--step-minus-2)] uppercase tracking-[0.14em] text-[var(--faint)]">
+        <div className="mb-1.5 text-step--2 uppercase tracking-[0.14em] text-[var(--faint)]">
           Not granted ({denied.length})
         </div>
         {denied.length > 0 ? (
@@ -571,21 +571,21 @@ function BotAccess({ mate, boards }: { mate: Teammate; boards: Board[] }) {
                 key={perm.name}
                 tabIndex={0}
                 title={`${perm.summary}. Denied unless granted.`}
-                className="inline-flex items-center rounded-full border border-[var(--border-dim)] bg-[var(--surface-2)] px-2.5 py-0.5 text-[var(--step-minus-2)] font-medium text-[var(--muted)] opacity-60"
+                className="inline-flex items-center rounded-full border border-[var(--border-dim)] bg-[var(--surface-2)] px-2.5 py-0.5 text-step--2 font-medium text-[var(--muted)] opacity-60"
               >
                 {perm.name}
               </span>
             ))}
           </div>
         ) : (
-          <p className="text-[var(--step-minus-1)] text-[var(--muted)]">
+          <p className="text-step--1 text-[var(--muted)]">
             This bot holds every permission the server defines.
           </p>
         )}
       </div>
 
       <div className="mt-4 border-t border-[var(--border-dim)] pt-3">
-        <div className="mb-2 text-[var(--step-minus-2)] uppercase tracking-[0.14em] text-[var(--faint)]">
+        <div className="mb-2 text-step--2 uppercase tracking-[0.14em] text-[var(--faint)]">
           Board membership
         </div>
         {members.loading ? (
@@ -599,14 +599,14 @@ function BotAccess({ mate, boards }: { mate: Teammate; boards: Board[] }) {
               return (
                 <div
                   key={board.id}
-                  className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-[var(--surface-2)] px-3 py-2 text-[var(--step-minus-1)]"
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-[var(--surface-2)] px-3 py-2 text-step--1"
                 >
                   <div className="min-w-0">
                     <a className="font-medium text-[var(--text)] hover:underline" href={`#/board/${board.id}`}>
                       {board.name || "Unnamed board"}
                     </a>
                     <span className="mono ml-2 text-[var(--faint)]">{role}</span>
-                    <div className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
+                    <div className="mono text-step--2 text-[var(--faint)]">
                       {coMembers.length > 0
                         ? `${coMembers.length} co-member${coMembers.length === 1 ? "" : "s"}`
                         : "alone on this board"}
@@ -620,7 +620,7 @@ function BotAccess({ mate, boards }: { mate: Teammate; boards: Board[] }) {
             })}
           </div>
         ) : (
-          <p className="text-[var(--step-minus-1)] text-[var(--muted)]">
+          <p className="text-step--1 text-[var(--muted)]">
             Not on any board. A bot needs board membership to read a board&apos;s messages, even with
             the board.read permission.
           </p>
@@ -632,7 +632,7 @@ function BotAccess({ mate, boards }: { mate: Teammate; boards: Board[] }) {
               value={addBoardId}
               onChange={(e) => setAddBoardId(e.target.value)}
               aria-label="Board to join"
-              className="max-w-64 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-1.5 text-[var(--step-minus-1)] outline-none focus:border-[var(--border-focus)]"
+              className="max-w-64 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-1.5 text-step--1 outline-none focus:border-[var(--border-focus)]"
             >
               <option value="">(select board)</option>
               {notMemberOf.map((b) => (
@@ -645,7 +645,7 @@ function BotAccess({ mate, boards }: { mate: Teammate; boards: Board[] }) {
               value={addRole}
               onChange={(e) => setAddRole(e.target.value)}
               aria-label="Board role"
-              className="rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-1.5 text-[var(--step-minus-1)] outline-none focus:border-[var(--border-focus)]"
+              className="rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-1.5 text-step--1 outline-none focus:border-[var(--border-focus)]"
             >
               <option value="member">Member</option>
               <option value="lead">Lead</option>
@@ -654,7 +654,7 @@ function BotAccess({ mate, boards }: { mate: Teammate; boards: Board[] }) {
               Add to board
             </Button>
             {inactive ? (
-              <span className="text-[var(--step-minus-1)] text-[var(--muted)]">
+              <span className="text-step--1 text-[var(--muted)]">
                 This bot is {mate.status}. Only active bots can join a board.
               </span>
             ) : null}
@@ -662,7 +662,7 @@ function BotAccess({ mate, boards }: { mate: Teammate; boards: Board[] }) {
         )}
 
         {error ? (
-          <div className="mt-2 rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-[var(--step-minus-1)] text-[var(--danger)]" role="alert">
+          <div className="mt-2 rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-step--1 text-[var(--danger)]" role="alert">
             {error}
           </div>
         ) : null}
@@ -929,7 +929,7 @@ export function BotsView() {
             )}
             {step === "face" && (
               <>
-                <p className="max-w-[46ch] text-[var(--step-minus-1)] text-[var(--muted)]">
+                <p className="max-w-[46ch] text-step--1 text-[var(--muted)]">
                   The face is the bot&apos;s own: it shows up wherever the bot does, so a fleet
                   is scannable by face alone. It is yours to choose, and you can change it
                   later.
@@ -944,7 +944,7 @@ export function BotsView() {
                 ) : providers.error ? (
                   <div className={ERROR_BOX}>{describeError(providers.error)}</div>
                 ) : provList.length === 0 ? (
-                  <p className="text-[var(--step-minus-1)] text-[var(--muted)]">
+                  <p className="text-step--1 text-[var(--muted)]">
                     No providers configured for this project. Add one in the project&apos;s Providers
                     tab, then attach it here. The bot will work without a provider until one is
                     attached.
@@ -963,7 +963,7 @@ export function BotsView() {
                     ))}
                   </select>
                 )}
-                <p className="text-[var(--step-minus-1)] text-[var(--faint)]">
+                <p className="text-step--1 text-[var(--faint)]">
                   Select the model connection this bot uses to think. Leave unset to use the
                   project&apos;s default provider.
                 </p>
@@ -971,13 +971,13 @@ export function BotsView() {
             )}
             {step === "permissions" && (
               <Field label="Tools &amp; permissions">
-                <p className="mb-2 max-w-[46ch] text-[var(--step-minus-1)] text-[var(--muted)]">
+                <p className="mb-2 max-w-[46ch] text-step--1 text-[var(--muted)]">
                   Choose permissions from the server&apos;s canonical catalogue. Admin actions
                   (marked with a shield) require your approval before the bot can use them.
                 </p>
                 <div className="max-h-64 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2">
                   {catalogue.permissions.length === 0 ? (
-                    <p className="p-1.5 text-[var(--step-minus-1)] text-[var(--muted)]">
+                    <p className="p-1.5 text-step--1 text-[var(--muted)]">
                       No permissions available from the server.
                     </p>
                   ) : (
@@ -1002,7 +1002,7 @@ export function BotsView() {
                           <input type="checkbox" checked={held} readOnly className="h-3.5 w-3.5" />
                           <div className="min-w-0 flex-1">
                             <div className="font-medium text-[var(--text)]">{perm.name}</div>
-                            <div className="text-[var(--step-minus-2)] text-[var(--muted)]">{perm.summary}</div>
+                            <div className="text-step--2 text-[var(--muted)]">{perm.summary}</div>
                           </div>
                           {perm.requires_approval && <Badge variant="warn">approval-gated</Badge>}
                         </label>
@@ -1010,7 +1010,7 @@ export function BotsView() {
                     })
                   )}
                 </div>
-                <p className="mt-1.5 text-[var(--step-minus-1)] text-[var(--faint)]">
+                <p className="mt-1.5 text-step--1 text-[var(--faint)]">
                   {selectedPerms.length} selected
                 </p>
               </Field>
@@ -1025,7 +1025,7 @@ export function BotsView() {
                   <option value="project">Project</option>
                   <option value="private">Private (this bot only)</option>
                 </select>
-                <p className="text-[var(--step-minus-1)] text-[var(--faint)]">
+                <p className="text-step--1 text-[var(--faint)]">
                   Project scope shares memory with other bots and tasks in the workspace. Private
                   keeps it to this bot alone.
                 </p>
@@ -1035,11 +1035,11 @@ export function BotsView() {
               <div className="flex flex-col gap-3">
                 <div className="flex items-center gap-3">
                   <BotAvatar face={face} size={64} label="The face this bot will wear" />
-                  <p className="text-[var(--step-minus-1)] text-[var(--muted)]">
+                  <p className="text-step--1 text-[var(--muted)]">
                     This is the face the bot will wear. You can change it at any time.
                   </p>
                 </div>
-                <dl className="flex flex-col gap-1.5 text-[var(--step-minus-1)]">
+                <dl className="flex flex-col gap-1.5 text-step--1">
                   {[
                     ["Project", projList.find((p) => p.id === pid)?.repository || pid],
                     ["Persona / name", persona],
@@ -1140,7 +1140,7 @@ export function BotsView() {
                     <td className={TABLE_TD}>
                       <BotChip href={`#/bot/${mate.id}`} persona={mate.persona || "Unnamed bot"} id={mate.id} status={liveStatus} face={mate.face} />
                       <div
-                        className="mt-0.5 truncate text-[var(--step-minus-2)] text-[var(--faint)]"
+                        className="mt-0.5 truncate text-step--2 text-[var(--faint)]"
                         title={`${projectOf(mate.project_id)} · ${tasks.length} tasks`}
                       >
                         {projectOf(mate.project_id)} · {tasks.length} task{tasks.length === 1 ? "" : "s"}
@@ -1162,13 +1162,13 @@ export function BotsView() {
                     <td className={`${TABLE_TD} whitespace-nowrap`}>
                       {provider ? (
                         <span
-                          className="block truncate text-[var(--step-minus-1)] text-[var(--text-soft)]"
+                          className="block truncate text-step--1 text-[var(--text-soft)]"
                           title={provider.name}
                         >
                           {provider.name}
                         </span>
                       ) : (
-                        <span className="text-[var(--step-minus-1)] text-[var(--warn)]">
+                        <span className="text-step--1 text-[var(--warn)]">
                           no model
                         </span>
                       )}
@@ -1178,7 +1178,7 @@ export function BotsView() {
                         <>
                           <div className="flex min-w-0 items-center gap-2">
                             <button
-                              className="min-w-0 flex-1 truncate text-left text-[var(--step-minus-1)] text-[var(--text)] hover:underline"
+                              className="min-w-0 flex-1 truncate text-left text-step--1 text-[var(--text)] hover:underline"
                               title={latest.description}
                               onClick={() => openTask(latest.project_id, latest.id)}
                             >
@@ -1186,19 +1186,19 @@ export function BotsView() {
                             </button>
                             <StatusBadge status={latest.status} />
                             {busy && active.length > 1 ? (
-                              <span className="shrink-0 text-[var(--step-minus-2)] text-[var(--faint)]">
+                              <span className="shrink-0 text-step--2 text-[var(--faint)]">
                                 +{active.length - 1}
                               </span>
                             ) : null}
                           </div>
                           {blocked?.blocked_reason ? (
-                            <div className="mt-1 truncate text-[var(--step-minus-2)] text-[var(--warn)]" title={blocked.blocked_reason}>
+                            <div className="mt-1 truncate text-step--2 text-[var(--warn)]" title={blocked.blocked_reason}>
                               {blocked.blocked_reason}
                             </div>
                           ) : null}
                         </>
                       ) : (
-                        <span className="text-[var(--step-minus-1)] text-[var(--faint)]">
+                        <span className="text-step--1 text-[var(--faint)]">
                           no work assigned
                         </span>
                       )}

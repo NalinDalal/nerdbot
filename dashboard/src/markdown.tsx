@@ -219,7 +219,7 @@ function inlineNodes(text: string): ReactNode[] {
 export function Markdown({ text }: { text: string }) {
   const blocks = parseMarkdown(text);
   return (
-    <div className="text-[var(--step-0)] leading-relaxed text-[var(--text-soft)]">
+    <div className="text-step-0 leading-relaxed text-[var(--text-soft)]">
       {blocks.map((block, index) => {
         switch (block.kind) {
           case "heading":
@@ -237,7 +237,7 @@ export function Markdown({ text }: { text: string }) {
             return (
               <pre
                 key={index}
-                className="mono my-2 overflow-x-auto rounded-lg bg-[var(--surface-2)] p-3 text-[var(--step-minus-1)] leading-relaxed text-[var(--text-soft)]"
+                className="mono my-2 overflow-x-auto rounded-lg bg-[var(--surface-2)] p-3 text-step--1 leading-relaxed text-[var(--text-soft)]"
               >
                 {block.text}
               </pre>
@@ -271,7 +271,7 @@ export function Markdown({ text }: { text: string }) {
           case "table":
             return (
               <div key={index} className="my-3 overflow-x-auto">
-                <table className="w-full border-collapse text-[var(--step-minus-1)]">
+                <table className="w-full border-collapse text-step--1">
                   <thead>
                     <tr>
                       {block.headers.map((header, cellIndex) => (

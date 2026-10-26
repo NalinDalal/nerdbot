@@ -1,4 +1,4 @@
-import { cloneElement, isValidElement, useEffect, useRef, useState, useId } from "react";
+import { cloneElement, isValidElement, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import type { ReactNode } from "react";
 import { api, describeError } from "./api";
@@ -15,49 +15,55 @@ export function StatusBadge({
   status: string;
   label?: string;
 }) {
-  const variant =
-    status === "done" || status === "active" || status === "ready"
-      ? "ok"
-      : status === "failed" || status === "denied" || status === "rejected"
-        ? "bad"
-        : status === "blocked" || status === "pending"
-          ? "warn"
-          : "info";
+  const tone = statusTone(status);
+  const dot =
+    tone === "ok"
+      ? "bg-[var(--accent)]"
+      : tone === "bad"
+        ? "bg-[var(--danger)]"
+        : tone === "warn"
+          ? "bg-[var(--warn)]"
+          : tone === "info"
+            ? "bg-[var(--info)]"
+            : "bg-[var(--faint)]";
   return (
-    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[var(--step-minus-1)] font-medium border border-transparent bg-[var(--surface-2)]`}>
-      <span
-        className={`w-1.5 h-1.5 rounded-full ${variant === "ok" ? "bg-[var(--accent)]" : variant === "bad" ? "bg-[var(--danger)]" : variant === "warn" ? "bg-[var(--warn)]" : "bg-[var(--info)]"}`}
-      />
-      {label ?? taskStatusLabel(status)}
+    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-step--1 font-medium border border-transparent bg-[var(--surface-2)]`}>
+      <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />
+      {label ?? statusLabel(status)}
     </span>
   );
 }
 
+/** One vocabulary for task and run states. The same word means the same
+ *  status wherever it appears, so a "queued" run and a "pending" task cannot
+ *  drift into different labels (or raw enum values) across surfaces. */
+const STATUS_LABELS: Record<string, string> = {
+  pending: "Queued",
+  queued: "Queued",
+  ready: "Ready",
+  running: "Running",
+  done: "Completed",
+  failed: "Failed",
+  blocked: "Blocked",
+  stopped: "Stopped",
+  cancelled: "Cancelled",
+  awaiting_approval: "Awaiting approval",
+  active: "Active",
+  denied: "Rejected",
+  rejected: "Rejected",
+  expired: "Expired",
+};
+
+export function statusLabel(status: string): string {
+  return STATUS_LABELS[status] ?? status;
+}
+
 export function taskStatusLabel(status: string): string {
-  const labels: Record<string, string> = {
-    pending: "Queued",
-    ready: "Ready",
-    running: "Running",
-    done: "Completed",
-    failed: "Failed",
-    blocked: "Blocked",
-    cancelled: "Cancelled",
-    awaiting_approval: "Awaiting approval",
-  };
-  return labels[status] ?? status;
+  return statusLabel(status);
 }
 
 export function runStatusLabel(status: string): string {
-  const labels: Record<string, string> = {
-    queued: "Queued",
-    running: "Running",
-    failed: "Failed",
-    blocked: "Blocked",
-    stopped: "Stopped",
-    cancelled: "Cancelled",
-    awaiting_approval: "Awaiting approval",
-  };
-  return labels[status] ?? status;
+  return statusLabel(status);
 }
 
 /* --- Theme --- */
@@ -65,6 +71,14 @@ export function runStatusLabel(status: string): string {
 export type Theme = "dark" | "light" | "system";
 
 const THEME_KEY = "nerdbot.theme";
+/** Theme changes are app-wide, but each `useTheme` call owns its own state.
+ *  This event keeps those instances in step (the terminal repaints from it
+ *  rather than rebuilding its PTY session). */
+const THEME_EVENT = "nerdbot:theme";
+
+function isTheme(value: unknown): value is Theme {
+  return value === "dark" || value === "light" || value === "system";
+}
 
 function resolveTheme(theme: Theme): "dark" | "light" {
   if (theme === "system") {
@@ -77,7 +91,7 @@ export function useTheme() {
   const stored = (() => {
     try {
       const v = localStorage.getItem(THEME_KEY);
-      if (v === "dark" || v === "light" || v === "system") return v;
+      if (isTheme(v)) return v;
     } catch {
       // ignore
     }
@@ -98,6 +112,15 @@ export function useTheme() {
     }
   }, [resolved]);
 
+  useEffect(() => {
+    const onChange = (event: Event) => {
+      const next = (event as CustomEvent<unknown>).detail;
+      if (isTheme(next)) setTheme(next);
+    };
+    window.addEventListener(THEME_EVENT, onChange);
+    return () => window.removeEventListener(THEME_EVENT, onChange);
+  }, []);
+
   const setThemePref = (next: Theme) => {
     setTheme(next);
     try {
@@ -105,6 +128,7 @@ export function useTheme() {
     } catch {
       // ignore
     }
+    window.dispatchEvent(new CustomEvent<Theme>(THEME_EVENT, { detail: next }));
   };
 
   return { theme, resolved, setTheme: setThemePref };
@@ -123,11 +147,11 @@ export function ThemeButton({ onThemeChange }: { onThemeChange: (t: Theme) => vo
         setIndex(next);
         onThemeChange(cycle[next]);
       }}
-      className="inline-flex items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1.5 text-[var(--step-minus-1)] text-[var(--text-soft)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-1"
+      className="inline-flex items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1.5 text-step--1 text-[var(--text-soft)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-1"
       aria-label={`Theme: ${label}`}
       title={label}
     >
-      <span className="text-[var(--step-minus-1)]">{icon}</span>
+      <span className="text-step--1">{icon}</span>
       <span className="sr-only">{label}</span>
     </button>
   );
@@ -174,7 +198,7 @@ export function PageHeader({
       {back ? (
         <button
           onClick={back.onClick}
-          className="mb-3 inline-flex items-center gap-1 text-[var(--step-minus-1)] text-[var(--muted)] hover:text-[var(--text)] transition-colors"
+          className="mb-3 inline-flex items-center gap-1 text-step--1 text-[var(--muted)] hover:text-[var(--text)] transition-colors"
         >
           <span aria-hidden>←</span> {back.label}
         </button>
@@ -184,15 +208,15 @@ export function PageHeader({
       <div className="flex flex-wrap items-start justify-between gap-x-8 gap-y-3">
         <div className="min-w-[14rem] flex-1">
           {eyebrow ? (
-            <div className="mb-1 text-[var(--step-minus-2)] uppercase tracking-[0.16em] text-[var(--faint)]">
+            <div className="mb-1 text-step--2 uppercase tracking-[0.16em] text-[var(--faint)]">
               {eyebrow}
             </div>
           ) : null}
-          <h1 className="text-[var(--step-1)] font-semibold tracking-tight text-[var(--text)]">
+          <h1 className="text-step-1 font-semibold tracking-tight text-[var(--text)]">
             {title}
           </h1>
           {description ? (
-            <p className="mt-1 max-w-[68ch] text-[var(--step-0)] text-[var(--muted)] leading-relaxed">
+            <p className="mt-1 max-w-[68ch] text-step-0 text-[var(--muted)] leading-relaxed">
               {description}
             </p>
           ) : null}
@@ -222,11 +246,11 @@ export function PageSection({
     <section className={`mb-10 last:mb-0 ${className}`}>
       <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
         <div className="min-w-0">
-          <h2 className="text-[var(--step-0)] font-semibold tracking-tight text-[var(--text)]">
+          <h2 className="text-step-0 font-semibold tracking-tight text-[var(--text)]">
             {title}
           </h2>
           {description ? (
-            <p className="mt-0.5 max-w-[68ch] text-[var(--step-minus-1)] text-[var(--muted)]">
+            <p className="mt-0.5 max-w-[68ch] text-step--1 text-[var(--muted)]">
               {description}
             </p>
           ) : null}
@@ -253,7 +277,7 @@ export function StatStrip({
         <div key={item.label} className="flex items-baseline gap-1.5">
           <dt className="sr-only">{item.label}</dt>
           <dd
-            className={`text-[var(--step-0)] font-semibold tabular-nums ${
+            className={`text-step-0 font-semibold tabular-nums ${
               item.tone === "bad"
                 ? "text-[var(--danger)]"
                 : item.tone === "warn"
@@ -267,7 +291,7 @@ export function StatStrip({
           >
             {item.value}
           </dd>
-          <span className="text-[var(--step-minus-1)] text-[var(--muted)]">{item.label}</span>
+          <span className="text-step--1 text-[var(--muted)]">{item.label}</span>
         </div>
       ))}
     </dl>
@@ -277,7 +301,7 @@ export function StatStrip({
 /** A command or config value the owner may want to copy. */
 export function CodeBlock({ children }: { children: string }) {
   return (
-    <pre className="mono overflow-x-auto rounded-lg border border-[var(--border-dim)] bg-[var(--surface-2)] px-3 py-2 text-[var(--step-minus-1)] leading-relaxed text-[var(--text-soft)]">
+    <pre className="mono overflow-x-auto rounded-lg border border-[var(--border-dim)] bg-[var(--surface-2)] px-3 py-2 text-step--1 leading-relaxed text-[var(--text-soft)]">
       {children}
     </pre>
   );
@@ -294,15 +318,15 @@ export function KeyValue({
 }) {
   return (
     <div className="flex flex-wrap items-baseline gap-x-4 gap-y-0.5 py-1.5">
-      <dt className="w-44 shrink-0 text-[var(--step-minus-1)] text-[var(--muted)]">{label}</dt>
-      <dd className="min-w-0 flex-1 text-[var(--step-minus-1)] text-[var(--text)]">{children}</dd>
+      <dt className="w-44 shrink-0 text-step--1 text-[var(--muted)]">{label}</dt>
+      <dd className="min-w-0 flex-1 text-step--1 text-[var(--text)]">{children}</dd>
     </div>
   );
 }
 
 export function SectionLabel({ children, className = "" }: { children: ReactNode; className?: string }) {
   return (
-    <div className={`text-[var(--step-minus-2)] font-medium uppercase tracking-[0.16em] text-[var(--faint)] ${className}`}>
+    <div className={`text-step--2 font-medium uppercase tracking-[0.16em] text-[var(--faint)] ${className}`}>
       {children}
     </div>
   );
@@ -311,9 +335,10 @@ export function SectionLabel({ children, className = "" }: { children: ReactNode
 /* --- Status dot --- */
 
 export function statusTone(status: string): "ok" | "bad" | "warn" | "info" | "neutral" {
-  if (status === "running" || status === "active") return "info";
-  if (status === "done" || status === "ready") return "ok";
+  if (status === "running") return "info";
+  if (status === "done" || status === "ready" || status === "active") return "ok";
   if (status === "failed" || status === "denied" || status === "rejected") return "bad";
+  if (status === "expired") return "bad";
   if (
     status === "blocked" ||
     status === "pending" ||
@@ -322,7 +347,6 @@ export function statusTone(status: string): "ok" | "bad" | "warn" | "info" | "ne
   ) {
     return "warn";
   }
-  if (status === "expired") return "bad";
   return "neutral";
 }
 
@@ -359,7 +383,7 @@ export function StatusDot({
     <span className="inline-flex items-center gap-1.5" title={label ?? status}>
       <span className={`h-[7px] w-[7px] rounded-full ${color} ${pulse ? "animate-pulse" : ""}`} />
       {label ? (
-        <span className="text-[var(--step-minus-1)] text-[var(--text-soft)]">{label}</span>
+        <span className="text-step--1 text-[var(--text-soft)]">{label}</span>
       ) : null}
     </span>
   );
@@ -440,7 +464,7 @@ export function BotChip({
   href?: string;
 }) {
   const name = persona || "Unnamed";
-  const nameClass = "truncate text-[var(--step-minus-1)] text-[var(--text-soft)]";
+  const nameClass = "truncate text-step--1 text-[var(--text-soft)]";
   return (
     <span className="inline-flex min-w-0 items-center gap-2">
       <BotFace face={face} size={size === "md" ? 36 : 28} status={status} />
@@ -481,9 +505,9 @@ export function relativeTime(iso: string): string {
 export function EmptyState({ title, hint, action }: { title: string; hint?: string; action?: ReactNode }) {
   return (
     <div className="flex flex-col items-center justify-center px-6 py-10 text-center">
-      <div className="text-[var(--step-1)] font-semibold text-[var(--text)]">{title}</div>
+      <div className="text-step-1 font-semibold text-[var(--text)]">{title}</div>
       {hint ? (
-        <div className="mt-3 text-[var(--step-0)] text-[var(--muted)] leading-1.5 max-w-[42ch]">
+        <div className="mt-3 text-step-0 text-[var(--muted)] leading-1.5 max-w-[42ch]">
           {hint}
         </div>
       ) : null}
@@ -507,11 +531,11 @@ export function LoadingState({ lines = 3 }: { lines?: number }) {
 export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
   const message = describeError(error);
   return (
-    <div className="rounded-lg border border-[var(--danger)] bg-[var(--danger-dim)] px-4 py-3 text-[var(--step-0)]">
+    <div className="rounded-lg border border-[var(--danger)] bg-[var(--danger-dim)] px-4 py-3 text-step-0">
       <div>{message}</div>
       {onRetry ? (
         <div className="mt-3">
-          <button onClick={onRetry} className="text-[var(--step-minus-1)] text-[var(--accent)] hover:underline">
+          <button onClick={onRetry} className="text-step--1 text-[var(--accent)] hover:underline">
             Retry
           </button>
         </div>
@@ -579,7 +603,7 @@ export function Modal({ title, children, onClose }: { title: string; children: R
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-4">
-          <strong className="text-[var(--step-1)] font-semibold">{title}</strong>
+          <strong className="text-step-1 font-semibold">{title}</strong>
           <button
             onClick={onClose}
             aria-label="Close"
@@ -620,13 +644,13 @@ export function Field({
     <div className="mb-4">
       <label
         htmlFor={controlId}
-        className="block text-[var(--step-minus-1)] font-medium text-[var(--muted)] mb-1.5 uppercase tracking-wide"
+        className="block text-step--1 font-medium text-[var(--muted)] mb-1.5 uppercase tracking-wide"
       >
         {label}
       </label>
       {control}
       {error ? (
-        <div className="mt-1.5 text-[var(--step-minus-1)] text-[var(--danger)]">{error}</div>
+        <div className="mt-1.5 text-step--1 text-[var(--danger)]">{error}</div>
       ) : null}
     </div>
   );
@@ -642,6 +666,7 @@ export function Button({
   type = "button",
   className,
   title,
+  ariaLabel,
 }: {
   children?: ReactNode;
   onClick?: () => void;
@@ -650,9 +675,11 @@ export function Button({
   type?: "button" | "submit" | "reset";
   className?: string;
   title?: string;
+  /** Use when the visible text is hidden at small breakpoints. */
+  ariaLabel?: string;
 }) {
   const base =
-    "inline-flex items-center justify-center gap-1.5 rounded-md border px-3 py-1.5 text-[var(--step-minus-1)] font-medium transition-colors disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-1";
+    "inline-flex items-center justify-center gap-1.5 rounded-md border px-3 py-1.5 text-step--1 font-medium transition-colors disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-1 max-lg:min-h-11";
   const variants: Record<string, string> = {
     default:
       "border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] hover:border-[var(--faint)] hover:text-[var(--text)]",
@@ -669,6 +696,7 @@ export function Button({
       onClick={onClick}
       disabled={disabled}
       title={title}
+      aria-label={ariaLabel}
       className={`${base} ${variants[variant]} ${className || ""}`}
     >
       {children}
@@ -686,16 +714,24 @@ export function Badge({
   variant?: "neutral" | "ok" | "bad" | "warn" | "info";
 }) {
   const bg = variant === "ok" ? "bg-[var(--accent-dim)] text-[var(--accent)]" : variant === "bad" ? "bg-[var(--danger-dim)] text-[var(--danger)]" : variant === "warn" ? "bg-[var(--warn-dim)] text-[var(--warn)]" : variant === "info" ? "bg-[var(--info-dim)] text-[var(--info)]" : "bg-[var(--surface-2)] text-[var(--muted)]";
+  const dot =
+    variant === "ok"
+      ? "bg-[var(--accent)]"
+      : variant === "bad"
+        ? "bg-[var(--danger)]"
+        : variant === "warn"
+          ? "bg-[var(--warn)]"
+          : "bg-[var(--info)]";
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full border border-transparent px-2.5 py-0.5 text-[var(--step-minus-1)] font-medium ${bg}`}>
-      {variant === "neutral" ? null : <span className="w-1.5 h-1.5 rounded-full opacity-60" />}
+    <span className={`inline-flex items-center gap-1.5 rounded-full border border-transparent px-2.5 py-0.5 text-step--1 font-medium ${bg}`}>
+      {variant === "neutral" ? null : <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />}
       {children}
     </span>
   );
 }
 
 export function ShortId({ id }: { id: string }) {
-  return <span className="mono text-[var(--step-minus-1)]" title={id}>{id.length > 18 ? `${id.slice(0, 18)}…` : id}</span>;
+  return <span className="mono text-step--1" title={id}>{id.length > 18 ? `${id.slice(0, 18)}…` : id}</span>;
 }
 
 /* --- Approvals --- */
@@ -754,7 +790,7 @@ export function ApprovalDecisionButtons({
   busy?: boolean;
   size?: "sm" | "md";
 }) {
-  const label = size === "sm" ? "text-[var(--step-minus-2)]" : "text-[var(--step-minus-1)]";
+  const label = size === "sm" ? "text-step--2" : "text-step--1";
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       <Button
@@ -804,20 +840,20 @@ export function ApprovalRow({
       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <strong className="text-[var(--step-0)] text-[var(--text)]">{approval.action}</strong>
+            <strong className="text-step-0 text-[var(--text)]">{approval.action}</strong>
             <ApprovalStateBadge state={state} />
             {approval.tool_name ? (
-              <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
+              <span className="text-step--2 text-[var(--faint)]">
                 {approval.performed ? "action performed" : "action not performed yet"}
               </span>
             ) : null}
           </div>
-          <div className="mt-1 text-[var(--step-minus-1)] text-[var(--muted)]">
+          <div className="mt-1 text-step--1 text-[var(--muted)]">
             asked by {askedBy}
             {approval.task_description ? ` · ${approval.task_description}` : ""}
           </div>
           {approval.digest ? (
-            <div className="mono mt-0.5 text-[var(--step-minus-2)] text-[var(--faint)]">
+            <div className="mono mt-0.5 text-step--2 text-[var(--faint)]">
               digest {approval.digest.slice(0, 16)}…
             </div>
           ) : null}
@@ -830,7 +866,7 @@ export function ApprovalRow({
               Ask again
             </Button>
           ) : (
-            <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
+            <span className="text-step--2 text-[var(--faint)]">
               {approval.decided_at ? relativeTime(approval.decided_at) : ""}
             </span>
           )}
@@ -847,20 +883,20 @@ export function ApprovalRow({
 export const TABLE_SHELL =
   "overflow-x-auto rounded-xl border border-[var(--border)] bg-[var(--surface)]";
 export const TABLE_TH =
-  "border-b border-[var(--border)] px-3 py-2 text-left text-[var(--step-minus-1)] font-medium uppercase tracking-wide text-[var(--faint)]";
+  "border-b border-[var(--border)] px-3 py-2 text-left text-step--1 font-medium uppercase tracking-wide text-[var(--faint)]";
 export const TABLE_TD =
   "border-b border-[var(--border-dim)] px-3 py-2.5 align-top";
 
 /* --- Shared form + evidence chrome --- */
 /** Full-width form field input (entity forms, inline modals). */
 export const FORM_INPUT =
-  "w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-0)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]";
+  "w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step-0 outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]";
 /** Compact input variant for dense inline forms. */
 export const FORM_INPUT_SM =
-  "rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--step-minus-1)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]";
+  "rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step--1 outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]";
 /** Mono evidence block (stdout, diffs, roll-up JSON). */
 export const LOG_BLOCK =
-  "mono mt-3 overflow-x-auto whitespace-pre rounded-lg bg-[var(--surface-2)] px-3 py-2 text-[var(--step-minus-1)] leading-relaxed text-[var(--text-soft)]";
+  "mono mt-3 overflow-x-auto whitespace-pre rounded-lg bg-[var(--surface-2)] px-3 py-2 text-step--1 leading-relaxed text-[var(--text-soft)]";
 
 /* --- Shared shell tokens --- */
 /* One definition per recurring surface (the legacy compat layer, now
@@ -868,16 +904,16 @@ export const LOG_BLOCK =
 export const CARD_SHELL =
   "rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm";
 export const PILL_SHELL =
-  "inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-0.5 text-[var(--step-minus-2)] font-medium text-[var(--text-soft)]";
+  "inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-0.5 text-step--2 font-medium text-[var(--text-soft)]";
 export const CHIP_SHELL =
-  "inline-flex items-center rounded-full bg-[var(--surface-3)] px-2 py-0.5 text-[var(--step-minus-2)] text-[var(--text-soft)]";
+  "inline-flex items-center rounded-full bg-[var(--surface-3)] px-2 py-0.5 text-step--2 text-[var(--text-soft)]";
 export const ERROR_BOX =
-  "rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-[var(--step-0)]";
+  "rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-step-0";
 export const FORM_SELECT =
-  "rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-[var(--step-minus-1)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]";
+  "rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-step--1 outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]";
 /** Mono evidence block without margin (metrics JSON, backup results). */
 export const LOG_SHELL =
-  "mono overflow-x-auto whitespace-pre rounded-lg bg-[var(--surface-2)] px-3 py-2 text-[var(--step-minus-1)] leading-relaxed text-[var(--text-soft)]";
+  "mono overflow-x-auto whitespace-pre rounded-lg bg-[var(--surface-2)] px-3 py-2 text-step--1 leading-relaxed text-[var(--text-soft)]";
 
 /* --- Shared task tally --- */
 /** The one task-status tally: queued = pending | ready, plus running,
@@ -925,26 +961,35 @@ interface AsyncState<T> {
   reload: () => void;
 }
 
+interface AsyncSnapshot<T> {
+  key: string;
+  data: T | null;
+  error: unknown;
+  loading: boolean;
+}
+
 export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = []): AsyncState<T> {
-  const [data, setData] = useState<T | null>(null);
-  const [error, setError] = useState<unknown>(null);
-  const [loading, setLoading] = useState(true);
   const [nonce, setNonce] = useState(0);
   const key = JSON.stringify([nonce, ...deps]);
+  const [snapshot, setSnapshot] = useState<AsyncSnapshot<T> | null>(null);
   useEffect(() => {
     let cancelled = false;
     fn().then(
       (result) => {
         if (!cancelled) {
-          setData(result);
-          setError(null);
-          setLoading(false);
+          setSnapshot({ key, data: result, error: null, loading: false });
         }
       },
       (err: unknown) => {
         if (!cancelled) {
-          setError(err);
-          setLoading(false);
+          /* Keep the last good answer behind the error. Panels can show what
+           * they already know instead of collapsing to a blank state. */
+          setSnapshot((previous) => ({
+            key,
+            data: previous?.data ?? null,
+            error: err,
+            loading: false,
+          }));
         }
       },
     );
@@ -953,15 +998,19 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = []): AsyncSt
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
-  return {
-    data,
-    error,
-    loading,
-    reload: () => {
-      setLoading(true);
-      setNonce((n) => n + 1);
-    },
-  };
+  const reload = useCallback(() => {
+    setNonce((n) => n + 1);
+  }, []);
+  /* A key change is a new request even before its promise settles: report it
+   * as loading with the previous answer still available, rather than showing
+   * another workspace's data as if it were current. */
+  const current = snapshot?.key === key ? snapshot : null;
+  const data = current ? current.data : (snapshot?.data ?? null);
+  const error = current ? current.error : null;
+  const loading = current ? current.loading : true;
+  /* A stable result keeps callers' effects and callbacks from re-running on
+   * every render of the view that owns the loader. */
+  return useMemo(() => ({ data, error, loading, reload }), [data, error, loading, reload]);
 }
 
 /* --- Permission catalogue --- */

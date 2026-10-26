@@ -79,11 +79,11 @@ export function BoardsView() {
                       {board.name || "Unnamed board"}
                     </a>
                     {board.description ? (
-                      <div className="max-w-[46ch] truncate text-[var(--step-minus-1)] text-[var(--muted)]">
+                      <div className="max-w-[46ch] truncate text-step--1 text-[var(--muted)]">
                         {board.description}
                       </div>
                     ) : null}
-                    <div className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
+                    <div className="mono text-step--2 text-[var(--faint)]">
                       {board.id}
                     </div>
                   </td>
@@ -206,7 +206,7 @@ export function BoardDetailView({
         }
       />
 
-      <div className="mb-4 flex flex-wrap items-center gap-2 text-[var(--step-minus-1)] text-[var(--muted)]">
+      <div className="mb-4 flex flex-wrap items-center gap-2 text-step--1 text-[var(--muted)]">
         <span className="mono">Project: {board.project_id}</span>
         {board.team_id ? <span className="mono">· Team: {board.team_id}</span> : null}
       </div>
@@ -336,19 +336,19 @@ export function BoardDetailView({
           </Button>
         </form>
 
-        <h3 className="mt-5 mb-2 text-[var(--step-minus-2)] uppercase tracking-[0.14em] text-[var(--faint)]">
+        <h3 className="mt-5 mb-2 text-step--2 uppercase tracking-[0.14em] text-[var(--faint)]">
           Sent
         </h3>
         {messages.length > 0 ? (
           <div className="flex flex-col gap-2">
             {messages.map((m) => (
               <div key={m.id} className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
-                <div className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
+                <div className="mono text-step--2 text-[var(--faint)]">
                   {m.kind} · {m.created_at.slice(0, 16)}
                 </div>
-                <div className="mt-1 text-[var(--step-minus-1)] text-[var(--text-soft)]">{m.content}</div>
+                <div className="mt-1 text-step--1 text-[var(--text-soft)]">{m.content}</div>
                 {m.to_board_id ? (
-                  <div className="mono mt-1 text-[var(--step-minus-2)] text-[var(--faint)]">
+                  <div className="mono mt-1 text-step--2 text-[var(--faint)]">
                     To board: {m.to_board_id.slice(0, 14)}…
                   </div>
                 ) : null}
@@ -359,7 +359,7 @@ export function BoardDetailView({
           <EmptyState title="No sent messages" hint="Compose a message above to send to another board." />
         )}
 
-        <h3 className="mt-5 mb-2 text-[var(--step-minus-2)] uppercase tracking-[0.14em] text-[var(--faint)]">
+        <h3 className="mt-5 mb-2 text-step--2 uppercase tracking-[0.14em] text-[var(--faint)]">
           Inbox (to this board)
         </h3>
         {inbox.length > 0 ? (
@@ -369,11 +369,11 @@ export function BoardDetailView({
                 key={m.id}
                 className="rounded-xl border border-[var(--border)] border-l-2 border-l-[var(--accent)] bg-[var(--surface)] px-4 py-3"
               >
-                <div className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
+                <div className="mono text-step--2 text-[var(--faint)]">
                   {m.kind} · from {m.from_teammate_id ? m.from_teammate_id.slice(0, 14) : "system"} ·{" "}
                   {m.created_at.slice(0, 16)}
                 </div>
-                <div className="mt-1 text-[var(--step-minus-1)] text-[var(--text-soft)]">{m.content}</div>
+                <div className="mt-1 text-step--1 text-[var(--text-soft)]">{m.content}</div>
               </div>
             ))}
           </div>
@@ -462,7 +462,7 @@ function DecomposeModal({ boardId, onDone }: { boardId: string; onDone: () => vo
   return (
     <Modal title="Decompose objective: review the plan first" onClose={onDone}>
       <label className="mb-4 flex flex-col gap-1.5">
-        <span className="text-[var(--step-minus-1)] font-medium text-[var(--text)]">Objective</span>
+        <span className="text-step--1 font-medium text-[var(--text)]">Objective</span>
         <textarea
           rows={2}
           value={objective}
@@ -475,13 +475,13 @@ function DecomposeModal({ boardId, onDone }: { boardId: string; onDone: () => vo
         <Button variant="primary" onClick={() => void preview()} disabled={busy !== null || !objective.trim()}>
           {busy === "preview" ? "Planning…" : plan ? "Re-plan" : "Preview plan"}
         </Button>
-        <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
+        <span className="text-step--2 text-[var(--faint)]">
           Preview creates nothing. You review before any task exists.
         </span>
       </div>
 
       {error ? (
-        <div className="mb-3 rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-[var(--step-minus-1)] text-[var(--danger)]" role="alert">
+        <div className="mb-3 rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-step--1 text-[var(--danger)]" role="alert">
           {error}
           {needsApproval ? (
             <div className="mt-1.5">
@@ -510,7 +510,7 @@ function DecomposeModal({ boardId, onDone }: { boardId: string; onDone: () => vo
             {plan.tasks.map((task, idx) => (
               <div key={idx} className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-2.5">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="mono text-[var(--step-minus-2)] text-[var(--faint)]">
+                  <span className="mono text-step--2 text-[var(--faint)]">
                     step {idx}
                     {task.depends_on.length > 0 ? ` · after ${task.depends_on.join(", ")}` : ""}
                   </span>
@@ -555,7 +555,7 @@ function DecomposeModal({ boardId, onDone }: { boardId: string; onDone: () => vo
             >
               {busy === "materialize" ? "Creating…" : "Approve & create tasks"}
             </Button>
-            <span className="text-[var(--step-minus-2)] text-[var(--faint)]">
+            <span className="text-step--2 text-[var(--faint)]">
               Creates exactly these steps. No second model call.
             </span>
           </div>

@@ -73,7 +73,7 @@ export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenT
                   <StatusBadge status={task.status} />
                   {task.blocked_reason ? (
                     <div
-                      className="mt-0.5 max-w-[12rem] truncate text-[var(--step-minus-2)] text-[var(--muted)]"
+                      className="mt-0.5 max-w-[12rem] truncate text-step--2 text-[var(--muted)]"
                       title={task.blocked_reason}
                     >
                       {task.blocked_reason}
@@ -95,7 +95,7 @@ export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenT
                 </td>
                 <td className={TABLE_TD}>
                   <div
-                    className="mono max-w-[16rem] truncate text-[var(--step-minus-1)] text-[var(--muted)]"
+                    className="mono max-w-[16rem] truncate text-step--1 text-[var(--muted)]"
                     title={task.command || undefined}
                   >
                     {task.command || "—"}

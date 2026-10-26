@@ -42,7 +42,7 @@ export function FacePicker({ value, onChange, compact = false }: FacePickerProps
           />
         </div>
         <div className="min-w-0 flex-1">
-          <dl className="text-[var(--step-minus-1)]">
+          <dl className="text-step--1">
             {[
               ["Body", SHAPE_LABELS[value.shape]],
               ["Colour", COLOR_LABELS[value.color]],
@@ -65,7 +65,7 @@ export function FacePicker({ value, onChange, compact = false }: FacePickerProps
             <button
               type="button"
               onClick={() => onChange(randomFace(Math.random, value))}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1 text-[var(--step-minus-1)] text-[var(--text-soft)] transition-colors hover:border-[var(--border-focus)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1 text-step--1 text-[var(--text-soft)] transition-colors hover:border-[var(--border-focus)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
             >
               <span aria-hidden="true" className="text-[var(--accent)]">
                 ✦
@@ -77,7 +77,7 @@ export function FacePicker({ value, onChange, compact = false }: FacePickerProps
       </div>
 
       <fieldset>
-        <legend className="mb-2 text-[var(--step-minus-2)] font-medium uppercase tracking-[0.16em] text-[var(--faint)]">
+        <legend className="mb-2 text-step--2 font-medium uppercase tracking-[0.16em] text-[var(--faint)]">
           Body
         </legend>
         <div className="flex flex-wrap gap-1.5">
@@ -109,7 +109,7 @@ export function FacePicker({ value, onChange, compact = false }: FacePickerProps
       </fieldset>
 
       <fieldset>
-        <legend className="mb-2 text-[var(--step-minus-2)] font-medium uppercase tracking-[0.16em] text-[var(--faint)]">
+        <legend className="mb-2 text-step--2 font-medium uppercase tracking-[0.16em] text-[var(--faint)]">
           Colour
         </legend>
         <div className="flex flex-wrap gap-1.5">
@@ -137,7 +137,7 @@ export function FacePicker({ value, onChange, compact = false }: FacePickerProps
       </fieldset>
 
       <fieldset>
-        <legend className="mb-2 text-[var(--step-minus-2)] font-medium uppercase tracking-[0.16em] text-[var(--faint)]">
+        <legend className="mb-2 text-step--2 font-medium uppercase tracking-[0.16em] text-[var(--faint)]">
           Expression
         </legend>
         <div className="flex flex-wrap gap-1.5">
