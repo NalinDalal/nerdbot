@@ -2,13 +2,14 @@ import { useEffect, useState, useRef } from "react";
 import { toast } from "sonner";
 import { api, ApiError } from "./api";
 import { notifyError, navigate } from "./app";
-import type { ChatMessage, ChatThread, Teammate } from "./types";
+import type { ChatMessage, ChatThread, Provider, Project, ProjectCounts, Teammate } from "./types";
 import { AttentionBanner, useWorkspaceSummary } from "./views-home";
 import {
   EmptyState,
   ErrorState,
   LoadingState,
   Modal,
+  ShortId,
   BotFace,
   Button,
   Field,
@@ -1098,6 +1099,202 @@ function ContextPanel({
   );
 }
 
+/* --- Getting Started (Home discovery path) --- */
+
+/** A single step in the getting-started path. Each step tells the owner
+ *  what exists, what they can do, and how to do it. */
+function GettingStartedStep({
+  number,
+  title,
+  description,
+  cta,
+  done,
+  onClick,
+}: {
+  number: number;
+  title: string;
+  description: string;
+  cta: string;
+  done: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <div className="flex gap-3 p-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] transition-colors hover:border-[var(--faint)]">
+      <div
+        className={`shrink-0 flex items-center justify-center w-6 h-6 rounded-full border border-transparent font-medium text-step--1 ${
+          done
+            ? "bg-[var(--accent)] text-[var(--text-inverse)] border-[var(--accent)]"
+            : "bg-[var(--surface-2)] text-[var(--muted)] border-[var(--border)]"
+        }`}
+      >
+        {done ? "✓" : String(number)}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className={`font-medium text-step-0 ${
+          done ? "text-[var(--text)]" : "text-[var(--text-soft)]"
+        }`}>
+          {title}
+        </div>
+        <div className="mt-0.5 text-step--1 text-[var(--muted)] leading-relaxed">
+          {description}
+        </div>
+      </div>
+      <Button
+        variant="primary"
+        disabled={done}
+        onClick={onClick}
+        className={done ? "opacity-50 pointer-events-none" : ""}
+      >
+        {done ? "Done" : cta}
+      </Button>
+    </div>
+  );
+}
+
+const providerIsUsable = (provider: Provider): boolean => {
+  if (provider.kind !== "openai-compatible") return true;
+  const config = provider.config ?? {};
+  return (
+    (typeof config.base_url === "string" && config.base_url.trim() !== "") ||
+    typeof config.api_key === "string" ||
+    typeof config.api_key_env === "string"
+  );
+};
+
+interface GettingStartedStepsProps {
+  workspaces: Project[];
+  counts: Record<string, ProjectCounts>;
+  bots: Teammate[];
+  providersByProject: Record<string, Provider[]>;
+  onCreateWorkspace: () => void;
+  onConnectModel: (projectId: string) => void;
+  onCreateBot: () => void;
+  onNewTask: () => void;
+}
+
+/** Numbered onboarding path. Every step is honest about what exists and
+ *  what the owner should do next. Skips steps that are already done. */
+function GettingStartedSteps({
+  workspaces,
+  counts,
+  bots,
+  providersByProject,
+  onCreateWorkspace,
+  onConnectModel,
+  onCreateBot,
+  onNewTask,
+}: GettingStartedStepsProps) {
+  const allProviders = Object.values(providersByProject).flat();
+  const usableProviders = allProviders.filter(providerIsUsable);
+  const hasWorkspace = workspaces.length > 0;
+  const hasModel = usableProviders.length > 0;
+  const hasBot = bots.length > 0;
+  const totalTasks = Object.values(counts).reduce((sum, c) => sum + c.tasks, 0);
+
+  const steps = [
+    {
+      id: "workspace" as const,
+      number: 1,
+      done: hasWorkspace,
+      title: "Create a workspace",
+      description: "Workspaces keep your bots, tasks, and files separate.",
+      cta: "Create workspace",
+      show: !hasWorkspace,
+      onClick: onCreateWorkspace,
+    },
+    {
+      id: "model" as const,
+      number: 2,
+      done: hasModel,
+      title: "Connect a model",
+      description:
+        "Bots need a model to think with. Connect one to your workspace.",
+      cta: "Connect model",
+      show: hasWorkspace && !hasModel,
+      onClick: () => onConnectModel(workspaces[0]?.id ?? ""),
+    },
+    {
+      id: "bot" as const,
+      number: 3,
+      done: hasBot,
+      title: "Create a bot",
+      description: "Bots are your AI teammates. Give one a persona and a model.",
+      cta: "Create bot",
+      show: hasModel && !hasBot,
+      onClick: onCreateBot,
+    },
+    {
+      id: "task" as const,
+      number: 4,
+      done: true,
+      title: "Start working",
+      description: "Create a task and a bot will pick it up.",
+      cta: "New task",
+      show: true,
+      onClick: onNewTask,
+    },
+  ].filter((s) => s.show);
+
+  const setupComplete = hasWorkspace && hasModel && hasBot;
+
+  return (
+    <div className="mb-6">
+      <div className="mb-4 flex items-baseline justify-between gap-3">
+        <div>
+          <div className="text-step--2 uppercase tracking-[0.14em] text-[var(--faint)]">
+            Getting started
+          </div>
+          <div className="text-step-0 font-semibold text-[var(--text)]">
+            {setupComplete
+              ? "Setup complete — you're ready to work"
+              : `${steps.length - 1} step${steps.length - 1 === 1 ? "" : "s"} to go`}
+          </div>
+        </div>
+        {!setupComplete && (
+          <span className="mono text-step--2 text-[var(--faint)]">
+            Steps in order
+          </span>
+        )}
+      </div>
+
+      {setupComplete ? (
+        <div className="rounded-xl border border-[var(--accent)] bg-[var(--accent-dim)] px-4 py-3 text-step--1">
+          <div className="flex items-center gap-2">
+            <span className="text-[var(--accent)]">✓</span>
+            <span className="font-medium text-[var(--text)]">Everything is connected.</span>
+          </div>
+          <div className="mt-1 text-step--1 text-[var(--muted)]">
+            Create a task from Work, or start a conversation above.
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-2">{steps.map((step) => (
+          <GettingStartedStep key={step.id} {...step} />
+        ))}</div>
+      )}
+
+      {/* What exists right now */}
+      <div className="mt-5 grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <StatStripItem label="Workspaces" value={workspaces.length} />
+        <StatStripItem label="Bots" value={bots.length} />
+        <StatStripItem label="Models" value={usableProviders.length} />
+        <StatStripItem label="Tasks" value={totalTasks} />
+      </div>
+    </div>
+  );
+}
+
+function StatStripItem({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3 text-center">
+      <div className="text-step-1 font-semibold text-[var(--text)] tabular-nums">
+        {value}
+      </div>
+      <div className="mt-0.5 text-step--2 text-[var(--muted)]">{label}</div>
+    </div>
+  );
+}
+
 /* --- Command Center (Home landing) --- */
 
 function CommandCenter({
@@ -1129,6 +1326,29 @@ function CommandCenter({
   const isMockModel = providers.some(
     (p) => p.kind === "mock" && (p.id === selectedProviderId || selectedProviderId === "__default__"),
   );
+
+  /* Discovery data for the getting-started path: what workspaces exist,
+   * which bots are available, and which models are connected. */
+  const workspacesLoader = useAsync(() => api.listProjects(), []);
+  const botsLoader = useAsync(() => api.listAllTeammates(), []);
+  const workspaces = workspacesLoader.data?.projects ?? [];
+  const counts = workspacesLoader.data?.counts ?? {};
+  const bots = botsLoader.data?.teammates ?? [];
+
+  const providersByProjectLoader = useAsync(async () => {
+    const result: Record<string, Provider[]> = {};
+    for (const project of workspaces) {
+      try {
+        const res = await api.listProviders(project.id);
+        result[project.id] = res.providers;
+      } catch {
+        result[project.id] = [];
+      }
+    }
+    return result;
+  }, [workspaces]);
+  const providersByProject = providersByProjectLoader.data ?? {};
+
   const [busy, setBusy] = useState(false);
   const [streaming, setStreaming] = useState("");
   const abortRef = useRef<AbortController | null>(null);
@@ -1193,6 +1413,23 @@ function CommandCenter({
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto flex w-full max-w-[860px] flex-col gap-6 px-4 py-8 md:px-6">
         {/* The workspace banner renders once above this pane (ConversationView). */}
+
+        {/* Getting-started path: tells the owner what exists, what they can
+            do, and how to do it. Shown above the composer so it is the first
+            thing a new user sees. */}
+        <GettingStartedSteps
+          workspaces={workspaces}
+          counts={counts}
+          bots={bots}
+          providersByProject={providersByProject}
+          onCreateWorkspace={() => {
+            // Handled by SettingsView's New Workspace modal; navigate there.
+            navigate("#/settings");
+          }}
+          onConnectModel={(projectId) => navigate("#/settings")}
+          onCreateBot={() => navigate("#/bots")}
+          onNewTask={() => navigate("#/work")}
+        />
 
         {/* Landing composer */}
         <div className="scroll-mt-6">

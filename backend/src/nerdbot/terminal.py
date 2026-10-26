@@ -12,7 +12,6 @@ reconnecting useful; the full transcript is deliberately not persisted.
 
 from __future__ import annotations
 
-import errno
 import fcntl
 import os
 import pty
@@ -36,7 +35,7 @@ MAX_SESSIONS = 12
 DEFAULT_COLS = 120
 DEFAULT_ROWS = 32
 
-_SESSIONS: dict[str, "TerminalSession"] = {}
+_SESSIONS: dict[str, TerminalSession] = {}
 _SESSIONS_LOCK = threading.Lock()
 
 

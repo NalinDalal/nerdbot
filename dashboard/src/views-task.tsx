@@ -646,8 +646,8 @@ export function TaskDetailView({
                     {delegationRows.map((d) => {
                       const pending = d.status === "pending";
                       const open = d.status === "pending" || d.status === "accepted";
-                      const fromName = teammates.data?.teammates.find((m) => m.id === d.from_teammate_id)?.persona || d.from_teammate_id.slice(0, 10);
-                      const toName = teammates.data?.teammates.find((m) => m.id === d.to_teammate_id)?.persona || d.to_teammate_id.slice(0, 10);
+                      const fromName = teammates.data?.teammates.find((m) => m.id === d.from_teammate_id)?.persona || <ShortId id={d.from_teammate_id} />;
+                      const toName = teammates.data?.teammates.find((m) => m.id === d.to_teammate_id)?.persona || <ShortId id={d.to_teammate_id} />;
                       return (
                         <tr key={d.id} className="transition-colors hover:bg-[var(--surface-2)]">
                           <td className={`${TD} mono text-[var(--text-soft)]`}>{fromName}</td>
@@ -755,7 +755,7 @@ export function TaskDetailView({
                         <span className="text-[var(--text-soft)]">{child.description || "Untitled"}</span>{" "}
                         <span className="mono text-step--2 text-[var(--faint)]">
                           via {link
-                            ? `${teammates.data?.teammates.find((m) => m.id === link.to_teammate_id)?.persona || link.to_teammate_id.slice(0, 10)} · ${link.status}`
+                            ? `${teammates.data?.teammates.find((m) => m.id === link.to_teammate_id)?.persona || <ShortId id={link.to_teammate_id} />} · ${link.status}`
                             : "delegation"}
                         </span>
                       </span>
@@ -813,9 +813,9 @@ export function TaskDetailView({
           <div className="flex flex-col gap-2">
             {reviews.map((review) => (
               <div key={review.id} className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="mono text-step--2 text-[var(--faint)]">{review.id}</span>
-                  <StatusBadge status={review.verdict} />
+                  <div className="flex items-center justify-between gap-2">
+                    <ShortId id={review.id} />
+                    <StatusBadge status={review.verdict} />
                 </div>
                 <div className="mt-1.5 text-step--1 text-[var(--text-soft)]">
                   {review.notes || "No notes"}

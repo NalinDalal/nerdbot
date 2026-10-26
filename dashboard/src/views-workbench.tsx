@@ -1213,7 +1213,7 @@ export function WorkbenchView() {
                 title="No bots in this workspace"
                 hint="Bots join from Fleet. They can pick up tasks you create here."
               >
-                <Button onClick={() => navigate("#/bots")}>Open Fleet</Button>
+                <Button onClick={() => navigate("#/bots")}>Open Agents</Button>
               </PanelEmpty>
             ) : (
               <ul aria-label="Workspace bots">

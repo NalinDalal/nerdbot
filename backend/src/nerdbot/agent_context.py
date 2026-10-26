@@ -14,7 +14,8 @@ import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from . import gates, persona as persona_mod, store
+from . import gates, store
+from . import persona as persona_mod
 from .models import (
     Approval,
     BoardMessage,

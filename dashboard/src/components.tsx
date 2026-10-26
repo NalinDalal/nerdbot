@@ -520,7 +520,7 @@ export function EmptyState({ title, hint, action }: { title: string; hint?: stri
 
 export function LoadingState({ lines = 3 }: { lines?: number }) {
   return (
-    <div aria-label="Loading" className="flex flex-col gap-1.5">
+    <div role="status" aria-label="Loading" aria-live="polite" className="flex flex-col gap-1.5">
       {Array.from({ length: lines }).map((_, i) => (
         <div key={i} className="h-3.5 w-full rounded-sm bg-[var(--surface-2)] animate-shimmer" />
       ))}
@@ -531,7 +531,10 @@ export function LoadingState({ lines = 3 }: { lines?: number }) {
 export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
   const message = describeError(error);
   return (
-    <div className="rounded-lg border border-[var(--danger)] bg-[var(--danger-dim)] px-4 py-3 text-step-0">
+    <div
+      role="alert"
+      className="rounded-lg border border-[var(--danger)] bg-[var(--danger-dim)] px-4 py-3 text-step-0"
+    >
       <div>{message}</div>
       {onRetry ? (
         <div className="mt-3">

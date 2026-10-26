@@ -15,7 +15,9 @@ npm test         # mocked API contract tests (no network, no backend needed)
 ```
 
 Configure the API base URL and paste the bearer token on the connect
-screen. The token lives in memory only and is cleared on disconnect.
+screen. The session (base URL + token) is persisted to this browser's
+`localStorage` under `nerdbot.session`, so a reload stays connected;
+Disconnect removes it.
 
 ## Deployment note
 
@@ -26,8 +28,10 @@ Direct API use via curl is unaffected.
 
 ## Security rules enforced in this UI
 
-- Token: memory-only React state + module scope. Never `localStorage`,
-  never in URLs, never logged.
+- Token: React state + module scope, persisted to this browser's
+  `localStorage` (`nerdbot.session`) so a reload stays connected.
+  Disconnect removes the key. Never in URLs, never logged. This is a
+  single-owner local UI — do not use a shared browser profile.
 - Provider secrets: create form uses password inputs; list views render a
   client-side mask over secret-shaped keys even though the server already
   redacts them; secret values are never put in URLs or logs.

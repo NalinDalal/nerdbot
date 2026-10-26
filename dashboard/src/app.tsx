@@ -126,8 +126,7 @@ const NAV_ITEMS: Array<{
 }> = [
   { label: "Home", routes: ["home"], href: "#/" },
   { label: "Work", routes: ["work", "task"], href: "#/work" },
-  { label: "Workbench", routes: ["workbench"], href: "#/workbench" },
-  { label: "Fleet", routes: ["bots", "bot"], href: "#/bots" },
+  { label: "Agents", routes: ["bots", "bot"], href: "#/bots" },
   { label: "Approvals", routes: ["approvals"], href: "#/approvals" },
   {
     label: "Settings",
@@ -140,6 +139,7 @@ const NAV_ITEMS: Array<{
       "teams",
       "team",
       "capabilities",
+      "workbench",
     ],
     href: "#/settings",
   },

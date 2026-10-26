@@ -11,6 +11,7 @@ import {
   ErrorState,
   LoadingState,
   Modal,
+  ShortId,
   StatusBadge,
   StatusDot,
   BotChip,
@@ -162,7 +163,7 @@ export function BotDetailView({
           }}
           className="mb-3 inline-flex items-center gap-1 text-step--1 text-[var(--muted)] transition-colors hover:text-[var(--text)]"
         >
-          <span aria-hidden>←</span> Fleet
+          <span aria-hidden>←</span> Agents
         </button>
         <div className="flex flex-wrap items-start gap-4">
           <BotAvatar
@@ -823,7 +824,7 @@ export function BotsView() {
   const provList: Provider[] = (providers.data as { providers: Provider[] } | null)?.providers ?? [];
 
   const projectOf = (botPid: string) =>
-    projList.find((p) => p.id === botPid)?.repository || botPid.slice(0, 10);
+    projList.find((p) => p.id === botPid)?.repository || botPid;
 
   const giveWorkSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1041,7 +1042,7 @@ export function BotsView() {
                 </div>
                 <dl className="flex flex-col gap-1.5 text-step--1">
                   {[
-                    ["Project", projList.find((p) => p.id === pid)?.repository || pid],
+                    ["Project", projList.find((p) => p.id === pid)?.repository || <ShortId id={pid} />],
                     ["Persona / name", persona],
                     ["Instructions", instructions || "Not set"],
                     ["Face", `${SHAPE_LABELS[face.shape]} · ${COLOR_LABELS[face.color]} · ${EXPRESSION_LABELS[face.expression]}`],
@@ -1049,8 +1050,8 @@ export function BotsView() {
                     ["Permissions", selectedPerms.length > 0 ? selectedPerms.join(", ") : "None"],
                     ["Memory scope", memoryScope],
                   ].map(([key, value]) => (
-                    <div
-                      key={key}
+                <div
+                  key={key as string}
                       className="flex items-baseline justify-between gap-4 border-b border-[var(--border-dim)] pb-1.5 last:border-0"
                     >
                       <dt className="shrink-0 text-[var(--faint)]">{key}</dt>
