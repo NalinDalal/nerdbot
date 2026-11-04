@@ -114,7 +114,7 @@ export function describeError(err: unknown): string {
   if (err instanceof ApiError) {
     const base = `Error ${err.status}: ${err.detail}`;
     return err.approval !== undefined
-      ? `${base} — approve it in the project's Approvals tab, then retry the same action.`
+      ? `${base}. Approve it in the project's Approvals tab, then retry the same action.`
       : base;
   }
   return String(err);

@@ -110,7 +110,7 @@ function GithubPreview({ projectId, onIngested }: { projectId: string; onIngeste
       {error ? <div className={ERROR_BOX} style={{ marginTop: 12 }}>{error}</div> : null}
       {preview ? (
         <div className={CARD_SHELL} style={{ marginTop: 12 }}>
-          <div className="text-[var(--muted)]" style={{ fontSize: 12 }}>Untrusted preview — confirm before ingesting.</div>
+          <div className="text-[var(--muted)]" style={{ fontSize: 12 }}>Untrusted preview. Confirm before ingesting.</div>
           <strong>{String(preview.title ?? "")}</strong>
           <div className="text-[var(--muted)]">{String(preview.body ?? "").slice(0, 400)}</div>
           <div style={{ marginTop: 12 }}>

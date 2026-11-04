@@ -14,7 +14,7 @@ export function ProvidersTab({ projectId }: { projectId: string }) {
         <div className={ERROR_BOX} style={{ marginBottom: 12 }}>
           No <code>NERDBOT_SECRET_KEY</code> on this server: pasting an API key will be
           refused (we never store keys in the clear). Start the server with a Fernet key to
-          enable BYOK — the <code>api_key_env</code> path keeps working meanwhile.
+          enable BYOK. The <code>api_key_env</code> path keeps working meanwhile.
         </div>
       ) : null}
       <div className="flex items-center gap-3" style={{ marginBottom: 12 }}>
@@ -272,7 +272,7 @@ function ProviderForm({ projectId, onDone }: { projectId?: string; onDone?: () =
       <Field label="Model (you can pick from the catalog after connecting)">
         <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="openai/gpt-oss-120b" />
       </Field>
-      <Field label="API key — stored Fernet-encrypted (server needs NERDBOT_SECRET_KEY)">
+      <Field label="API key: stored Fernet-encrypted (server needs NERDBOT_SECRET_KEY)">
         <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} autoComplete="off" />
       </Field>
       <Field label="Or env var name holding the key" >

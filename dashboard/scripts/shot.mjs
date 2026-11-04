@@ -19,7 +19,7 @@ for (const width of widths) {
       "nerdbot.session",
       JSON.stringify({ baseUrl: "http://127.0.0.1:8080", token: "dev-token-change-me" }),
     );
-    localStorage.setItem("nerdbot.theme", "dark");
+    localStorage.setItem("nerdbot.theme", process.env.THEME ?? "dark");
   });
   const page = await context.newPage();
   for (const route of routes) {

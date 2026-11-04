@@ -682,7 +682,7 @@ export function Button({
   ariaLabel?: string;
 }) {
   const base =
-    "inline-flex items-center justify-center gap-1.5 rounded-md border px-3 py-1.5 text-step--1 font-medium transition-colors disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-1 max-lg:min-h-11";
+    "inline-flex items-center justify-center gap-1.5 rounded-md border px-3 py-1.5 text-step--1 font-medium transition-[background-color,border-color,color,transform] duration-150 ease-out active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-1 max-lg:min-h-11";
   const variants: Record<string, string> = {
     default:
       "border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] hover:border-[var(--faint)] hover:text-[var(--text)]",

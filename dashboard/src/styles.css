@@ -1,9 +1,28 @@
 /* ===== Design tokens ===== */
+/* Self-hosted Geist (SIL OFL 1.1, license in public/fonts/OFL.txt). Variable
+ * weights, latin subset — the whole UI type system ships with the app and
+ * needs no third-party CDN: a self-hosted workspace must render correctly
+ * with no internet. */
+@font-face {
+  font-family: "Geist";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/geist-sans-variable.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/geist-mono-variable.woff2") format("woff2");
+}
+
 /* Dark theme (default) */
 :root {
   /* Typography */
   --font-sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
   /* Fluid type scale (clamp) */
   --step-minus-3: clamp(0.62rem, 0.6rem + 0.08vw, 0.68rem);

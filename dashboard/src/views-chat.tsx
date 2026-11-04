@@ -1364,7 +1364,7 @@ function GettingStartedSteps({
           </div>
           <div className="text-step-0 font-semibold text-[var(--text)]">
             {setupComplete
-              ? "Setup complete — you're ready to work"
+              ? "Setup complete. You're ready to work."
               : `${steps.length - 1} step${steps.length - 1 === 1 ? "" : "s"} to go`}
           </div>
         </div>
@@ -1382,7 +1382,7 @@ function GettingStartedSteps({
             <span className="font-medium text-[var(--text)]">Everything is connected.</span>
           </div>
           <div className="mt-1 text-step--1 text-[var(--muted)]">
-            Create a task from Work, or start a conversation above.
+            Create a task from Work, or start a conversation here.
           </div>
         </div>
       ) : (
@@ -1446,12 +1446,19 @@ function CommandCenter({
   const [draft, setDraft] = useState("");
   /* The owner's explicit choice wins; until they make one, start on the
      project's default model when it has one, otherwise on the first usable
-     model anywhere so Home is never disabled above a working machine. The
+     model anywhere so Home is never disabled above a working machine. A
+     real model beats a demo one when both exist: defaulting to canned
+     replies while a working model is connected is what let Home print
+     "Everything is connected" above "Demo mode" at the same time. The
      chosen model decides which project the thread belongs to. */
   const [explicitProviderId, setExplicitProviderId] = useState<string | null>(null);
   const homeHasProvider = providers.some((provider) => provider.project_id === projectId);
+  const realFirst = usable.filter((provider) => provider.kind !== "mock");
   const selectedProviderId =
-    explicitProviderId ?? (homeHasProvider ? "__default__" : (usable[0]?.id ?? "__default__"));
+    explicitProviderId ??
+    (homeHasProvider
+      ? "__default__"
+      : (realFirst[0]?.id ?? usable[0]?.id ?? "__default__"));
 
   // A mock provider answers with canned text and executes nothing. The reply
   // says so, and this says so too, so the interface can label it instead of

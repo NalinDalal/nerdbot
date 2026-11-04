@@ -1440,15 +1440,15 @@ export function WorkbenchView({
                 }
               >
                 {workspaceBusy
-                  ? "Run in progress — saving paused"
+                  ? "Run in progress. Saving paused."
                   : saving
                     ? "Saving…"
                     : fileLoading
                       ? "Opening…"
                       : isNewFile
-                        ? `Not on disk yet — ${MOD}+S creates it`
+                        ? `Not on disk yet. ${MOD}+S creates it`
                         : dirty
-                          ? `Unsaved changes — ${MOD}+S to save`
+                          ? `Unsaved changes. ${MOD}+S to save`
                           : loadedPath
                             ? "Saved"
                             : "No file open"}

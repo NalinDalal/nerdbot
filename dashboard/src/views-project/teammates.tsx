@@ -127,7 +127,7 @@ function BotCard({
                   ? "admin (approval-gated)"
                   : catalogue.byName.has(perm)
                     ? "agent permission"
-                    : "unknown permission — grants nothing"
+                    : "unknown permission, grants nothing"
               }
             >
               {perm}
@@ -151,14 +151,14 @@ function BotCard({
         ) : mate.provider_id ? (
           <>{mate.provider_id} (connection not found)</>
         ) : (
-          <span style={{ color: "#b58a00" }}>none — the bot cannot think until one is attached</span>
+          <span style={{ color: "#b58a00" }}>none, the bot cannot think until one is attached</span>
         )}
       </div>
       {showAttach ? (
         <Modal title={`Model for ${mate.persona || mate.id}`} onClose={() => setShowAttach(false)}>
           {providers.length === 0 ? (
             <div className={ERROR_BOX}>
-              This project has no model connections yet — create one under the{" "}
+              This project has no model connections yet. Create one under the{" "}
               <strong>Providers</strong> tab first.
             </div>
           ) : (
@@ -254,10 +254,10 @@ function PermissionsForm({ mate, onSaved }: { mate: TeammateT; onSaved: () => vo
         }
       }}
     >
-      <Field label="Memory scope — where this bot may read and write memory">
+      <Field label="Memory scope: where this bot may read and write memory">
         <select value={memoryScope} onChange={(e) => setMemoryScope(e.target.value)}>
-          <option value="teammate">teammate — only its own memory</option>
-          <option value="project">project — shared workspace memory</option>
+          <option value="teammate">teammate: only its own memory</option>
+          <option value="project">project: shared workspace memory</option>
         </select>
       </Field>
       {catalogue.loading ? (
@@ -384,7 +384,7 @@ function BotForm({
           placeholder="coder"
         />
       </Field>
-      <Field label="Instructions — how it should behave">
+      <Field label="Instructions: how it should behave">
         <textarea
           rows={3}
           value={instructions}
@@ -399,12 +399,12 @@ function BotForm({
           placeholder="code, review"
         />
       </Field>
-      <Field label="Face — the bot's own, changeable later">
+      <Field label="Face: the bot's own, changeable later">
         <FacePicker value={face} onChange={setFace} compact />
       </Field>
       <Field label="Model connection (change or detach later)">
         {providers.length === 0 ? (
-          <div className="text-[var(--muted)]">No connections in this project yet — attach one after creating the bot.</div>
+          <div className="text-[var(--muted)]">No connections in this project yet. Attach one after creating the bot.</div>
         ) : (
           <select value={providerId} onChange={(e) => setProviderId(e.target.value)}>
             <option value="">(attach later)</option>
