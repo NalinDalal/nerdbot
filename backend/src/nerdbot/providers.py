@@ -206,7 +206,11 @@ def _prompt_text(command: str, context: Any | None) -> str:
     if text:
         return text
     task = getattr(context, "task", None)
-    return str(getattr(task, "description", "") or "").strip()
+    for attr in ("description", "title"):
+        value = getattr(task, attr, "") if task is not None else ""
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def _emit_progress(context: Any | None, kind: str, text: str) -> None:
@@ -612,7 +616,7 @@ def provider_block_reason(provider: Provider | None) -> str | None:
     task is never handed to a provider that cannot run it.
     """
     if provider is None:
-        return None
+        return "no model configured for this teammate or project"
     if provider.status != ProviderStatus.ACTIVE:
         return f"provider is {provider.status.value}"
     if provider.kind == ProviderKind.OPENAI_COMPATIBLE:
@@ -635,6 +639,12 @@ def resolve_run_provider(
     caller must record a blocked run instead of executing.
     """
     provider = store.get_provider(conn, task_owner_provider_id) if task_owner_provider_id else None
+    if provider is None:
+        # Project-level default: first active provider in this project.
+        for candidate in store.list_providers(conn, project_id):
+            if candidate.status == ProviderStatus.ACTIVE:
+                provider = candidate
+                break
     if provider is not None and provider.project_id != project_id:
         return provider, LocalRuntimeAdapter(), "provider belongs to another project"
     reason = provider_block_reason(provider)
