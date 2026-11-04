@@ -48,6 +48,12 @@ Projects are optional contexts. General assistant chats use your default Home co
 - Run a task; each run produces output, exit code, and artifacts.
 - Retry creates a new run, never a new task.
 - View runs, artifacts, workspace files, diffs, reviews, PR packages, and the delegation tree.
+- Run execution streams live: the task page follows an open run event by
+  event (model turns, tool calls, results, cancellations) over
+  `GET /runs/{run_id}/events/stream`, resuming from the durable log after a
+  reload or reconnect and closing itself when the run ends. If the stream
+  transport is unavailable, the page falls back to polling the same events
+  every 2s.
 - Cancel running work; cancellation blocks pending delegations.
 
 ### Approvals (fail-closed)
@@ -163,7 +169,7 @@ curl -H "Authorization: Bearer $NERDBOT_TOKEN" \
 ### Backend
 
 ```bash
-uv run pytest -q                 # 441 tests
+uv run pytest -q                 # 474 tests
 uv run ruff check backend/src/ tests/
 uv run mypy
 ```
@@ -172,7 +178,7 @@ uv run mypy
 
 ```bash
 cd dashboard
-npm run test        # vitest (69 tests)
+npm run test        # vitest (126 tests)
 npm run lint        # eslint
 npx tsc --noEmit    # typecheck
 npm run build       # tsc + vite → dist/
@@ -222,6 +228,8 @@ cd dashboard && npm run test && npm run lint && npx tsc --noEmit && npm run buil
 **Provider chat fails.** Confirm the provider is active, has `base_url` and `api_key` (or `api_key_env`), and the model is set. Use `/providers/<id>/models` to verify upstream reachability. Check `NERDBOT_SECRET_KEY` is set if you stored encrypted keys.
 
 **Port already in use.** The API defaults to port 8080. The dashboard dev server defaults to 5173. Change either via environment or vite config if another service occupies them.
+
+**Run events show "live · refreshes every 2s" instead of "live · stream".** The task page fell back to polling because the API server is running an older build without `GET /runs/{run_id}/events/stream`. Restart the server (`uv run nerdbot run`) and reload the page.
 
 **Workspace access denied.** Every chat and project endpoint enforces project ownership server-side. You can only access projects and teammates you own. Home is auto-created for your principal on first access.
 

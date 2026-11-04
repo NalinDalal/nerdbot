@@ -1,9 +1,9 @@
 import { toast } from "sonner";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { api } from "./api";
 import { notifyError } from "./app";
-import type { Run } from "./types";
+import type { Run, RunEvent } from "./types";
 import {
   ApprovalRow,
   Badge,
@@ -103,6 +103,152 @@ function RunsTable({ runs }: { runs: Run[] }) {
   );
 }
 
+const TERMINAL_RUN_STATUSES = new Set([
+  "succeeded",
+  "failed",
+  "stopped",
+  "cancelled",
+  "blocked",
+]);
+
+/** The run's event stream, appended as it happens.
+ *
+ *  A run is not a spinner: the server records ordered events (model turns,
+ *  tool calls, approvals). The page opens the replayable SSE stream from the
+ *  end of its history — live events arrive as they are recorded, and the
+ *  stream closes itself when the run is terminal. If the stream transport is
+ *  unavailable (an older server, a proxy that buffers SSE), the component
+ *  falls back to the same endpoint polled every 2s, so the timeline is live
+ *  either way, including after a refresh. */
+function RunTimeline({ run, live }: { run: Run; live: boolean }) {
+  const [events, setEvents] = useState<RunEvent[]>([]);
+  const [error, setError] = useState<unknown>(null);
+  /** true: SSE connected · false: polling fallback · null: not connected yet */
+  const [transport, setTransport] = useState<"stream" | "poll" | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let next = 0;
+
+    /* Events are ordered by seq; a stream reconnect (or a stream/poll pump
+       racing in the same tick) may hand back a seq already appended. */
+    const append = (items: RunEvent[]) => {
+      setEvents((prev) => {
+        const fresh = items.filter((event) => event.seq > next);
+        if (fresh.length === 0) return prev;
+        next = Math.max(next, fresh[fresh.length - 1].seq);
+        return [...prev, ...fresh];
+      });
+    };
+
+    const poll = () => {
+      setTransport("poll");
+      timer = setTimeout(async () => {
+        try {
+          const page = await api.runEvents(run.id, next);
+          if (cancelled) return;
+          append(page.events);
+          const finished =
+            TERMINAL_RUN_STATUSES.has(page.run.status) || !!page.run.finished_at;
+          if (finished) return;
+          poll();
+        } catch (err) {
+          if (!cancelled) setError(err);
+        }
+      }, 2000);
+    };
+
+    void (async () => {
+      try {
+        const page = await api.runEvents(run.id, 0);
+        if (cancelled) return;
+        append(page.events);
+        next = Math.max(next, page.next);
+        const finished =
+          TERMINAL_RUN_STATUSES.has(page.run.status) || !!page.run.finished_at;
+        if (!live || finished) return;
+        try {
+          setTransport("stream");
+          await api.streamRunEvents(run.id, next, {
+            onEvent: (event) => {
+              if (!cancelled) append([event]);
+            },
+            onEnd: () => {
+              if (!cancelled) setTransport(null);
+            },
+          });
+          /* The stream resolved; its end frame already reset the transport. */
+        } catch {
+          if (cancelled) return;
+          poll();
+        }
+      } catch (err) {
+        if (!cancelled) setError(err);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [run.id, live]);
+
+  return (
+    <section className="mb-6">
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+        <SectionLabel>Execution timeline</SectionLabel>
+        <span className="text-step--2 text-[var(--faint)]">
+          {live
+            ? transport === "stream"
+              ? "live · stream"
+              : transport === "poll"
+                ? "live · refreshes every 2s"
+                : `${events.length} event${events.length === 1 ? "" : "s"}`
+            : `${events.length} event${events.length === 1 ? "" : "s"}`}
+        </span>
+      </div>
+      <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
+        {error ? (
+          <div className="px-4 py-3">
+            <ErrorState error={error} onRetry={() => setError(null)} />
+          </div>
+        ) : events.length === 0 ? (
+          <p className="px-4 py-4 text-step--1 text-[var(--muted)]">
+            {live ? "Waiting for the first event…" : "This run recorded no events."}
+          </p>
+        ) : (
+          <ol className="max-h-[22rem] overflow-y-auto">
+            {events.map((event, index) => (
+              <li
+                key={`${event.seq}-${index}`}
+                className={`flex gap-3 px-4 py-2.5 ${
+                  index > 0 ? "border-t border-[var(--border-dim)]" : ""
+                }`}
+              >
+                <span className="mono w-8 shrink-0 pt-0.5 text-step--2 text-[var(--faint)]">
+                  {event.seq}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="mb-0.5 block text-step--2 font-medium uppercase tracking-[0.12em] text-[var(--faint)]">
+                    {event.kind}
+                  </span>
+                  <span className="block whitespace-pre-wrap break-words text-step--1 text-[var(--text-soft)]">
+                    {event.content}
+                  </span>
+                </span>
+                <span className="mono shrink-0 pt-0.5 text-step--2 text-[var(--faint)]">
+                  {relativeTime(event.timestamp)}
+                </span>
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
+    </section>
+  );
+}
+
 export function TaskDetailView({
   projectId,
   taskId,
@@ -119,8 +265,48 @@ export function TaskDetailView({
   const [showPackage, setShowPackage] = useState(false);
   const [showKnowledge, setShowKnowledge] = useState(false);
   const [rollup, setRollup] = useState<Record<string, unknown> | null>(null);
+  const [assignDraft, setAssignDraft] = useState<string | null>(null);
+  const [delegateTo, setDelegateTo] = useState("");
+  const [delegateReason, setDelegateReason] = useState("");
+  const [delegateDepth, setDelegateDepth] = useState("1");
+  const [reviewVerdict, setReviewVerdict] = useState("accepted");
+  const [reviewNotes, setReviewNotes] = useState("");
+  const [reviewRisks, setReviewRisks] = useState("");
+  const [reviewerId, setReviewerId] = useState("");
+  const [watch, setWatch] = useState(false);
+  const [pollTick, setPollTick] = useState(0);
+  const watchTicks = useRef(0);
   const teammates = useAsync(() => api.listTeammates(projectId), [projectId]);
   const delegations = useAsync(() => api.listTaskDelegations(taskId), [taskId]);
+  const projects = useAsync(() => api.listProjects(), [projectId]);
+
+  /* A task in flight is followed by polling, not by holding the request open.
+     The server records the run; this page just reads it back. A run started
+     here is watched even before the task flips to `running`, so a fast
+     transition cannot leave the page frozen on `pending`. The tick counter
+     drives the loop; every stop condition is derived, never written back
+     into state from inside the effect. */
+  const viewData = view.data;
+  const reloadView = view.reload;
+  useEffect(() => {
+    if (!viewData) return;
+    const taskRunning = viewData.task.status === "running";
+    const runRunning = viewData.runs.some(
+      (run) => run.status === "running" || run.status === "queued",
+    );
+    const terminal = ["done", "failed", "cancelled", "blocked"].includes(
+      viewData.task.status,
+    );
+    if (terminal) return;
+    if (!watch && !taskRunning && !runRunning) return;
+    if (watch && watchTicks.current >= 80) return;
+    const timer = setTimeout(() => {
+      if (watch) watchTicks.current += 1;
+      reloadView();
+      setPollTick((count) => count + 1);
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [viewData, reloadView, watch, pollTick]);
 
   const act = async <T,>(label: string, fn: () => Promise<T>): Promise<T | null> => {
     setBusy(label);
@@ -137,20 +323,20 @@ export function TaskDetailView({
   };
 
   const delegate = async () => {
-    const toEl = document.getElementById("delegate-to") as HTMLSelectElement | null;
-    const reasonEl = document.getElementById("delegate-reason") as HTMLInputElement | null;
-    const depthEl = document.getElementById("delegate-depth") as HTMLInputElement | null;
-    const to = toEl?.value || null;
-    if (!toEl || !reasonEl || !to) return notifyError("Pick a bot to delegate to");
+    if (!delegateTo) {
+      notifyError("Pick a teammate to delegate to");
+      return;
+    }
     try {
       await api.delegateTask(taskId, {
-        from_teammate_id: task.owner_teammate_id ?? "",
-        to_teammate_id: to,
-        reason: reasonEl?.value || "",
-        depth: Number(depthEl?.value || 1),
+        from_teammate_id: view.data?.task.owner_teammate_id ?? "",
+        to_teammate_id: delegateTo,
+        reason: delegateReason.trim(),
+        depth: Number(delegateDepth || 1),
       });
-      toEl.value = "";
-      reasonEl.value = "";
+      setDelegateTo("");
+      setDelegateReason("");
+      setDelegateDepth("1");
       delegations.reload();
       view.reload();
     } catch (err) {
@@ -225,14 +411,42 @@ export function TaskDetailView({
       latestRun?.stderr?.trim() ||
       "",
   );
-  const runPrimary = () => void act("run", () => api.runTask(taskId));
+  const projectName =
+    projects.data?.projects.find((project) => project.id === task.project_id)
+      ?.repository || "Project";
+  const terminal = ["done", "failed", "cancelled"].includes(task.status);
+  /* A run started from this page keeps the page live until the task ends.
+     `watch` is the request; whether the button still reads "Running…" is
+     derived, so a finished task cannot leave a spinner behind. */
+  const watching = watch && !terminal;
+  /* The select follows the server unless the owner has changed it in this
+     session; no effect is needed to mirror the loaded task back into state. */
+  const assignTo = assignDraft ?? task.owner_teammate_id ?? "";
+  const runPrimary = () => {
+    if (terminal) {
+      void act("retry", async () => {
+        await api.retryTask(taskId);
+        toast.message("Retry started.");
+        return null;
+      });
+      return;
+    }
+    setWatch(true);
+    watchTicks.current = 0;
+    setPollTick((count) => count + 1);
+    void act("run", async () => {
+      await api.runTaskAsync(taskId);
+      toast.message("Run started. Watching progress…");
+      return null;
+    });
+  };
 
   return (
     <Page>
       <PageHeader
-        eyebrow="Task"
+        eyebrow={`${projectName} · Task`}
         title={heading}
-        back={{ label: "Work", onClick: onBack }}
+        back={{ label: projectName, onClick: onBack }}
         actions={
           <>
             <StatusBadge status={task.status} />
@@ -255,10 +469,14 @@ export function TaskDetailView({
                 {busy === "stop" ? "Stopping…" : "Stop run"}
               </Button>
             ) : (
-              <Button variant="primary" disabled={!!busy} onClick={runPrimary}>
-                {busy === "run"
+              <Button
+                variant="primary"
+                disabled={!!busy || watching || task.status === "running"}
+                onClick={runPrimary}
+              >
+                {busy === "run" || watching || task.status === "running"
                   ? "Running…"
-                  : ["done", "failed", "cancelled"].includes(task.status)
+                  : terminal
                     ? "Run again"
                     : "Run"}
               </Button>
@@ -394,6 +612,14 @@ export function TaskDetailView({
         )}
       </section>
 
+      {latestRun ? (
+        <RunTimeline
+          key={latestRun.id}
+          run={latestRun}
+          live={latestRun.status === "running" || latestRun.status === "queued" || watching}
+        />
+      ) : null}
+
       {pendingApprovals.length > 0 ? (
         <section className="mb-6">
           <div className="mb-2 flex items-center justify-between">
@@ -498,28 +724,30 @@ export function TaskDetailView({
           )}
           <div className="flex items-center gap-2">
             <select
-              id="assign-teammate"
               aria-label="Assign owner teammate"
-              key={teammates.data?.teammates.length ?? 0}
-              defaultValue={task.owner_teammate_id ?? ""}
+              value={assignTo}
+              onChange={(e) => setAssignDraft(e.target.value)}
               className={`${FORM_INPUT} max-w-[14rem]`}
             >
               <option value="">Unassigned</option>
               {teammates.data?.teammates.map((mate) => (
                 <option key={mate.id} value={mate.id}>
-                  {mate.persona || "Unnamed bot"}
+                  {mate.persona || "Unnamed teammate"}
                 </option>
               ))}
             </select>
             <Button
               variant="primary"
-              onClick={() => {
-                const el = document.getElementById("assign-teammate") as HTMLSelectElement | null;
-                const id = el?.value || null;
-                void api.assignTask(taskId, id).then(() => view.reload());
-              }}
+              disabled={!!busy || assignTo === (task.owner_teammate_id ?? "")}
+              onClick={() =>
+                void act("assign", async () => {
+                  await api.assignTask(taskId, assignTo || null);
+                  toast.success(assignTo ? "Owner updated." : "Task unassigned.");
+                  return null;
+                })
+              }
             >
-              Assign
+              {busy === "assign" ? "Saving…" : "Assign"}
             </Button>
           </div>
         </div>
@@ -527,24 +755,84 @@ export function TaskDetailView({
 
       {showReview ? (
         <Modal title="Submit review" onClose={() => setShowReview(false)}>
-          <EntityForm
-            submitLabel="Submit review"
-            fields={[
-              { name: "reviewer_teammate_id", label: "Reviewer teammate ID", required: true },
-              { name: "verdict", label: "Verdict", type: "select", options: ["accepted", "needs_work", "rejected"] },
-              { name: "notes", label: "Notes", type: "textarea" },
-              { name: "risks", label: "Risks (comma separated)" },
-              { name: "run_id", label: "Run ID (optional)", placeholder: latestRun?.id },
-            ]}
-            onSubmit={async (values) => {
-              await api.submitReview(taskId, {
-                ...values,
-                risks: values.risks.split(",").map((s) => s.trim()).filter(Boolean),
-                run_id: values.run_id || latestRun?.id || "",
+          <form
+            className="flex flex-col gap-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!reviewerId) {
+                notifyError("Pick the teammate who reviewed this work.");
+                return;
+              }
+              void act("review", async () => {
+                await api.submitReview(taskId, {
+                  reviewer_teammate_id: reviewerId,
+                  verdict: reviewVerdict,
+                  notes: reviewNotes,
+                  risks: reviewRisks
+                    .split(",")
+                    .map((item) => item.trim())
+                    .filter(Boolean),
+                  run_id: latestRun?.id ?? "",
+                });
+                setShowReview(false);
+                return null;
               });
-              setShowReview(false);
             }}
-          />
+          >
+            <label className="flex flex-col gap-1 text-step--1 text-[var(--muted)]">
+              Reviewer
+              <select
+                value={reviewerId}
+                onChange={(e) => setReviewerId(e.target.value)}
+                required
+                className={FORM_INPUT}
+              >
+                <option value="">(select a teammate)</option>
+                {teammates.data?.teammates.map((mate) => (
+                  <option key={mate.id} value={mate.id}>
+                    {mate.persona || "Unnamed teammate"}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-step--1 text-[var(--muted)]">
+              Verdict
+              <select
+                value={reviewVerdict}
+                onChange={(e) => setReviewVerdict(e.target.value)}
+                className={FORM_INPUT}
+              >
+                <option value="accepted">Accepted</option>
+                <option value="needs_work">Needs work</option>
+                <option value="rejected">Rejected</option>
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-step--1 text-[var(--muted)]">
+              Notes
+              <textarea
+                value={reviewNotes}
+                onChange={(e) => setReviewNotes(e.target.value)}
+                rows={3}
+                className={FORM_INPUT}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-step--1 text-[var(--muted)]">
+              Risks (comma separated)
+              <input
+                value={reviewRisks}
+                onChange={(e) => setReviewRisks(e.target.value)}
+                className={FORM_INPUT}
+              />
+            </label>
+            <div className="mt-1 flex justify-end gap-2">
+              <Button type="button" onClick={() => setShowReview(false)}>
+                Cancel
+              </Button>
+              <Button variant="primary" type="submit" disabled={!reviewerId || busy === "review"}>
+                {busy === "review" ? "Submitting…" : "Submit review"}
+              </Button>
+            </div>
+          </form>
         </Modal>
       ) : null}
       {showPackage ? (
@@ -598,31 +886,39 @@ export function TaskDetailView({
               Bounded depth (max 5), cycle-checked.
             </span>
           </div>
-          <form onSubmit={(e) => { e.preventDefault(); delegate(); }} className="flex flex-wrap items-end gap-2">
-            <select id="delegate-to" aria-label="Delegate to teammate" className={`${FORM_INPUT} max-w-[14rem]`}>
-              <option value="">Unassigned</option>
-              {teammates.data?.teammates.map((mate) => (
-                <option key={mate.id} value={mate.id}>
-                  {mate.persona || "Unnamed bot"}
-                </option>
-              ))}
+          <form onSubmit={(e) => { e.preventDefault(); void delegate(); }} className="flex flex-wrap items-end gap-2">
+            <select
+              aria-label="Delegate to teammate"
+              value={delegateTo}
+              onChange={(e) => setDelegateTo(e.target.value)}
+              className={`${FORM_INPUT} max-w-[14rem]`}
+            >
+              <option value="">Select a teammate</option>
+              {teammates.data?.teammates
+                .filter((mate) => mate.id !== task.owner_teammate_id)
+                .map((mate) => (
+                  <option key={mate.id} value={mate.id}>
+                    {mate.persona || "Unnamed teammate"}
+                  </option>
+                ))}
             </select>
             <input
-              id="delegate-reason"
               aria-label="Reason"
+              value={delegateReason}
+              onChange={(e) => setDelegateReason(e.target.value)}
               placeholder="Why hand off?"
               className={`${FORM_INPUT} min-w-56 flex-1`}
             />
             <input
-              id="delegate-depth"
               type="number"
               min="1"
               max="5"
-              defaultValue="1"
+              value={delegateDepth}
+              onChange={(e) => setDelegateDepth(e.target.value)}
               aria-label="Depth"
               className={`${FORM_INPUT} w-20`}
             />
-            <Button variant="primary" type="submit">
+            <Button variant="primary" type="submit" disabled={!delegateTo}>
               Delegate
             </Button>
           </form>
@@ -752,7 +1048,6 @@ export function TaskDetailView({
                         >
                           {child.description || "Untitled"}
                         </a>{" "}
-                        <span className="text-[var(--text-soft)]">{child.description || "Untitled"}</span>{" "}
                         <span className="mono text-step--2 text-[var(--faint)]">
                           via {link
                             ? `${teammates.data?.teammates.find((m) => m.id === link.to_teammate_id)?.persona || <ShortId id={link.to_teammate_id} />} · ${link.status}`
@@ -864,7 +1159,7 @@ export function TaskDetailView({
           href={`#/p/${projectId}`}
           className="text-[var(--muted)] hover:text-[var(--text)] hover:underline"
         >
-          Open workspace →
+          Open project →
         </a>
       </div>
     </Page>

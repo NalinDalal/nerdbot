@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.responses import Response
 
-from . import approval_flow, orchestrator, schemas, store
+from . import approval_flow, orchestrator, run_events, schemas, store
 from . import backup as backup_mod
 from . import boards as boards_mod
 from . import capabilities as capabilities_mod
@@ -60,6 +60,7 @@ from .models import (
     ProviderKind,
     ProviderStatus,
     ReviewVerdict,
+    RunStatus,
     TaskStatus,
     Teammate,
     TeammateStatus,
@@ -78,6 +79,20 @@ from .store import get_conn
 
 def _db_path() -> str:
     return os.environ.get("NERDBOT_DB", "nerdbot.db")
+
+
+#: Run statuses after which a live stream has nothing more to wait for.
+#: `awaiting_approval` is deliberately absent: the decision produces further
+#: events, and the stream stays open across it.
+TERMINAL_RUN_STATUS = frozenset(
+    {
+        RunStatus.SUCCEEDED,
+        RunStatus.FAILED,
+        RunStatus.BLOCKED,
+        RunStatus.STOPPED,
+        RunStatus.CANCELLED,
+    }
+)
 
 
 def _data_dir() -> str:
@@ -121,7 +136,7 @@ def _run_task_in_background(
             if task is not None:
                 runs = store.list_runs_for_task(conn, task_id)
                 if runs:
-                    store.append_run_event(
+                    orchestrator.emit_event(
                         conn,
                         runs[-1].id,
                         "error",
@@ -1647,6 +1662,108 @@ def create_app() -> FastAPI:
             "run": run.model_dump(mode="json"),
             "next": events[-1]["seq"] if events else after,
         }
+
+    @app.get("/runs/{run_id}/events/stream")
+    def stream_run_events(
+        run_id: str,
+        after: int = 0,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> StreamingResponse:
+        """Follow one run's events as they are written.
+
+        The durable log in SQLite is the source of truth. On connect the
+        stream replays every recorded event past ``after`` — so a client that
+        reconnects, or opens mid-run, resumes exactly where it left off —
+        and then relays live events from the orchestrator's broker. When the
+        run reaches a terminal state the remaining queued events are flushed
+        and the stream closes with an ``end`` frame, so the client never has
+        to guess whether the silence means "waiting" or "finished".
+
+        A run parked on an approval is *not* terminal; the stream stays open
+        across the decision, and the events the decision produces (including
+        the approval outcome) arrive live.
+        """
+        run = store.get_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        task = store.get_task(conn, run.task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="task not found")
+        require_project_owner(conn, task.project_id, principal)
+
+        # Subscribe BEFORE reading the durable log: an event broadcast between
+        # the two statements lands in the subscriber queue and is filtered out
+        # of the replay by the ``seq > last_seq`` drain, so no event can fall
+        # into the gap between "committed" and "subscribed". The reverse order
+        # would lose exactly those events.
+        subscriber = run_events.broker.subscribe(run_id, after)
+        replayed = store.list_run_events(conn, run_id, after=after)
+        last_seq = replayed[-1]["seq"] if replayed else after
+
+        def generate() -> Any:
+            nonlocal last_seq
+
+            def emit(event: dict[str, Any]) -> str:
+                return f"data: {json.dumps(event)}\n\n"
+
+            def drain(last: int) -> tuple[list[dict[str, Any]], int]:
+                """Take the queued (non-duplicate) events off the subscriber."""
+                items: list[dict[str, Any]] = []
+                while True:
+                    try:
+                        event = subscriber.queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    if event["seq"] > last:
+                        items.append(event)
+                        last = event["seq"]
+                return items, last
+
+            try:
+                for event in replayed:
+                    yield emit(event)
+                run_now = store.get_run(conn, run_id)
+                if run_now is None or run_now.status in TERMINAL_RUN_STATUS:
+                    # Everything the run recorded is already replayed above.
+                    yield emit({"type": "end"})
+                    return
+                while True:
+                    # Block until the next live event or the keepalive tick,
+                    # then re-check the run row: terminal state is owned by
+                    # SQLite, not by "the queue went quiet".
+                    got = True
+                    item: dict[str, Any] | None = None
+                    try:
+                        item = subscriber.queue.get(timeout=2.0)
+                    except queue.Empty:
+                        got = False
+                    current = last_seq
+                    fresh: list[dict[str, Any]] = []
+                    if got and item is not None and item["seq"] > current:
+                        fresh.append(item)
+                        current = item["seq"]
+                    more, current = drain(current)
+                    fresh.extend(more)
+                    last_seq = current
+                    for event in fresh:
+                        yield emit(event)
+                    if not got and not fresh:
+                        yield ": ping\n\n"
+                    run_now = store.get_run(conn, run_id)
+                    if run_now is None:  # pragma: no cover
+                        yield emit({"type": "end"})
+                        break
+                    if run_now.status in TERMINAL_RUN_STATUS:
+                        pending, last_seq = drain(last_seq)
+                        for event in pending:
+                            yield emit(event)
+                        yield emit({"type": "end"})
+                        break
+            finally:
+                run_events.broker.unsubscribe(run_id, subscriber)
+
+        return StreamingResponse(generate(), media_type="text/event-stream")
 
     @app.get("/artifacts/{artifact_id}")
     def get_artifact(

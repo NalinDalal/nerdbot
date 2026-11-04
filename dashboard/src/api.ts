@@ -26,6 +26,7 @@ import type {
   Provider,
   Review,
   Run,
+  RunEvent,
   RunEventPage,
   Schedule,
   Task,
@@ -550,7 +551,103 @@ export const api = {
     opts?: { signal?: AbortSignal },
   ): Promise<string> =>
     streamChat(threadId, content, onChunk, opts),
+  /** Live run execution: SSE that replays from ``after`` and closes on the
+   *  terminal state. Resolves true when the stream completed; any throw
+   *  means the caller should fall back to polling. */
+  streamRunEvents: (
+    runId: string,
+    after: number,
+    handlers: {
+      onEvent: (event: RunEvent) => void;
+      onEnd: () => void;
+    },
+    signal?: AbortSignal,
+  ): Promise<boolean> => streamRunEvents(runId, after, handlers, signal),
 };
+
+/** Follow one run's events over the SSE stream.
+ *
+ *  The stream replays the durable log from ``after``, relays live events,
+ *  and closes with an ``end`` frame when the run is terminal. Returns true
+ *  when the stream completed cleanly (the caller stops polling); throwing
+ *  means the caller should fall back to polling. */
+async function streamRunEvents(
+  runId: string,
+  after: number,
+  handlers: {
+    onEvent: (event: RunEvent) => void;
+    onEnd: () => void;
+  },
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const current = getSession();
+  if (!current) throw new ApiError(0, "Not connected. Enter your API token first.");
+  let res: Response;
+  try {
+    res = await fetch(
+      joinUrl(current.baseUrl, `/runs/${runId}/events/stream?after=${after}`),
+      {
+        headers: { Authorization: `Bearer ${current.token}` },
+        signal,
+      },
+    );
+  } catch (err) {
+    if ((err as { name?: string })?.name === "AbortError") return true;
+    throw new ApiError(
+      0,
+      err instanceof Error ? `Network error: ${err.message}` : "Network error",
+    );
+  }
+  if (!res.ok || !res.body) {
+    let detail = `Run stream failed (${res.status})`;
+    try {
+      const data = (await res.json()) as { detail?: unknown };
+      if (typeof data.detail === "string") detail = data.detail;
+    } catch {
+      /* keep default */
+    }
+    throw new ApiError(res.status, detail);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    let chunk: Awaited<ReturnType<typeof reader.read>>;
+    try {
+      chunk = await reader.read();
+    } catch (err) {
+      if ((err as { name?: string })?.name === "AbortError") return true;
+      throw err;
+    }
+    if (chunk.done) return true;
+    buffer += decoder.decode(chunk.value, { stream: true });
+    let boundary = buffer.indexOf("\n\n");
+    while (boundary >= 0) {
+      const block = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      const data = block
+        .split("\n")
+        .filter((line) => line.startsWith("data: "))
+        .map((line) => line.slice(6))
+        .join("\n");
+      if (data) {
+        try {
+          const event = JSON.parse(data) as { type?: string } & Partial<RunEvent>;
+          if (event.type === "end") {
+            handlers.onEnd();
+            return true;
+          }
+          if (typeof event.seq === "number" && typeof event.kind === "string") {
+            handlers.onEvent(event as RunEvent);
+          }
+        } catch {
+          /* a malformed frame is ignored, the stream continues */
+        }
+      }
+      boundary = buffer.indexOf("\n\n");
+    }
+  }
+}
 
 async function streamTerminal(
   projectId: string,
