@@ -232,7 +232,7 @@ def chat_complete(
         raise ProviderConfigurationError("chat provider needs model")
     api_key = resolve_api_key(config)
     if not api_key:
-        raise ProviderConfigurationError("chat provider needs api_key or api_key_env")
+        raise ProviderConfigurationError("chat provider is missing an API key: set api_key or api_key_env in provider settings")
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
     client = httpx.Client(base_url=base_url.rstrip("/"), timeout=timeout_s, transport=transport,
                           headers=headers)
@@ -299,7 +299,7 @@ def chat_stream(
         raise ProviderConfigurationError("chat provider needs model")
     api_key = resolve_api_key(config)
     if not api_key:
-        raise ProviderConfigurationError("chat provider needs api_key or api_key_env")
+        raise ProviderConfigurationError("chat provider is missing an API key: set api_key or api_key_env in provider settings")
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
     client = httpx.Client(base_url=base_url.rstrip("/"), timeout=timeout_s, transport=transport,
                           headers=headers)

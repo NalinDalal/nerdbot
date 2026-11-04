@@ -1,0 +1,13 @@
+services:
+  nerdbot:
+    build: .
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    volumes:
+      - nerdbot-data:/app/.nerdbot-data
+      - nerdbot-db:/app
+volumes:
+  nerdbot-data:
+  nerdbot-db:

@@ -1,6 +1,32 @@
 """Product API: REST endpoints for projects, teammates, tasks, runs, artifacts."""
 
 from __future__ import annotations
+import os as _os
+def _load_dotenv() -> None:
+    path = _os.path.join(_os.getcwd(), ".env")
+    try:
+        import sys as _sys
+        if "pytest" in _sys.modules:
+            return
+    except Exception:
+        pass
+    if not _os.path.isfile(path):
+        return
+    try:
+        with open(path) as f:
+            for line in f:
+                line=line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key,val=line.split("=",1)
+                key=key.strip()
+                val=val.strip().strip("'").strip('"')
+                if key and key not in _os.environ:
+                    _os.environ[key]=val
+    except OSError:
+        pass
+_load_dotenv()
+
 
 import json
 import os
