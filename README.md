@@ -61,7 +61,7 @@ Projects are optional contexts. General assistant chats use your default Home co
 - Three owner decisions: Reject, Approve once (one-use, consumed at execution), or Approve forever (reusable).
 - Approvals are enforced by the backend, not just UI buttons.
 - **A decision does the work.** When a bot asks for a privileged action, its run and task stop in `awaiting_approval` — they never report a success for work that has not happened. The request carries the exact tool call and its arguments, and approving carries that action out, once, as the same bot, with the permission checked again. Rejecting and expiring perform nothing and leave the work recoverable.
-- One inbox for every request, across workspaces: `#/approvals`, and the same panel on the task page. Expired requests are visible as expired, with the way to ask again. See `docs/decisions/0011-approval-workflow.md`.
+- One inbox for every request, across workspaces: `/approvals`, and the same panel on the task page. Expired requests are visible as expired, with the way to ask again. See `docs/decisions/0011-approval-workflow.md`.
 
 ### Providers
 - Model connections per project: OpenAI-compatible, local, or mock.

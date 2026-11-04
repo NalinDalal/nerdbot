@@ -13,7 +13,7 @@ await context.addInitScript(() => {
 const page = await context.newPage();
 for (const target of targets) {
   const [route, name, full] = target.split("|");
-  await page.goto(`http://127.0.0.1:5173/${route}`, { waitUntil: "networkidle" }).catch(() => {});
+  await page.goto(`http://127.0.0.1:5173/${route.replace(/^#/, "")}`, { waitUntil: "networkidle" }).catch(() => {});
   await page.waitForTimeout(1000);
   await page.screenshot({
     path: `out/shots/${name}.png`,

@@ -472,40 +472,43 @@ describe("views", () => {
   });
 
   it("home route parses to chat", async () => {
-    vi.stubGlobal("window", { location: { hash: "" } });
-    const { parseHash } = await import("./app");
-    const setHash = (hash: string) => {
-      (window.location as { hash: string }).hash = hash;
-      return parseHash();
+    vi.stubGlobal("window", { location: { pathname: "/", search: "" } });
+    const { parseRoute } = await import("./app");
+    const at = (path: string) => {
+      const [pathname, search] = path.split("?").concat("").slice(0, 2);
+      (window.location as { pathname: string; search: string }).pathname = pathname;
+      (window.location as { search: string }).search = search ? `?${search}` : "";
+      return parseRoute();
     };
-    expect(setHash("")).toEqual({ name: "home" });
-    expect(setHash("#/")).toEqual({ name: "home" });
-    expect(setHash("#/projects")).toEqual({ name: "projects" });
-    expect(setHash("#/nope")).toEqual({ name: "home" });
+    expect(at("/")).toEqual({ name: "home" });
+    expect(at("/projects")).toEqual({ name: "projects" });
+    expect(at("/nope")).toEqual({ name: "home" });
     vi.unstubAllGlobals();
   });
 
   it("a workspace route carries the tab to open", async () => {
-    vi.stubGlobal("window", { location: { hash: "" } });
-    const { parseHash } = await import("./app");
-    const setHash = (hash: string) => {
-      (window.location as { hash: string }).hash = hash;
-      return parseHash();
+    vi.stubGlobal("window", { location: { pathname: "/", search: "" } });
+    const { parseRoute } = await import("./app");
+    const at = (path: string) => {
+      const [pathname, search] = path.split("?").concat("").slice(0, 2);
+      (window.location as { pathname: string; search: string }).pathname = pathname;
+      (window.location as { search: string }).search = search ? `?${search}` : "";
+      return parseRoute();
     };
     // A recovery link must land on the exact tab, not just the workspace.
-    expect(setHash("#/p/prj_1?tab=Providers")).toEqual({
+    expect(at("/p/prj_1?tab=Providers")).toEqual({
       name: "project",
       projectId: "prj_1",
       tab: "Providers",
     });
     // No query means no tab, and the id is never polluted by the query.
-    expect(setHash("#/p/prj_1")).toEqual({
+    expect(at("/p/prj_1")).toEqual({
       name: "project",
       projectId: "prj_1",
       tab: undefined,
     });
     // A task route still wins over the query.
-    expect(setHash("#/p/prj_1/t/tsk_2")).toEqual({
+    expect(at("/p/prj_1/t/tsk_2")).toEqual({
       name: "task",
       projectId: "prj_1",
       taskId: "tsk_2",

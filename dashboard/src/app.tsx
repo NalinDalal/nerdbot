@@ -22,6 +22,7 @@ import { BoardsView, BoardDetailView } from "./views-boards";
 import { WorkView } from "./views-work";
 import { WorkbenchView } from "./views-workbench";
 import { EmptyState, useTheme, ThemeButton } from "./components";
+import { onRouteChange, navigate } from "./router";
 
 export type Route =
   | { name: "home" }
@@ -41,13 +42,11 @@ export type Route =
   | { name: "bots" }
   | { name: "approvals" };
 
-export function parseHash(): Route {
-  const hash = window.location.hash.replace(/^#\/?/, "");
+export function parseRoute(): Route {
   /* A query carries the tab to open, so a recovery link can land on the
-  exact screen the owner needs: #/p/<id>?tab=Providers */
-  const [path, query] = hash.split("?");
-  const params = new URLSearchParams(query ?? "");
-  const parts = path.split("/").filter(Boolean);
+  exact screen the owner needs: /p/<id>?tab=Providers */
+  const params = new URLSearchParams(window.location.search);
+  const parts = window.location.pathname.split("/").filter(Boolean);
   if (parts.length === 0) return { name: "home" };
   if (parts[0] === "work") return { name: "work" };
   if (parts[0] === "workbench") {
@@ -91,9 +90,7 @@ export function parseHash(): Route {
   return { name: "home" };
 }
 
-export function navigate(route: string): void {
-  window.location.hash = route;
-}
+export { navigate } from "./router";
 
 /* --- Sidebar --- */
 
@@ -234,25 +231,25 @@ function Sidebar({
     href: string;
     badge?: number;
   }> = [
-    { label: "Home", icon: "home", routes: ["home"], href: "#/" },
-    { label: "Work", icon: "work", routes: ["work", "task"], href: "#/work" },
+    { label: "Home", icon: "home", routes: ["home"], href: "/" },
+    { label: "Work", icon: "work", routes: ["work", "task"], href: "/work" },
     {
       label: "Teammates",
       icon: "teammates",
       routes: ["bots", "bot"],
-      href: "#/bots",
+      href: "/bots",
     },
     {
       label: "Projects",
       icon: "projects",
       routes: ["projects", "project"],
-      href: "#/projects",
+      href: "/projects",
     },
     {
       label: "Approvals",
       icon: "approvals",
       routes: ["approvals"],
-      href: "#/approvals",
+      href: "/approvals",
       badge: nav.pendingApprovals,
     },
   ];
@@ -267,14 +264,14 @@ function Sidebar({
       label: "Workbench",
       icon: "workbench",
       routes: ["workbench"],
-      href: "#/workbench",
+      href: "/workbench",
     },
-    { label: "Teams", icon: "teams", routes: ["teams", "team"], href: "#/teams" },
+    { label: "Teams", icon: "teams", routes: ["teams", "team"], href: "/teams" },
     {
       label: "Boards",
       icon: "boards",
       routes: ["boards", "board"],
-      href: "#/boards",
+      href: "/boards",
     },
   ];
 
@@ -299,7 +296,7 @@ function Sidebar({
         </div>
 
         <button
-          onClick={() => onNavigate("#/")}
+          onClick={() => onNavigate("/")}
           className="mb-4 flex w-full items-center justify-center gap-2 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step--1 font-medium text-[var(--text-soft)] transition-colors hover:border-[var(--faint)] hover:text-[var(--text)]"
         >
           <span aria-hidden className="text-[var(--accent)]">+</span>
@@ -343,7 +340,7 @@ function Sidebar({
                 Recent
               </span>
               <button
-                onClick={() => onNavigate("#/")}
+                onClick={() => onNavigate("/")}
                 className="text-step--2 text-[var(--faint)] hover:text-[var(--text)]"
               >
                 All
@@ -358,7 +355,7 @@ function Sidebar({
                     key={thread.id}
                     onClick={() =>
                       onNavigate(
-                        `#/chat/${thread.project_id}?thread=${thread.id}`,
+                        `/chat/${thread.project_id}?thread=${thread.id}`,
                       )
                     }
                     aria-current={active ? "page" : undefined}
@@ -386,7 +383,7 @@ function Sidebar({
             label="Settings"
             icon="settings"
             active={route.name === "settings" || route.name === "capabilities"}
-            onClick={() => onNavigate("#/settings")}
+            onClick={() => onNavigate("/settings")}
           />
           <button
             onClick={onDisconnect}
@@ -407,26 +404,25 @@ function Sidebar({
 }
 
 export default function App() {
-  const [route, setRoute] = useState<Route>(parseHash);
+  const [route, setRoute] = useState<Route>(parseRoute);
   const [connected, setConnected] = useState(() => getSession() !== null);
   const [activeThreadId, setActiveThread] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const { setTheme } = useTheme();
 
   useEffect(() => {
-    const onHash = () => setRoute(parseHash());
-    window.addEventListener("hashchange", onHash);
+    const remove = onRouteChange(() => setRoute(parseRoute()));
     const mq = window.matchMedia("(max-width: 760px)");
     const onBreakpoint = () => setDrawerOpen(false);
     mq.addEventListener("change", onBreakpoint);
     return () => {
-      window.removeEventListener("hashchange", onHash);
+      remove();
       mq.removeEventListener("change", onBreakpoint);
     };
   }, []);
 
   const openProject = (id: string) => {
-    navigate(`#/p/${id}`);
+    navigate(`/p/${id}`);
   };
 
   if (!connected) {
@@ -501,7 +497,7 @@ export default function App() {
           projectId={route.projectId}
           initialTab={route.tab}
           onOpenTask={(taskId) =>
-            navigate(`#/p/${route.projectId}/t/${taskId}`)
+            navigate(`/p/${route.projectId}/t/${taskId}`)
           }
         />
       );
@@ -511,7 +507,7 @@ export default function App() {
         <TaskDetailView
           projectId={route.projectId}
           taskId={route.taskId}
-          onBack={() => navigate(`#/p/${route.projectId}`)}
+          onBack={() => navigate(`/p/${route.projectId}`)}
         />
       );
       break;
@@ -554,7 +550,7 @@ export default function App() {
         onDisconnect={() => {
           setSession(null);
           setConnected(false);
-          navigate("#/");
+          navigate("/");
         }}
         onThemeChange={setTheme}
         onClose={() => setDrawerOpen(false)}

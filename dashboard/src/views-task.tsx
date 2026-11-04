@@ -689,7 +689,7 @@ export function TaskDetailView({
                   Connect a working model key in{" "}
                   <a
                     className="text-[var(--accent)] hover:underline"
-                    href={`#/p/${task.project_id}?tab=Providers`}
+                    href={`/p/${task.project_id}?tab=Providers`}
                   >
                     this workspace&rsquo;s Providers tab
                   </a>
@@ -957,7 +957,7 @@ export function TaskDetailView({
                             {d.child_task_id ? (
                               <a
                                 className="text-[var(--accent)] hover:underline"
-                                href={`#/p/${projectId}/t/${d.child_task_id}`}
+                                href={`/p/${projectId}/t/${d.child_task_id}`}
                               >
                                 <ShortId id={d.child_task_id} />
                               </a>
@@ -1016,7 +1016,7 @@ export function TaskDetailView({
             {parent ? (
               <a
                 className="text-[var(--accent)] hover:underline"
-                href={`#/p/${projectId}/t/${parent.id}`}
+                href={`/p/${projectId}/t/${parent.id}`}
               >
                 {parent.description || "Untitled"}
               </a>
@@ -1044,7 +1044,7 @@ export function TaskDetailView({
                       <span className="min-w-0">
                         <a
                           className="text-[var(--accent)] hover:underline"
-                          href={`#/p/${projectId}/t/${child.id}`}
+                          href={`/p/${projectId}/t/${child.id}`}
                         >
                           {child.description || "Untitled"}
                         </a>{" "}
@@ -1156,7 +1156,7 @@ export function TaskDetailView({
       ) : null}
       <div className="mt-6 text-step--1">
         <a
-          href={`#/p/${projectId}`}
+          href={`/p/${projectId}`}
           className="text-[var(--muted)] hover:text-[var(--text)] hover:underline"
         >
           Open project →

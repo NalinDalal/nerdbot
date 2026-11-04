@@ -84,7 +84,7 @@ export function ApprovalsTab({ projectId }: { projectId: string }) {
                 <span className="mono text-[var(--muted)]">{approval.id}</span>{" "}
                 <span className={PILL_SHELL}>{approval.requester}</span>{" "}
                 {approval.task_id ? (
-                  <a href={`#/p/${projectId}/t/${approval.task_id}`}>
+                  <a href={`/p/${projectId}/t/${approval.task_id}`}>
                     task <ShortId id={approval.task_id} />
                   </a>
                 ) : null}

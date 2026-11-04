@@ -65,7 +65,7 @@ export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenT
             {tasks.data.tasks.map((task) => (
               <tr className="transition-colors hover:bg-[var(--surface-2)]" key={task.id}>
                 <td className={TABLE_TD}>
-                  <a href={`#/p/${projectId}/t/${task.id}`} onClick={() => onOpenTask(task.id)}>
+                  <a href={`/p/${projectId}/t/${task.id}`} onClick={() => onOpenTask(task.id)}>
                     {task.description || "Untitled task"}
                   </a>
                 </td>
@@ -84,7 +84,7 @@ export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenT
                 <td className="text-[var(--muted)]">
                   {task.parent_task_id ? (
                     <a
-                      href={`#/p/${projectId}/t/${task.parent_task_id}`}
+                      href={`/p/${projectId}/t/${task.parent_task_id}`}
                       className="hover:underline"
                     >
                       Parent task
@@ -131,7 +131,7 @@ export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenT
                 <td className="text-[var(--muted)]">{relativeTime(run.started_at)}</td>
                 <td className={TABLE_TD}>
                   <a
-                    href={`#/p/${projectId}/t/${run.task_id}`}
+                    href={`/p/${projectId}/t/${run.task_id}`}
                     className="block max-w-[16rem] truncate hover:underline"
                     title={taskName(run.task_id)}
                   >

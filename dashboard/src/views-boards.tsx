@@ -3,6 +3,7 @@ import { ApiError, api } from "./api";
 import { notifyError } from "./app";
 import type { Plan } from "./types";
 import { EmptyState, ErrorState, LoadingState, Modal, StatusBadge, TABLE_SHELL, TABLE_TD as TD, TABLE_TH as TH, FORM_INPUT, Button, SectionLabel, Page, PageHeader, useAsync } from "./components";
+import { navigate } from "./app";
 import { EntityForm } from "./forms";
 
 export function BoardsView() {
@@ -73,7 +74,7 @@ export function BoardsView() {
                 >
                   <td className={TD}>
                     <a
-                      href={`#/board/${board.id}`}
+                      href={`/board/${board.id}`}
                       className="font-medium text-[var(--text)] hover:underline"
                     >
                       {board.name || "Unnamed board"}
@@ -97,7 +98,7 @@ export function BoardsView() {
                     <StatusBadge status={board.status} />
                   </td>
                   <td className={TD}>
-                    <Button variant="ghost" onClick={() => { window.location.hash = `#/board/${board.id}`; }}>
+                    <Button variant="ghost" onClick={() => { navigate(`/board/${board.id}`); }}>
                       Open →
                     </Button>
                   </td>
@@ -195,7 +196,7 @@ export function BoardDetailView({
         eyebrow="Board"
         title={board.name || "Unnamed board"}
         description={board.description}
-        back={{ label: "Boards", onClick: () => (window.location.hash = "#/boards") }}
+        back={{ label: "Boards", onClick: () => (window.location.hash = "/boards") }}
         actions={
           <>
             <Button onClick={() => setShowAddMember(true)}>Add member</Button>

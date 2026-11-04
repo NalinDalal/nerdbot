@@ -73,3 +73,23 @@ def test_the_api_routes_are_not_cached_as_a_document(client) -> None:
     assert r.status_code == 200, r.text
     cache = r.headers.get("cache-control", "")
     assert "immutable" not in cache, f"an API response is cached immutably: {cache!r}"
+
+
+def test_spa_paths_serve_the_entry_document(client) -> None:
+    """A deep link to a dashboard route lands the SPA so React can resolve it."""
+    if _dist_index_html() is None:
+        pytest.skip("the dashboard is not built")
+    for path in ("/work", "/bots", "/p/prj_1/t/tsk_2"):
+        r = client.get(path, headers={"Accept": "text/html,*/*"})
+        assert r.status_code == 200, f"{path}: {r.text}"
+        assert "text/html" in r.headers.get("content-type", "")
+        cache = r.headers.get("cache-control", "")
+        assert "no-cache" in cache, f"{path} revalidates: {cache!r}"
+
+
+def test_unknown_paths_stay_404_for_non_browser_clients(client) -> None:
+    """An API fetch that missed a route gets JSON, not a web page."""
+    r = client.get("/no-such-endpoint")
+    assert r.status_code == 404, r.text
+    detail = r.json()
+    assert "detail" in detail, f"error lost its shape: {detail!r}"

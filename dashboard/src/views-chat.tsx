@@ -23,7 +23,7 @@ import {
 } from "./components";
 
 function openTask(projectId: string, taskId: string): void {
-  window.location.hash = `#/p/${projectId}/t/${taskId}`;
+  navigate(`/p/${projectId}/t/${taskId}`);
 }
 
 export function ConversationView({
@@ -232,7 +232,7 @@ export function ConversationView({
               }
               onThreadCreated={(threadId, targetProjectId) => {
                 if (targetProjectId && targetProjectId !== resolvedProjectId) {
-                  navigate(`#/chat/${targetProjectId}?thread=${threadId}`);
+                  navigate(`/chat/${targetProjectId}?thread=${threadId}`);
                   return;
                 }
                 setActiveId(threadId);
@@ -245,7 +245,7 @@ export function ConversationView({
                   // The conversation lives in another workspace: switch the
                   // context so its messages, files and provider come from
                   // there rather than from the workspace we are looking at.
-                  navigate(`#/chat/${thread.project_id}`);
+                  navigate(`/chat/${thread.project_id}`);
                 }
               }}
               refreshProviders={() => {
@@ -664,7 +664,7 @@ function ThreadPane({
 
   const handleBotSelect = (teammateId: string) => {
     setContextPanel(null);
-    window.location.hash = `#/bot/${teammateId}`;
+    navigate(`/bot/${teammateId}`);
   };
 
   return (
@@ -1189,7 +1189,7 @@ function ContextPanel({
             {(files.data?.checkouts ?? []).map((checkout) => (
               <div key={checkout.task_id} className="mb-4 last:mb-0">
                 <a
-                  href={`#/p/${projectId}/t/${checkout.task_id}`}
+                  href={`/p/${projectId}/t/${checkout.task_id}`}
                   className="block truncate text-step--1 font-medium text-[var(--text)] hover:underline"
                 >
                   {checkout.task_description || "Untitled task"}
@@ -1571,11 +1571,11 @@ function CommandCenter({
           providersByProject={providersByProject}
           onCreateWorkspace={() => {
             // Handled by SettingsView's New Workspace modal; navigate there.
-            navigate("#/settings");
+            navigate("/settings");
           }}
-          onConnectModel={() => navigate("#/settings")}
-          onCreateBot={() => navigate("#/bots")}
-          onNewTask={() => navigate("#/work")}
+          onConnectModel={() => navigate("/settings")}
+          onCreateBot={() => navigate("/bots")}
+          onNewTask={() => navigate("/work")}
         />
 
         {/* Landing composer */}
@@ -1736,7 +1736,7 @@ function CommandCenter({
           <div className="mb-2 flex items-center justify-between">
             <SectionLabel>Work</SectionLabel>
             <a
-              href="#/work"
+              href="/work"
               className="text-step--1 text-[var(--muted)] hover:text-[var(--text)]"
             >
               Open work →
@@ -1756,7 +1756,7 @@ function CommandCenter({
               ].map((item, index) => (
                 <a
                   key={item.label}
-                  href="#/work"
+                  href="/work"
                   className={`px-4 py-3 transition-colors hover:bg-[var(--surface-2)] ${
                     index > 0 ? "border-l border-[var(--border-dim)]" : ""
                   }`}

@@ -20,10 +20,11 @@ import {
   TABLE_TD,
   TABLE_TH,
 } from "./components";
+import { navigate } from "./app";
 import { EntityForm } from "./forms";
 
 function openBot(id: string): void {
-  window.location.hash = `#/bot/${id}`;
+  navigate(`/bot/${id}`);
 }
 
 export function TeamsView() {
@@ -95,7 +96,7 @@ export function TeamsView() {
                     <td className={TABLE_TD}>
                       <button
                         onClick={() => {
-                          window.location.hash = `#/team/${team.id}`;
+                          navigate(`/team/${team.id}`);
                         }}
                         className="text-left font-medium text-[var(--text)] hover:underline"
                       >
@@ -113,7 +114,7 @@ export function TeamsView() {
                       <Button
                         variant="ghost"
                         onClick={() => {
-                          window.location.hash = `#/team/${team.id}`;
+                          navigate(`/team/${team.id}`);
                         }}
                       >
                         Open →
@@ -215,7 +216,7 @@ function OpenTaskLink({ projectId, taskId, children }: { projectId: string; task
     <button
       className="text-[var(--accent)] hover:underline"
       onClick={() => {
-        window.location.hash = `#/p/${projectId}/t/${taskId}`;
+        navigate(`/p/${projectId}/t/${taskId}`);
       }}
     >
       {children}
@@ -279,7 +280,7 @@ export function TeamDetailView({
         eyebrow="Team"
         title={team.name || "Unnamed team"}
         description={team.description}
-        back={{ label: "Teams", onClick: () => { window.location.hash = "#/teams"; } }}
+        back={{ label: "Teams", onClick: () => { navigate("/teams"); } }}
         actions={<Button onClick={detail.reload}>Refresh</Button>}
       />
 
@@ -445,7 +446,7 @@ export function TeamDetailView({
                   <button
                     className="mono truncate font-medium text-[var(--text)] hover:underline"
                     onClick={() => {
-                      window.location.hash = `#/p/${project.id}`;
+                      navigate(`/p/${project.id}`);
                     }}
                   >
                     {project.repository || "workspace"}

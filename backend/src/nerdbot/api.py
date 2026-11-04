@@ -15,7 +15,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.responses import Response
@@ -3700,10 +3700,53 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return updated.model_dump(mode="json")
 
-    # Serve the built dashboard (SPA). Mounted last so all API routes above
-    # take precedence. Hash-routed frontend paths fall through to index.html.
+    # Serve the built dashboard (SPA). Registered after every API route so the
+    # fallback only answers what no real route claimed (the mount below still
+    # catches HEAD and anything the GET route lets through). The frontend
+    # routes on real paths now (/work, /p/<id>?tab=Providers), so a miss on
+    # those has to return the entry document for React to resolve. Requests
+    # that are clearly not a page visit (an API fetch to a path that does not
+    # exist, curl without a browser Accept header) still get a 404 instead of
+    # a web page.
     _dist = Path(__file__).resolve().parents[3] / "dashboard" / "dist"
     if _dist.is_dir():
+        _index = _dist / "index.html"
+
+        def _cache_headers(path: Path) -> dict[str, str]:
+            # Vite writes content-hashed asset names, so /assets/... is safe
+            # to cache forever. The entry document is not: it names the
+            # hashed bundles, so it has to be revalidated.
+            if "/assets/" in str(path):
+                return {"Cache-Control": "public, max-age=31536000, immutable"}
+            return {"Cache-Control": "no-cache"}
+
+        @app.get("/{spa_path:path}", include_in_schema=False)
+        async def _spa_fallback(spa_path: str, request: Request) -> Response:
+            if spa_path:
+                candidate = _dist / spa_path
+                try:
+                    resolved = candidate.resolve()
+                    resolved.relative_to(_dist.resolve())
+                except ValueError:
+                    # A path that escapes dist is never a dashboard asset.
+                    raise HTTPException(status_code=404, detail="not found") from None
+                if resolved.is_file():
+                    return FileResponse(resolved, headers=_cache_headers(resolved))
+                # A directory or a name that is not a shipped file: not a real
+                # asset, it may still be a route the SPA owns. When the client
+                # is not navigating (an API fetch to a path that does not
+                # exist, curl without a browser Accept header) answer with a
+                # plain 404 instead of a web page.
+                if "text/html" not in request.headers.get("accept", ""):
+                    raise HTTPException(status_code=404, detail="not found")
+            if not _index.is_file():
+                raise HTTPException(status_code=404, detail="not found")
+            return Response(
+                content=_index.read_bytes(),
+                media_type="text/html",
+                headers=_cache_headers(_index),
+            )
+
         app.mount("/", _SPAStaticFiles(directory=str(_dist), html=True), name="spa")
 
     return app

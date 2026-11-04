@@ -62,13 +62,13 @@ export function ProjectDetailView({
   const tab: Tab = isTab(initialTab) ? initialTab : "Tasks";
 
   const selectTab = (name: Tab) => {
-    navigate(`#/p/${projectId}?tab=${encodeURIComponent(name)}`);
+    navigate(`/p/${projectId}?tab=${encodeURIComponent(name)}`);
   };
 
   return (
     <Page>
       <a
-        href="#/projects"
+        href="/projects"
         className="mb-3 inline-flex items-center gap-1 text-step--1 text-[var(--muted)] transition-colors hover:text-[var(--text)]"
       >
         <span aria-hidden>←</span> Projects
@@ -90,8 +90,8 @@ export function ProjectDetailView({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button onClick={() => navigate(`#/chat/${projectId}`)}>Open chat</Button>
-          <Button onClick={() => navigate(`#/workbench?project=${projectId}`)}>
+          <Button onClick={() => navigate(`/chat/${projectId}`)}>Open chat</Button>
+          <Button onClick={() => navigate(`/workbench?project=${projectId}`)}>
             Workbench
           </Button>
         </div>

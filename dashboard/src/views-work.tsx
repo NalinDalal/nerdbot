@@ -160,7 +160,7 @@ export function WorkView() {
 
       {decisions.length > 0 ? (
         <button
-          onClick={() => navigate("#/approvals")}
+          onClick={() => navigate("/approvals")}
           className="mb-5 flex w-full flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--warn)] bg-[var(--warn-dim)] px-4 py-3 text-left"
         >
           <span className="text-step--1 text-[var(--text)]">
@@ -259,7 +259,7 @@ export function WorkView() {
                   return (
                     <button
                       key={task.id}
-                      onClick={() => navigate(`#/p/${task.project_id}/t/${task.id}`)}
+                      onClick={() => navigate(`/p/${task.project_id}/t/${task.id}`)}
                       className={`flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--surface-2)] ${
                         index > 0 ? "border-t border-[var(--border-dim)]" : ""
                       }`}
@@ -312,7 +312,7 @@ export function WorkView() {
           onCreated={(projectId, taskId) => {
             setShowNew(false);
             reload();
-            navigate(`#/p/${projectId}/t/${taskId}`);
+            navigate(`/p/${projectId}/t/${taskId}`);
           }}
         />
       ) : null}

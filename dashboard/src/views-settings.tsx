@@ -128,7 +128,7 @@ export function SettingsView() {
                 >
                   <div className="min-w-0 flex-1">
                     <a
-                      href={`#/p/${project.id}`}
+                      href={`/p/${project.id}`}
                       className="block truncate font-medium text-[var(--text)] hover:underline"
                     >
                       {project.repository || "Project"}
@@ -176,7 +176,7 @@ export function SettingsView() {
                   )}
                   <Button onClick={() => setConnectTo(project.id)}>Add model</Button>
                   <a
-                    href={`#/p/${project.id}`}
+                    href={`/p/${project.id}`}
                     className="text-step--1 text-[var(--muted)] hover:text-[var(--text)]"
                   >
                     Open →
@@ -190,10 +190,10 @@ export function SettingsView() {
 
       <PageSection title="Advanced" description="Cross-project surfaces and build internals.">
         <div className="grid gap-2 sm:grid-cols-2">
-          <AdvancedLink href="#/boards" title="Boards" hint="Message channels teammates can read and write." />
-          <AdvancedLink href="#/teams" title="Teams" hint="Group projects for a shared roll-up." />
-          <AdvancedLink href="#/projects" title="All projects" hint="The full project table." />
-          <AdvancedLink href="#/capabilities" title="Capabilities" hint="What this build can and cannot do." />
+          <AdvancedLink href="/boards" title="Boards" hint="Message channels teammates can read and write." />
+          <AdvancedLink href="/teams" title="Teams" hint="Group projects for a shared roll-up." />
+          <AdvancedLink href="/projects" title="All projects" hint="The full project table." />
+          <AdvancedLink href="/capabilities" title="Capabilities" hint="What this build can and cannot do." />
         </div>
       </PageSection>
 

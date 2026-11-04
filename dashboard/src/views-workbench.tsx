@@ -930,10 +930,10 @@ export function WorkbenchView({
         hint="The workbench needs a workspace. Create a project, then return here to edit files, run commands, and see what changed."
         action={
           <div className="flex flex-wrap items-center justify-center gap-2">
-            <Button variant="primary" onClick={() => navigate("#/projects")}>
+            <Button variant="primary" onClick={() => navigate("/projects")}>
               Create project
             </Button>
-            <Button onClick={() => navigate("#/")}>Back to chat</Button>
+            <Button onClick={() => navigate("/")}>Back to chat</Button>
           </div>
         }
       />
@@ -1220,7 +1220,7 @@ export function WorkbenchView({
                 title="No bots in this workspace"
                 hint="Bots join from Teammates. They can pick up tasks you create here."
               >
-                <Button onClick={() => navigate("#/bots")}>Open Teammates</Button>
+                <Button onClick={() => navigate("/bots")}>Open Teammates</Button>
               </PanelEmpty>
             ) : (
               <ul aria-label="Workspace bots">
@@ -1239,7 +1239,7 @@ export function WorkbenchView({
                       </div>
                     </div>
                     <a
-                      href={`#/bot/${mate.id}`}
+                      href={`/bot/${mate.id}`}
                       className="shrink-0 text-step--2 text-[var(--muted)] hover:text-[var(--text)] hover:underline"
                     >
                       View
@@ -1605,7 +1605,7 @@ export function WorkbenchView({
                 title="Workspace not found"
                 hint="This project's workspace folder is missing. Recreate it from the project page."
               >
-                <Button onClick={() => navigate(`#/p/${activeId}`)}>Open project</Button>
+                <Button onClick={() => navigate(`/p/${activeId}`)}>Open project</Button>
               </PanelEmpty>
             ) : !diffForActive.git ? (
               <PanelEmpty
@@ -1613,7 +1613,7 @@ export function WorkbenchView({
                 hint="File edits still save here. A Git workspace adds diffs and changed-file evidence."
                 icon={<Icon path={ICONS.branch} className="h-5 w-5" />}
               >
-                <Button onClick={() => navigate(`#/p/${activeId}`)}>Open project</Button>
+                <Button onClick={() => navigate(`/p/${activeId}`)}>Open project</Button>
               </PanelEmpty>
             ) : (
               <>
@@ -1771,7 +1771,7 @@ export function WorkbenchView({
                   {task.status === "awaiting_approval" ? (
                     <button
                       type="button"
-                      onClick={() => navigate("#/approvals")}
+                      onClick={() => navigate("/approvals")}
                       className="flex w-full items-center justify-between gap-2 rounded-md border border-[var(--warn)] bg-[var(--warn-dim)] px-2.5 py-2 text-left"
                     >
                       <span className="text-step--2 text-[var(--text)]">
@@ -1880,7 +1880,7 @@ export function WorkbenchView({
 
                   <div className="pt-1">
                     <Button
-                      onClick={() => navigate(`#/p/${task.project_id}/t/${task.id}`)}
+                      onClick={() => navigate(`/p/${task.project_id}/t/${task.id}`)}
                       className="w-full"
                     >
                       Open task →

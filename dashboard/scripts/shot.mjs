@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs";
 
 const routes = process.argv.slice(2).length
   ? process.argv.slice(2)
-  : ["#/", "#/work", "#/bots", "#/approvals", "#/settings", "#/projects"];
+  : ["/", "/work", "/bots", "/approvals", "/settings", "/projects"];
 
 const widths = (process.env.WIDTHS ?? "1440").split(",").map(Number);
 mkdirSync("out/shots", { recursive: true });
@@ -23,7 +23,7 @@ for (const width of widths) {
   });
   const page = await context.newPage();
   for (const route of routes) {
-    await page.goto(`http://127.0.0.1:5173/${route}`, { waitUntil: "networkidle" }).catch(() => {});
+    await page.goto(`http://127.0.0.1:5173/${route.replace(/^#/, "")}`, { waitUntil: "networkidle" }).catch(() => {});
     await page.waitForTimeout(900);
     const safe = route.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "") || "home";
     await page.screenshot({ path: `out/shots/${safe}-${width}.png`, fullPage: false });

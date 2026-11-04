@@ -33,7 +33,7 @@ import {
 } from "./components";
 
 function openTask(projectId: string, taskId: string): void {
-  window.location.hash = `#/p/${projectId}/t/${taskId}`;
+  navigate(`/p/${projectId}/t/${taskId}`);
 }
 
 export function BotDetailView({
@@ -122,7 +122,7 @@ export function BotDetailView({
         face: mate.face,
       });
       toast.success("Teammate duplicated.");
-      navigate(`#/bot/${copy.id}`);
+      navigate(`/bot/${copy.id}`);
     } catch (err) {
       notifyError(err);
     }
@@ -236,7 +236,7 @@ export function BotDetailView({
       <div className="mb-8">
         <button
           onClick={() => {
-            window.location.hash = "#/bots";
+            navigate("/bots");
           }}
           className="mb-3 inline-flex items-center gap-1 text-step--1 text-[var(--muted)] transition-colors hover:text-[var(--text)]"
         >
@@ -253,7 +253,7 @@ export function BotDetailView({
           />
           <div className="min-w-0 flex-1">
             <div className="mb-1 text-step--2 uppercase tracking-[0.16em] text-[var(--faint)]">
-              <a href="#/bots" className="hover:text-[var(--text)]">
+              <a href="/bots" className="hover:text-[var(--text)]">
                 Teammates
               </a>{" "}
               / Teammate
@@ -273,7 +273,7 @@ export function BotDetailView({
               <span aria-hidden>·</span>
               <span>{runList.length} runs</span>
               <span aria-hidden>·</span>
-              <a href={`#/p/${mate.project_id}`} className="hover:text-[var(--text)] hover:underline">
+              <a href={`/p/${mate.project_id}`} className="hover:text-[var(--text)] hover:underline">
                 Project
               </a>
               <span aria-hidden>·</span>
@@ -813,7 +813,7 @@ function BotAccess({ mate, boards }: { mate: Teammate; boards: Board[] }) {
                   className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-[var(--surface-2)] px-3 py-2 text-step--1"
                 >
                   <div className="min-w-0">
-                    <a className="font-medium text-[var(--text)] hover:underline" href={`#/board/${board.id}`}>
+                    <a className="font-medium text-[var(--text)] hover:underline" href={`/board/${board.id}`}>
                       {board.name || "Unnamed board"}
                     </a>
                     <span className="mono ml-2 text-[var(--faint)]">{role}</span>
@@ -1398,7 +1398,7 @@ export function BotsView() {
               >
                 <div className="flex items-start justify-between gap-3">
                   <BotChip
-                    href={`#/bot/${mate.id}`}
+                    href={`/bot/${mate.id}`}
                     persona={mate.persona || "Unnamed teammate"}
                     id={mate.id}
                     status={liveStatus}
@@ -1446,7 +1446,7 @@ export function BotsView() {
                   >
                     Give work
                   </Button>
-                  <Button onClick={() => { window.location.hash = `#/bot/${mate.id}`; }}>
+                  <Button onClick={() => { navigate(`/bot/${mate.id}`); }}>
                     Open
                   </Button>
                 </div>
@@ -1472,7 +1472,7 @@ export function BotsView() {
                     className="align-top transition-colors hover:bg-[var(--surface-2)]"
                   >
                     <td className={TABLE_TD}>
-                      <BotChip href={`#/bot/${mate.id}`} persona={mate.persona || "Unnamed teammate"} id={mate.id} status={liveStatus} face={mate.face} />
+                      <BotChip href={`/bot/${mate.id}`} persona={mate.persona || "Unnamed teammate"} id={mate.id} status={liveStatus} face={mate.face} />
                       <div
                         className="mt-0.5 truncate text-step--2 text-[var(--faint)]"
                         title={`${projectOf(mate.project_id)} · ${tasks.length} tasks`}

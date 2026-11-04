@@ -44,7 +44,7 @@ export function FilesTab({ projectId }: { projectId: string }) {
             <div key={checkout.task_id} className="mb-6 last:mb-0">
               <div className="mb-2 flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
                 <a
-                  href={`#/p/${projectId}/t/${checkout.task_id}`}
+                  href={`/p/${projectId}/t/${checkout.task_id}`}
                   className="text-step-0 font-medium text-[var(--text)] hover:underline"
                 >
                   {checkout.task_description || "Untitled task"}
