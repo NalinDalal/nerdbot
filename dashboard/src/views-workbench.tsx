@@ -359,11 +359,18 @@ function useTaskView(taskId: string | null): TaskFeed & { reload: () => void } {
 
 /* --- View ---------------------------------------------------------------- */
 
-export function WorkbenchView() {
+export function WorkbenchView({
+  initialProjectId,
+}: {
+  /** A deep link from a project page opens that project, not the last one. */
+  initialProjectId?: string;
+} = {}) {
   const { resolved } = useTheme();
   const isDark = resolved === "dark";
 
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(readStoredProject);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
+    initialProjectId ?? readStoredProject,
+  );
   const projects = useAsync(() => api.listProjects(), []);
   const projectList = projects.data?.projects ?? [];
   /* Restore the stored pick when the list arrives. Falling back to index 0
@@ -1211,9 +1218,9 @@ export function WorkbenchView() {
             ) : mates.length === 0 ? (
               <PanelEmpty
                 title="No bots in this workspace"
-                hint="Bots join from Fleet. They can pick up tasks you create here."
+                hint="Bots join from Teammates. They can pick up tasks you create here."
               >
-                <Button onClick={() => navigate("#/bots")}>Open Agents</Button>
+                <Button onClick={() => navigate("#/bots")}>Open Teammates</Button>
               </PanelEmpty>
             ) : (
               <ul aria-label="Workspace bots">

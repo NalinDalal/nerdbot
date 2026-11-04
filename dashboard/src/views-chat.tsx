@@ -4,12 +4,12 @@ import { api, ApiError } from "./api";
 import { notifyError, navigate } from "./app";
 import type { ChatMessage, ChatThread, Provider, Project, ProjectCounts, Teammate } from "./types";
 import { AttentionBanner, useWorkspaceSummary } from "./views-home";
+import { providerIsUsable, usableProviders } from "./readiness";
 import {
   EmptyState,
   ErrorState,
   LoadingState,
   Modal,
-  ShortId,
   BotFace,
   Button,
   Field,
@@ -52,6 +52,28 @@ export function ConversationView({
         : Promise.resolve({ providers: [] }),
     [resolvedProjectId],
   );
+  /* Home is a real project, but the owner thinks of models as belonging to
+     the machine. On Home, offer every usable model across projects and route
+     the new conversation to the project that owns the chosen one. */
+  const allProviders = useAsync(async () => {
+    if (projectId) return [] as Provider[];
+    const { projects } = await api.listProjects();
+    const groups = await Promise.all(
+      projects.map(async (project) => {
+        try {
+          const result = await api.listProviders(project.id);
+          return result.providers.map((provider) => ({
+            ...provider,
+            project_id: project.id,
+            project_name: project.repository,
+          }));
+        } catch {
+          return [] as Array<Provider & { project_name: string }>;
+        }
+      }),
+    );
+    return groups.flat();
+  }, [projectId]);
   // The Command Center resume list spans every project the owner owns, so a
   // conversation started in another workspace is still reachable from here.
   const recentThreads = useAsync(() => api.listRecentThreads(20), []);
@@ -109,7 +131,7 @@ export function ConversationView({
           <p className="mt-0.5 text-step-0 text-[var(--muted)]">
             {isHome
               ? "Ask, delegate, or pick up where you left off."
-              : "This workspace's conversation."}
+              : "This project's conversation."}
           </p>
         </div>
         <Button variant="primary" onClick={() => setShowNew(true)} disabled={!home.data}>
@@ -205,8 +227,14 @@ export function ConversationView({
               summary={summary}
               projectId={resolvedProjectId}
               recentThreads={recentThreads.data?.threads ?? []}
-              providers={providers.data?.providers ?? []}
-              onThreadCreated={(threadId) => {
+              providers={
+                (isHome ? allProviders.data : providers.data?.providers) ?? []
+              }
+              onThreadCreated={(threadId, targetProjectId) => {
+                if (targetProjectId && targetProjectId !== resolvedProjectId) {
+                  navigate(`#/chat/${targetProjectId}?thread=${threadId}`);
+                  return;
+                }
                 setActiveId(threadId);
                 onSetActiveThread?.(threadId);
               }}
@@ -220,7 +248,10 @@ export function ConversationView({
                   navigate(`#/chat/${thread.project_id}`);
                 }
               }}
-              refreshProviders={() => providers.reload()}
+              refreshProviders={() => {
+                providers.reload();
+                allProviders.reload();
+              }}
               refreshThreads={() => recentThreads.reload()}
             />
           ) : (
@@ -296,6 +327,7 @@ function NewThreadModal({
   onCreated: (thread: ChatThread) => void;
 }) {
   const [title, setTitle] = useState("");
+  const [providerId, setProviderId] = useState("__default__");
   const [busy, setBusy] = useState(false);
 
   const create = async (e: React.FormEvent) => {
@@ -303,7 +335,10 @@ function NewThreadModal({
     if (!title.trim()) return;
     setBusy(true);
     try {
-      const thread = await api.createThread(projectId, { title: title.trim() });
+      const thread = await api.createThread(projectId, {
+        title: title.trim(),
+        provider_id: providerId === "__default__" ? undefined : providerId,
+      });
       onCreated(thread);
     } catch (err) {
       notifyError(err);
@@ -326,10 +361,10 @@ function NewThreadModal({
         </Field>
         <Field label="Model provider">
           <select
-            value="__default__"
-            disabled
+            value={providerId}
+            onChange={(e) => setProviderId(e.target.value)}
             aria-label="Model provider"
-            className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step-0 opacity-70"
+            className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step-0 outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
           >
             <option value="__default__">Default model</option>
             {providers.map((provider) => (
@@ -339,7 +374,7 @@ function NewThreadModal({
             ))}
           </select>
           <p className="text-step--1 text-[var(--faint)]">
-            The default provider is used for this thread. Change it later in the thread header.
+            The conversation uses this model. You can change it from the thread header later.
           </p>
         </Field>
         <div className="mt-2 flex justify-end gap-2">
@@ -589,8 +624,8 @@ function ThreadPane({
         description,
         owner_teammate_id: null,
       });
-      toast.success("Task created. Its live execution view is one click away.");
-      openTask(projectId, task.id);
+      setExecView({ kind: "task", taskId: task.id, projectId });
+      toast.success("Task created. Live execution is open below the conversation.");
       await onReload();
     } catch (err) {
       notifyError(err);
@@ -642,7 +677,7 @@ function ThreadPane({
           </div>
           <div className="mono text-step--2 text-[var(--faint)]">
             {relativeTime(view.data?.thread.created_at ?? "")}
-            {view.data?.thread.provider_id ? ` · ${view.data.thread.provider_id.slice(0, 10)}…` : ""}
+            {` · ${providers.find((provider) => provider.id === view.data?.thread.provider_id)?.name ?? "Default model"}`}
           </div>
         </div>
         <div className="flex items-center gap-1.5">
@@ -665,8 +700,11 @@ function ThreadPane({
           <Button variant="ghost" onClick={summarize} disabled={busy} title="Summarize thread">
             Summarize
           </Button>
-          <Button variant="ghost" onClick={() => setContextPanel("bots")} title="Teammates / bots">
-            Bots
+          <Button variant="ghost" onClick={() => setContextPanel("files")} title="Project files">
+            Files
+          </Button>
+          <Button variant="ghost" onClick={() => setContextPanel("bots")} title="Teammates">
+            Teammates
           </Button>
         </div>
       </div>
@@ -745,11 +783,20 @@ function ThreadPane({
               <button
                 type="button"
                 onClick={() => setContextPanel("bots")}
-                title="Mention a bot"
-                aria-label="Mention a bot"
+                title="Mention a teammate"
+                aria-label="Mention a teammate"
                 className="rounded-md px-2 py-1.5 text-step--1 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
               >
-                ∞ Bots
+                ∞ Teammates
+              </button>
+              <button
+                type="button"
+                onClick={() => setContextPanel("files")}
+                title="Project files"
+                aria-label="Project files"
+                className="rounded-md px-2 py-1.5 text-step--1 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
+              >
+                Files
               </button>
               <button
                 type="button"
@@ -835,6 +882,10 @@ function ThreadPane({
           projectId={projectId}
           onClose={() => setContextPanel(null)}
           onSelectBot={handleBotSelect}
+          onAttachFile={(file) => {
+            setAttachedFiles((prev) => [...prev, file]);
+            setContextPanel(null);
+          }}
         />
       )}
     </div>
@@ -1019,19 +1070,43 @@ function ContextPanel({
   projectId,
   onClose,
   onSelectBot,
+  onAttachFile,
 }: {
   type: "files" | "bots";
   projectId: string;
   onClose: () => void;
   onSelectBot: (teammateId: string) => void;
+  onAttachFile: (file: { name: string; content: string }) => void;
 }) {
-  const data = useAsync(
+  const bots = useAsync(
     () =>
       type === "bots"
         ? api.listTeammates(projectId)
         : Promise.resolve({ teammates: [] as Teammate[] }),
     [projectId, type],
   );
+  const files = useAsync(
+    () =>
+      type === "files"
+        ? api.projectWorkspaceFiles(projectId)
+        : Promise.resolve({ checkouts: [], file_count: 0 }),
+    [projectId, type],
+  );
+  const [attaching, setAttaching] = useState<string | null>(null);
+  const [attachError, setAttachError] = useState<string | null>(null);
+
+  const attach = async (taskId: string, path: string) => {
+    setAttaching(path);
+    setAttachError(null);
+    try {
+      const file = await api.workspaceFile(taskId, path);
+      onAttachFile({ name: path, content: file.content });
+    } catch (err) {
+      setAttachError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAttaching(null);
+    }
+  };
 
   return (
     <div
@@ -1042,14 +1117,15 @@ function ContextPanel({
       }}
     >
       <aside
-        className="absolute right-0 top-0 flex h-full w-[340px] flex-col border-l border-[var(--border)] bg-[var(--surface)] shadow-lg"
+        className="absolute right-0 top-0 flex h-full w-full flex-col border-l border-[var(--border)] bg-[var(--surface)] shadow-lg sm:w-[360px]"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
-        aria-label={type === "bots" ? "Teammates / bots" : "Project files"}
+        aria-modal="true"
+        aria-label={type === "bots" ? "Teammates" : "Project files"}
       >
         <div className="flex items-center justify-between border-b border-[var(--border-dim)] px-4 py-3">
           <span className="text-step-0 font-semibold">
-            {type === "bots" ? "Teammates / bots" : "Project files"}
+            {type === "bots" ? "Teammates" : "Project files"}
           </span>
           <button
             onClick={onClose}
@@ -1060,13 +1136,16 @@ function ContextPanel({
           </button>
         </div>
         {type === "bots" ? (
-          data.loading ? (
+          bots.loading ? (
             <LoadingState lines={3} />
-          ) : data.error ? (
-            <ErrorState error={data.error} onRetry={data.reload} />
+          ) : bots.error ? (
+            <ErrorState error={bots.error} onRetry={bots.reload} />
           ) : (
             <div className="flex flex-1 flex-col gap-2 overflow-y-auto p-4">
-              {(data.data?.teammates ?? []).map((mate: Teammate) => (
+              {(bots.data?.teammates ?? []).length === 0 ? (
+                <EmptyState title="No teammates" hint="Create one from the Teammates page." />
+              ) : null}
+              {(bots.data?.teammates ?? []).map((mate: Teammate) => (
                 <div
                   key={mate.id}
                   className="flex items-center justify-between gap-2 rounded-lg border border-[var(--border)] px-3 py-2"
@@ -1077,7 +1156,7 @@ function ContextPanel({
                       <div className="truncate text-step--1 font-medium text-[var(--text)]">
                         {mate.persona || mate.id}
                       </div>
-                      <div className="mono truncate text-step--2 text-[var(--faint)]">
+                      <div className="truncate text-step--2 text-[var(--faint)]">
                         {mate.instructions?.slice(0, 80) || ""}
                       </div>
                     </div>
@@ -1089,9 +1168,53 @@ function ContextPanel({
               ))}
             </div>
           )
+        ) : files.loading ? (
+          <LoadingState lines={3} />
+        ) : files.error ? (
+          <ErrorState error={files.error} onRetry={files.reload} />
+        ) : (files.data?.checkouts ?? []).length === 0 ? (
+          <div className="p-4">
+            <EmptyState
+              title="No project files yet"
+              hint="A task writes into its own checkout. Run a task, then its files appear here to attach to the conversation."
+            />
+          </div>
         ) : (
-          <div className="p-4 text-step--1 text-[var(--muted)]">
-            Attach files from an active task workspace. Open a task from the execution view first.
+          <div className="flex-1 overflow-y-auto p-3">
+            {attachError ? (
+              <div className="mb-2 rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-step--1 text-[var(--danger)]">
+                {attachError}
+              </div>
+            ) : null}
+            {(files.data?.checkouts ?? []).map((checkout) => (
+              <div key={checkout.task_id} className="mb-4 last:mb-0">
+                <a
+                  href={`#/p/${projectId}/t/${checkout.task_id}`}
+                  className="block truncate text-step--1 font-medium text-[var(--text)] hover:underline"
+                >
+                  {checkout.task_description || "Untitled task"}
+                </a>
+                <div className="mono mb-1.5 truncate text-step--2 text-[var(--faint)]">
+                  {checkout.branch || "checkout"}
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  {checkout.files.map((file) => (
+                    <button
+                      key={file.path}
+                      onClick={() => void attach(checkout.task_id, file.path)}
+                      disabled={attaching === file.path}
+                      className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-step--1 text-[var(--text-soft)] transition-colors hover:bg-[var(--surface-2)] disabled:opacity-50"
+                      title="Attach this file's contents to the next message"
+                    >
+                      <span className="mono min-w-0 truncate">{file.path}</span>
+                      <span className="shrink-0 text-step--2 text-[var(--faint)]">
+                        {attaching === file.path ? "reading…" : `${file.size} B`}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </aside>
@@ -1151,16 +1274,6 @@ function GettingStartedStep({
   );
 }
 
-const providerIsUsable = (provider: Provider): boolean => {
-  if (provider.kind !== "openai-compatible") return true;
-  const config = provider.config ?? {};
-  return (
-    (typeof config.base_url === "string" && config.base_url.trim() !== "") ||
-    typeof config.api_key === "string" ||
-    typeof config.api_key_env === "string"
-  );
-};
-
 interface GettingStartedStepsProps {
   workspaces: Project[];
   counts: Record<string, ProjectCounts>;
@@ -1185,9 +1298,14 @@ function GettingStartedSteps({
   onNewTask,
 }: GettingStartedStepsProps) {
   const allProviders = Object.values(providersByProject).flat();
-  const usableProviders = allProviders.filter(providerIsUsable);
+  const usableList = allProviders.filter(providerIsUsable);
+  /* A mock provider answers with canned text; it is useful for a demo but it
+     is not a model that can do work. Counting it as one is what let Home say
+     "setup complete" directly above "nothing is really executed". */
+  const realModels = usableList.filter((provider) => provider.kind !== "mock");
+  const hasMockOnly = usableList.length > 0 && realModels.length === 0;
   const hasWorkspace = workspaces.length > 0;
-  const hasModel = usableProviders.length > 0;
+  const hasModel = realModels.length > 0;
   const hasBot = bots.length > 0;
   const totalTasks = Object.values(counts).reduce((sum, c) => sum + c.tasks, 0);
 
@@ -1196,9 +1314,9 @@ function GettingStartedSteps({
       id: "workspace" as const,
       number: 1,
       done: hasWorkspace,
-      title: "Create a workspace",
-      description: "Workspaces keep your bots, tasks, and files separate.",
-      cta: "Create workspace",
+      title: "Create a project",
+      description: "Projects keep your teammates, tasks, and files separate.",
+      cta: "Create project",
       show: !hasWorkspace,
       onClick: onCreateWorkspace,
     },
@@ -1208,7 +1326,7 @@ function GettingStartedSteps({
       done: hasModel,
       title: "Connect a model",
       description:
-        "Bots need a model to think with. Connect one to your workspace.",
+        "Teammates need a model to think with. Connect one to your project.",
       cta: "Connect model",
       show: hasWorkspace && !hasModel,
       onClick: () => onConnectModel(workspaces[0]?.id ?? ""),
@@ -1217,9 +1335,9 @@ function GettingStartedSteps({
       id: "bot" as const,
       number: 3,
       done: hasBot,
-      title: "Create a bot",
-      description: "Bots are your AI teammates. Give one a persona and a model.",
-      cta: "Create bot",
+      title: "Create a teammate",
+      description: "Teammates are your AI agents. Give one a persona and a model.",
+      cta: "Create teammate",
       show: hasModel && !hasBot,
       onClick: onCreateBot,
     },
@@ -1228,7 +1346,7 @@ function GettingStartedSteps({
       number: 4,
       done: true,
       title: "Start working",
-      description: "Create a task and a bot will pick it up.",
+      description: "Create a task and a teammate will pick it up.",
       cta: "New task",
       show: true,
       onClick: onNewTask,
@@ -1275,11 +1393,17 @@ function GettingStartedSteps({
 
       {/* What exists right now */}
       <div className="mt-5 grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <StatStripItem label="Workspaces" value={workspaces.length} />
-        <StatStripItem label="Bots" value={bots.length} />
-        <StatStripItem label="Models" value={usableProviders.length} />
+        <StatStripItem label="Projects" value={workspaces.length} />
+        <StatStripItem label="Teammates" value={bots.length} />
+        <StatStripItem label="Models" value={realModels.length} />
         <StatStripItem label="Tasks" value={totalTasks} />
       </div>
+      {hasMockOnly ? (
+        <p className="mt-2 text-step--2 text-[var(--faint)]">
+          Only a demo model is connected. Replies are canned and nothing runs
+          until a real model is added.
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -1310,16 +1434,25 @@ function CommandCenter({
   projectId: string;
   /** Recent conversations across every project the owner owns. */
   recentThreads: ChatThread[];
-  providers: { id: string; name: string; kind: string }[];
+  providers: Array<Provider & { project_name?: string }>;
   summary: ReturnType<typeof useWorkspaceSummary>;
-  onThreadCreated: (threadId: string) => void;
+  onThreadCreated: (threadId: string, targetProjectId?: string) => void;
   onOpenThread: (thread: ChatThread) => void;
   refreshProviders?: () => void;
   refreshThreads?: () => void;
 }) {
-  const hasProvider = providers.length > 0;
+  const usable = usableProviders(providers);
+  const hasProvider = usable.length > 0;
   const [draft, setDraft] = useState("");
-  const [selectedProviderId, setSelectedProviderId] = useState<"__default__" | string>("__default__");
+  /* The owner's explicit choice wins; until they make one, start on the
+     project's default model when it has one, otherwise on the first usable
+     model anywhere so Home is never disabled above a working machine. The
+     chosen model decides which project the thread belongs to. */
+  const [explicitProviderId, setExplicitProviderId] = useState<string | null>(null);
+  const homeHasProvider = providers.some((provider) => provider.project_id === projectId);
+  const selectedProviderId =
+    explicitProviderId ?? (homeHasProvider ? "__default__" : (usable[0]?.id ?? "__default__"));
+
   // A mock provider answers with canned text and executes nothing. The reply
   // says so, and this says so too, so the interface can label it instead of
   // passing it off as work.
@@ -1374,8 +1507,15 @@ function CommandCenter({
     setStreaming("");
     let stopped = false;
     try {
-      const thread = await api.createThread(projectId, { title: content.slice(0, 60) });
-      onThreadCreated(thread.id);
+      const selected = providers.find(
+        (provider) => provider.id === selectedProviderId,
+      );
+      const targetProjectId = selected?.project_id ?? projectId;
+      const thread = await api.createThread(targetProjectId, {
+        title: content.slice(0, 60),
+        provider_id: selected?.id,
+      });
+      onThreadCreated(thread.id, targetProjectId);
       await api.sendChatStream(thread.id, content, (chunk) => {
         setStreaming((prev) => prev + chunk);
       }, { signal: controller.signal });
@@ -1406,7 +1546,7 @@ function CommandCenter({
   );
   const projectLabel = (id: string) => {
     const bundle = summary.data?.summary.bundles.find((b) => b.project.id === id);
-    return bundle?.project.repository || "workspace";
+    return bundle?.project.repository || "project";
   };
 
   return (
@@ -1426,7 +1566,7 @@ function CommandCenter({
             // Handled by SettingsView's New Workspace modal; navigate there.
             navigate("#/settings");
           }}
-          onConnectModel={(projectId) => navigate("#/settings")}
+          onConnectModel={() => navigate("#/settings")}
           onCreateBot={() => navigate("#/bots")}
           onNewTask={() => navigate("#/work")}
         />
@@ -1462,7 +1602,7 @@ function CommandCenter({
                 <ModelChip
                   providers={providers}
                   value={selectedProviderId}
-                  onChange={setSelectedProviderId}
+                  onChange={setExplicitProviderId}
                   disabled={busy || !hasProvider}
                 />
                 {busy ? (

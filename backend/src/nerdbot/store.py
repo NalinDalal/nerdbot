@@ -2294,23 +2294,34 @@ def create_run(
 
 def append_run_event(
     conn: sqlite3.Connection, run_id: str, kind: str, content: str
-) -> int:
+) -> dict[str, Any]:
     """Append one durable progress event for a run.
 
     The provider loop and orchestrator call this while a run is in flight, so
     the dashboard can show what the agent is doing without waiting for the
     final run row to be written. Content is bounded so a model cannot fill the
     database with one tool result.
+
+    Returns the stored event exactly as ``list_run_events`` would report it,
+    so a caller can fan it out to live subscribers without a second query and
+    without diverging from the durable log.
     """
     text = (content or "").strip()
     if len(text) > 4000:
         text = text[:4000] + "…"
+    timestamp = datetime.now(UTC).isoformat()
     cursor = conn.execute(
         "INSERT INTO run_events (run_id, kind, content, timestamp) VALUES (?, ?, ?, ?)",
-        (run_id, (kind or "event")[:40], text, datetime.now(UTC).isoformat()),
+        (run_id, (kind or "event")[:40], text, timestamp),
     )
     conn.commit()
-    return int(cursor.lastrowid or 0)
+    return {
+        "seq": int(cursor.lastrowid or 0),
+        "run_id": run_id,
+        "kind": (kind or "event")[:40],
+        "content": text,
+        "timestamp": timestamp,
+    }
 
 
 def list_run_events(

@@ -21,13 +21,13 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
   return (
     <Page>
       <PageHeader
-        eyebrow="Workspace"
-        title="Workspaces"
-        description="Every workspace on this server."
+        eyebrow="Portfolio"
+        title="Projects"
+        description="Each project owns its teammates, tasks, files, and model connections."
         actions={
           <>
             <Button variant="primary" onClick={() => setShowCreate("create")}>
-              New workspace
+              New project
             </Button>
             <Button onClick={list.reload}>Refresh</Button>
           </>
@@ -43,7 +43,7 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
           <table className="w-full min-w-[720px] table-fixed">
             <thead>
               <tr>
-                <th className={`${TABLE_TH} w-[24%]`}>Workspace</th>
+                <th className={`${TABLE_TH} w-[24%]`}>Project</th>
                 <th className={`${TABLE_TH} w-[5rem]`}>Bots</th>
                 <th className={`${TABLE_TH} w-[6rem]`}>Tasks</th>
                 <th className={`${TABLE_TH} w-[5rem]`}>Boards</th>
@@ -65,7 +65,7 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
                         onClick={() => onOpen(project.id)}
                         className="text-left font-medium text-[var(--text)] hover:underline"
                       >
-                        {project.repository || "Untitled workspace"}
+                        {project.repository || "Untitled project"}
                       </button>
                     </td>
                     <td className={TABLE_TD}>{count?.bots ?? 0}</td>
@@ -102,20 +102,20 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
         </div>
       ) : (
         <EmptyState
-          title="No workspaces yet"
-          hint="Create one to start: a workspace owns its bots, tasks, boards, memory and approvals."
+          title="No projects yet"
+          hint="Create one to start: a project owns its teammates, tasks, boards, memory and approvals."
           action={
             <Button variant="primary" onClick={() => setShowCreate("create")}>
-              Create your first workspace
+              Create your first project
             </Button>
           }
         />
       )}
 
       {showCreate ? (
-        <Modal title="New workspace" onClose={() => setShowCreate("")}>
+        <Modal title="New project" onClose={() => setShowCreate("")}>
           <EntityForm
-            submitLabel="Create workspace"
+            submitLabel="Create project"
             fields={[
               { name: "repository", label: "Name", required: true, placeholder: "demo-repo" },
               { name: "owner_note", label: "Note (owner is always your token identity)" },

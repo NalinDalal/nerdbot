@@ -55,7 +55,8 @@ class AgentContext:
     # Optional live progress sink: (kind, text). The orchestrator wires this
     # to durable run_events so the workbench can show tool/model activity while
     # a run is still executing. Failures are swallowed by the provider loop.
-    progress: Callable[[str, str], None] | None = None
+    # The return value is the new event seq; callers ignore it.
+    progress: Callable[[str, str], int] | None = None
 
 
 def memory_scopes_for(

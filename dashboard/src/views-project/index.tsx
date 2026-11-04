@@ -1,6 +1,6 @@
-import { useState } from "react";
 import { api } from "../api";
-import { useAsync } from "../components";
+import { navigate } from "../app";
+import { Button, LoadingState, Page, useAsync } from "../components";
 import { ConversationView } from "../views-chat";
 import { TasksTab } from "./tasks";
 import { TeammatesTab } from "./teammates";
@@ -35,6 +35,12 @@ const TABS = [
   "Events",
 ] as const;
 
+type Tab = (typeof TABS)[number];
+
+function isTab(value: string | undefined): value is Tab {
+  return (TABS as readonly string[]).includes(value ?? "");
+}
+
 export function ProjectDetailView({
   projectId,
   initialTab,
@@ -45,74 +51,96 @@ export function ProjectDetailView({
   initialTab?: string;
   onOpenTask: (taskId: string) => void;
 }) {
-  const [tab, setTab] = useState<(typeof TABS)[number]>(
-    (TABS as readonly string[]).includes(initialTab ?? "")
-      ? (initialTab as (typeof TABS)[number])
-      : "Tasks",
-  );
   const projects = useAsync(() => api.listProjects(), []);
-  const workspaceName =
-    projects.data?.projects.find((project) => project.id === projectId)?.repository ||
-    "Workspace";
+  const project = projects.data?.projects.find((item) => item.id === projectId);
+  const counts = projects.data?.counts?.[projectId];
+  const workspaceName = project?.repository || "Project";
+
+  /* The tab lives in the hash, so a shared link, a refresh, and the browser
+     back button all land on the section the owner was looking at. Deriving
+     it instead of mirroring it in state means there is one source of truth. */
+  const tab: Tab = isTab(initialTab) ? initialTab : "Tasks";
+
+  const selectTab = (name: Tab) => {
+    navigate(`#/p/${projectId}?tab=${encodeURIComponent(name)}`);
+  };
+
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="mx-auto w-full max-w-[var(--max-width-wide)] px-6 py-6 md:px-8 md:py-8">
-        <a
-          href="#/settings"
-          className="mb-3 inline-flex items-center gap-1 text-step--1 text-[var(--muted)] transition-colors hover:text-[var(--text)]"
-        >
-          <span aria-hidden>←</span> Settings
-        </a>
-        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-step-2 font-semibold tracking-tight text-[var(--text)]">
+    <Page>
+      <a
+        href="#/projects"
+        className="mb-3 inline-flex items-center gap-1 text-step--1 text-[var(--muted)] transition-colors hover:text-[var(--text)]"
+      >
+        <span aria-hidden>←</span> Projects
+      </a>
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="mb-1 text-step--2 uppercase tracking-[0.16em] text-[var(--faint)]">
+            Project
+          </div>
+          <h1 className="truncate text-step-2 font-semibold tracking-tight text-[var(--text)]">
             {workspaceName}
           </h1>
+          <p className="mt-1 text-step--1 text-[var(--muted)]">
+            {counts
+              ? `${counts.bots} teammate${counts.bots === 1 ? "" : "s"} · ${counts.tasks} task${
+                  counts.tasks === 1 ? "" : "s"
+                } · ${counts.running} running`
+              : "\u00a0"}
+          </p>
         </div>
-        <div
-          role="tablist"
-          aria-label="Project sections"
-          className="mb-6 flex flex-wrap gap-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1"
-        >
-          {TABS.map((name) => (
-            <button
-              key={name}
-              role="tab"
-              id={`project-tab-${name}`}
-              aria-controls="project-tab-panel"
-              aria-selected={tab === name}
-              onClick={() => setTab(name)}
-              className={`rounded-md px-3 py-1.5 text-step--1 font-medium transition-colors ${
-                tab === name
-                  ? "bg-[var(--surface-3)] text-[var(--text)] shadow-sm"
-                  : "text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text-soft)]"
-              }`}
-            >
-              {name}
-            </button>
-          ))}
-        </div>
-        <div role="tabpanel" id="project-tab-panel" aria-labelledby={`project-tab-${tab}`} className="min-h-0">
-          {tab === "Tasks" && <TasksTab projectId={projectId} onOpenTask={onOpenTask} />}
-          {tab === "Chat" && (
-            <div className="h-[75vh] min-h-[480px] overflow-hidden rounded-xl border border-[var(--border)]">
-              <ConversationView projectId={projectId} />
-            </div>
-          )}
-          {tab === "Teammates" && <TeammatesTab projectId={projectId} />}
-          {tab === "Providers" && <ProvidersTab projectId={projectId} />}
-          {tab === "Issues" && <IssuesTab projectId={projectId} />}
-          {tab === "Knowledge" && <KnowledgeTab projectId={projectId} />}
-          {tab === "Schedules" && <SchedulesTab projectId={projectId} />}
-          {tab === "Approvals" && <ApprovalsTab projectId={projectId} />}
-          {tab === "Messages" && <MessagesTab projectId={projectId} />}
-          {tab === "Notifications" && <NotificationsTab projectId={projectId} />}
-          {tab === "Memory" && <MemoryTab projectId={projectId} />}
-          {tab === "Files" && <FilesTab projectId={projectId} />}
-          {tab === "Backup" && <BackupTab projectId={projectId} />}
-          {tab === "Metrics" && <MetricsTab projectId={projectId} />}
-          {tab === "Events" && <EventsTab projectId={projectId} />}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button onClick={() => navigate(`#/chat/${projectId}`)}>Open chat</Button>
+          <Button onClick={() => navigate(`#/workbench?project=${projectId}`)}>
+            Workbench
+          </Button>
         </div>
       </div>
-    </div>
+      <div
+        role="tablist"
+        aria-label="Project sections"
+        className="mb-6 flex flex-nowrap gap-1 overflow-x-auto rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 md:flex-wrap md:overflow-visible"
+      >
+        {TABS.map((name) => (
+          <button
+            key={name}
+            role="tab"
+            id={`project-tab-${name}`}
+            aria-controls="project-tab-panel"
+            aria-selected={tab === name}
+            onClick={() => selectTab(name)}
+            className={`shrink-0 rounded-md px-3 py-1.5 text-step--1 font-medium transition-colors ${
+              tab === name
+                ? "bg-[var(--surface-3)] text-[var(--text)] shadow-sm"
+                : "text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text-soft)]"
+            }`}
+          >
+            {name}
+          </button>
+        ))}
+      </div>
+      <div role="tabpanel" id="project-tab-panel" aria-labelledby={`project-tab-${tab}`} className="min-h-0">
+        {tab === "Tasks" && <TasksTab projectId={projectId} onOpenTask={onOpenTask} />}
+        {tab === "Chat" && (
+          <div className="h-[70vh] min-h-[420px] overflow-hidden rounded-xl border border-[var(--border)]">
+            <ConversationView projectId={projectId} />
+          </div>
+        )}
+        {tab === "Teammates" && <TeammatesTab projectId={projectId} />}
+        {tab === "Providers" && <ProvidersTab projectId={projectId} />}
+        {tab === "Issues" && <IssuesTab projectId={projectId} />}
+        {tab === "Knowledge" && <KnowledgeTab projectId={projectId} />}
+        {tab === "Schedules" && <SchedulesTab projectId={projectId} />}
+        {tab === "Approvals" && <ApprovalsTab projectId={projectId} />}
+        {tab === "Messages" && <MessagesTab projectId={projectId} />}
+        {tab === "Notifications" && <NotificationsTab projectId={projectId} />}
+        {tab === "Memory" && <MemoryTab projectId={projectId} />}
+        {tab === "Files" && <FilesTab projectId={projectId} />}
+        {tab === "Backup" && <BackupTab projectId={projectId} />}
+        {tab === "Metrics" && <MetricsTab projectId={projectId} />}
+        {tab === "Events" && <EventsTab projectId={projectId} />}
+      </div>
+      {projects.loading ? <LoadingState lines={1} /> : null}
+    </Page>
   );
 }

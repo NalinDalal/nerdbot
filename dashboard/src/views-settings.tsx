@@ -8,6 +8,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "./api";
 import { notifyError } from "./app";
+import { providerIsUsable } from "./readiness";
 import type { Project, ProjectCounts, Provider } from "./types";
 import {
   Badge,
@@ -31,16 +32,6 @@ interface WorkspaceConnections {
   counts: ProjectCounts | null;
   providers: Provider[];
 }
-
-const providerIsUsable = (provider: Provider): boolean => {
-  if (provider.kind !== "openai-compatible") return true;
-  const config = provider.config ?? {};
-  return (
-    (typeof config.base_url === "string" && config.base_url.trim() !== "") ||
-    typeof config.api_key === "string" ||
-    typeof config.api_key_env === "string"
-  );
-};
 
 export function SettingsView() {
   const health = useAsync(() => api.health(), []);
@@ -89,7 +80,7 @@ export function SettingsView() {
     <Page>
       <PageHeader
         title="Settings"
-        description="Models, workspaces, and the machine underneath."
+        description="Projects, model connections, and the machine underneath."
         actions={
           <Button
             onClick={() => {
@@ -103,16 +94,19 @@ export function SettingsView() {
       />
 
       <PageSection
-        title="Models"
-        description="A workspace needs one working model before its bots can think."
+        title="Projects & models"
+        description="Each project keeps its own teammates, tasks, files, and model connection."
         actions={
-          <Button
-            variant="primary"
-            onClick={() => setConnectTo(workspaces.data?.[0]?.project.id ?? null)}
-            disabled={!workspaces.data || workspaces.data.length === 0}
-          >
-            Connect a model
-          </Button>
+          <>
+            <Button onClick={() => setCreatingWorkspace(true)}>New project</Button>
+            <Button
+              variant="primary"
+              onClick={() => setConnectTo(workspaces.data?.[0]?.project.id ?? null)}
+              disabled={!workspaces.data || workspaces.data.length === 0}
+            >
+              Connect a model
+            </Button>
+          </>
         }
       >
         {workspaces.loading ? (
@@ -120,10 +114,10 @@ export function SettingsView() {
         ) : workspaces.error ? (
           <ErrorState error={workspaces.error} onRetry={workspaces.reload} />
         ) : (workspaces.data ?? []).length === 0 ? (
-          <EmptyState title="No workspaces" hint="Create one below, then connect a model." />
+          <EmptyState title="No projects" hint="Create one below, then connect a model." />
         ) : (
           <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
-            {(workspaces.data ?? []).map(({ project, providers }, index) => {
+            {(workspaces.data ?? []).map(({ project, counts, providers }, index) => {
               const usable = providers.filter(providerIsUsable);
               return (
                 <div
@@ -133,13 +127,21 @@ export function SettingsView() {
                   }`}
                 >
                   <div className="min-w-0 flex-1">
-                    <div className="truncate font-medium text-[var(--text)]">
-                      {project.repository || "Workspace"}
-                    </div>
+                    <a
+                      href={`#/p/${project.id}`}
+                      className="block truncate font-medium text-[var(--text)] hover:underline"
+                    >
+                      {project.repository || "Project"}
+                    </a>
                     <div className="mt-0.5 text-step--2 text-[var(--faint)]">
                       {providers.length === 0
                         ? "No model connected"
                         : `${usable.length} of ${providers.length} usable`}
+                      {counts
+                        ? ` · ${counts.bots} teammate${counts.bots === 1 ? "" : "s"} · ${counts.tasks} task${
+                            counts.tasks === 1 ? "" : "s"
+                          } · ${counts.running} running`
+                        : ""}
                     </div>
                   </div>
                   {providers.length === 0 ? (
@@ -172,7 +174,13 @@ export function SettingsView() {
                       ))}
                     </div>
                   )}
-                  <Button onClick={() => setConnectTo(project.id)}>Add</Button>
+                  <Button onClick={() => setConnectTo(project.id)}>Add model</Button>
+                  <a
+                    href={`#/p/${project.id}`}
+                    className="text-step--1 text-[var(--muted)] hover:text-[var(--text)]"
+                  >
+                    Open →
+                  </a>
                 </div>
               );
             })}
@@ -180,56 +188,11 @@ export function SettingsView() {
         )}
       </PageSection>
 
-      <PageSection
-        title="Workspaces"
-        description="Each workspace keeps its own bots, tasks, files, and model connections."
-        actions={
-          <Button onClick={() => setCreatingWorkspace(true)}>New workspace</Button>
-        }
-      >
-        {workspaces.loading ? (
-          <LoadingState lines={2} />
-        ) : (
-          <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
-            {(workspaces.data ?? []).map(({ project, counts }, index) => (
-              <div
-                key={project.id}
-                className={`flex flex-wrap items-center gap-3 px-4 py-3 ${
-                  index > 0 ? "border-t border-[var(--border-dim)]" : ""
-                }`}
-              >
-                <div className="min-w-0 flex-1">
-                  <a
-                    href={`#/p/${project.id}`}
-                    className="truncate font-medium text-[var(--text)] hover:underline"
-                  >
-                    {project.repository || "Workspace"}
-                  </a>
-                  <div className="mt-0.5 text-step--2 text-[var(--faint)]">
-                    {counts
-                      ? `${counts.bots} bot${counts.bots === 1 ? "" : "s"} · ${counts.tasks} task${
-                          counts.tasks === 1 ? "" : "s"
-                        } · ${counts.running} running`
-                      : "No counts yet"}
-                  </div>
-                </div>
-                <a
-                  href={`#/p/${project.id}`}
-                  className="text-step--1 text-[var(--muted)] hover:text-[var(--text)]"
-                >
-                  Open →
-                </a>
-              </div>
-            ))}
-          </div>
-        )}
-      </PageSection>
-
-      <PageSection title="Advanced" description="The container pages and build internals.">
+      <PageSection title="Advanced" description="Cross-project surfaces and build internals.">
         <div className="grid gap-2 sm:grid-cols-2">
-          <AdvancedLink href="#/boards" title="Boards" hint="Message channels bots can read and write." />
-          <AdvancedLink href="#/teams" title="Teams" hint="Group workspaces for a shared roll-up." />
-          <AdvancedLink href="#/projects" title="All workspaces" hint="The full workspace table." />
+          <AdvancedLink href="#/boards" title="Boards" hint="Message channels teammates can read and write." />
+          <AdvancedLink href="#/teams" title="Teams" hint="Group projects for a shared roll-up." />
+          <AdvancedLink href="#/projects" title="All projects" hint="The full project table." />
           <AdvancedLink href="#/capabilities" title="Capabilities" hint="What this build can and cannot do." />
         </div>
       </PageSection>
@@ -501,7 +464,7 @@ function NewWorkspaceModal({
     }
   };
   return (
-    <Modal title="New workspace" onClose={onClose}>
+    <Modal title="New project" onClose={onClose}>
       <form onSubmit={submit} className="flex flex-col gap-4">
         <label className="flex flex-col gap-1.5">
           <span className="text-step--1 text-[var(--muted)]">Name</span>
@@ -519,7 +482,7 @@ function NewWorkspaceModal({
             Cancel
           </Button>
           <Button type="submit" variant="primary" disabled={busy || !name.trim()}>
-            {busy ? "Creating…" : "Create workspace"}
+            {busy ? "Creating…" : "Create project"}
           </Button>
         </div>
       </form>

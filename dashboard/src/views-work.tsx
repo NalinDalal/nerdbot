@@ -31,8 +31,8 @@ type Bucket = "needs" | "running" | "queued" | "done";
 
 const BUCKETS: Array<{ id: Bucket; label: string; hint: string }> = [
   { id: "needs", label: "Needs you", hint: "Blocked, or waiting on a decision." },
-  { id: "running", label: "Running", hint: "A bot is working on it now." },
-  { id: "queued", label: "Queued", hint: "Ready for a bot to pick up." },
+  { id: "running", label: "Running", hint: "A teammate is working on it now." },
+  { id: "queued", label: "Queued", hint: "Ready for a teammate to pick up." },
   { id: "done", label: "Done", hint: "Finished, failed, or cancelled." },
 ];
 
@@ -147,7 +147,7 @@ export function WorkView() {
     <Page>
       <PageHeader
         title="Work"
-        description="Every task the fleet owns, in one place."
+        description="Every task your teammates own, in one place."
         actions={
           <>
             <Button onClick={reload}>Refresh</Button>
@@ -211,10 +211,10 @@ export function WorkView() {
           <select
             value={workspace}
             onChange={(event) => setWorkspace(event.target.value)}
-            aria-label="Filter by workspace"
+            aria-label="Filter by project"
             className={`${FORM_SELECT} h-9`}
           >
-            <option value="all">All workspaces</option>
+            <option value="all">All projects</option>
             {projects.map((project) => (
               <option key={project.id} value={project.id}>
                 {project.repository || "Workspace"}
@@ -227,7 +227,7 @@ export function WorkView() {
       {tasks.length === 0 ? (
         <EmptyState
           title="No work yet"
-          hint="Start a task and a bot will pick it up."
+          hint="Start a task and a teammate will pick it up."
           action={
             <Button variant="primary" onClick={() => setShowNew(true)}>
               New task
@@ -237,7 +237,7 @@ export function WorkView() {
       ) : visible.length === 0 ? (
         <EmptyState
           title="Nothing matches"
-          hint="Try a different filter, workspace, or search."
+          hint="Try a different filter, project, or search."
         />
       ) : (
         <div className="flex flex-col gap-6">
@@ -390,7 +390,7 @@ function NewTaskModal({
     <Modal title="New task" onClose={onClose}>
       <form onSubmit={submit} className="flex flex-col gap-4">
         <label className="flex flex-col gap-1.5">
-          <span className="text-step--1 text-[var(--muted)]">Workspace</span>
+          <span className="text-step--1 text-[var(--muted)]">Project</span>
           <select
             value={projectId}
             onChange={(event) => {
@@ -415,12 +415,12 @@ function NewTaskModal({
             rows={5}
             autoFocus
             required
-            placeholder="Describe the work. A bot reads this as its prompt."
+            placeholder="Describe the work. A teammate reads this as its prompt."
             className={FORM_INPUT}
           />
         </label>
         <label className="flex flex-col gap-1.5">
-          <span className="text-step--1 text-[var(--muted)]">Bot</span>
+          <span className="text-step--1 text-[var(--muted)]">Teammate</span>
           <select
             value={owner}
             onChange={(event) => setOwner(event.target.value)}
@@ -429,7 +429,7 @@ function NewTaskModal({
             <option value="">Unassigned</option>
             {available.map((bot) => (
               <option key={bot.id} value={bot.id}>
-                {bot.persona || "Unnamed bot"}
+                {bot.persona || "Unnamed teammate"}
               </option>
             ))}
           </select>

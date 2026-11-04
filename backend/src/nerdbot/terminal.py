@@ -12,6 +12,7 @@ reconnecting useful; the full transcript is deliberately not persisted.
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import os
 import pty
@@ -78,22 +79,16 @@ class TerminalSession:
                 if len(self.buffer) > MAX_BUFFER:
                     del self.buffer[: len(self.buffer) - MAX_BUFFER]
                 for subscriber in list(self.subscribers):
-                    try:
+                    with contextlib.suppress(queue.Full):
                         subscriber.put_nowait(text)
-                    except queue.Full:
-                        pass
         with self.lock:
             self.alive = False
             for subscriber in list(self.subscribers):
-                try:
+                with contextlib.suppress(queue.Full):
                     subscriber.put_nowait(None)
-                except queue.Full:
-                    pass
             self.subscribers.clear()
-        try:
+        with contextlib.suppress(OSError):
             os.close(self.master_fd)
-        except OSError:
-            pass
 
     def write(self, data: str) -> int:
         if not self.alive:
@@ -127,10 +122,8 @@ class TerminalSession:
         if not self.alive:
             return
         self.alive = False
-        try:
+        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
             os.killpg(self.pid, signal.SIGTERM)
-        except (ProcessLookupError, PermissionError, OSError):
-            pass
         # The pump thread owns the read end. Closing the fd from this thread
         # while a read is in flight can block on macOS, so signal it and let
         # the thread close the descriptor on its way out.
@@ -139,10 +132,8 @@ class TerminalSession:
             thread.join(timeout=2.0)
         with self.lock:
             for subscriber in list(self.subscribers):
-                try:
+                with contextlib.suppress(queue.Full):
                     subscriber.put_nowait(None)
-                except queue.Full:
-                    pass
             self.subscribers.clear()
 
 

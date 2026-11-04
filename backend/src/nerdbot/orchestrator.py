@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from . import agent_context as agent_context_mod
-from . import approval_flow, store, workspace
+from . import approval_flow, run_events, store, workspace
 from . import runtime as runtime_mod
 from .models import (
     Approval,
@@ -52,6 +52,25 @@ from .runtime import (
 #: verbatim so the action can be replayed exactly, and an unbounded payload
 #: would be a way to fill the database from a model.
 MAX_CHECKPOINT_BYTES = 64 * 1024
+
+
+def emit_event(conn: sqlite3.Connection, run_id: str, kind: str, content: str) -> int:
+    """Persist one run event and push it to every live SSE subscriber.
+
+    The ten call sites in this file each wrote ``store.append_run_event(...)``.
+    Routing them through one funnel means a new subscriber (a freshly opened
+    workbench tab, a reconnect) sees the same events as one that was there the
+    whole time, because the durable log and the live fan-out share a single
+    writer. A broadcast failure is swallowed: the event is still in SQLite, so
+    a subscriber can always catch up by polling.
+
+    The sequence number is returned so ``ctx.progress`` can carry it, and a
+    progress sink that drops the value silently stays type-compatible.
+    """
+    event = store.append_run_event(conn, run_id, kind, content)
+    run_events.broker.broadcast(run_id, event)
+    seq = event["seq"]
+    return int(seq)
 
 
 def dependencies_satisfied(conn: sqlite3.Connection, task: Task) -> bool:
@@ -196,7 +215,7 @@ def schedule_run(
         run.status = RunStatus.BLOCKED
         run.output_excerpt = reason
         store.set_task_status(conn, task_id, TaskStatus.BLOCKED, reason)
-        store.append_run_event(conn, run.id, "blocked", reason)
+        emit_event(conn, run.id, "blocked", reason)
         _finalize_child_delegation(conn, task, run, reason, failed=True)
         return run, None, None
 
@@ -208,8 +227,8 @@ def schedule_run(
         "All file reads, writes and commands happen in this directory. "
         "Keep changes inside it."
     )
-    ctx.progress = lambda kind, text: store.append_run_event(conn, run.id, kind, text)
-    store.append_run_event(
+    ctx.progress = lambda kind, text: emit_event(conn, run.id, kind, text)
+    emit_event(
         conn, run.id, "run", f"workspace mode={task.workspace_mode} root={ws}"
     )
 
@@ -223,7 +242,7 @@ def schedule_run(
             run.status = RunStatus.BLOCKED
             run.output_excerpt = reason
             store.set_task_status(conn, task_id, TaskStatus.BLOCKED, reason)
-            store.append_run_event(conn, run.id, "blocked", reason)
+            emit_event(conn, run.id, "blocked", reason)
             return run, None, None
         live_lock = True
 
@@ -236,20 +255,20 @@ def schedule_run(
         # A cancel that arrived before this run registered itself still
         # applies: the request is durable, and it is honoured here.
         cancel.cancel()
-    store.append_run_event(conn, run.id, "run", "executing")
+    emit_event(conn, run.id, "run", "executing")
     try:
         result = active.start_run(
             task.command, ws, timeout_s=timeout_s, context=ctx, cancel=cancel
         )
     except RunCancelled as exc:
-        store.append_run_event(conn, run.id, "cancelled", str(exc))
+        emit_event(conn, run.id, "cancelled", str(exc))
         return (run, None, _finish_cancelled(conn, run, task, exc, ws, data_dir, started))
     except BlockedError as exc:
         store.finish_run(conn, run.id, RunStatus.BLOCKED, None, f"blocked: {exc.reason}")
         run.status = RunStatus.BLOCKED
         run.output_excerpt = f"blocked: {exc.reason}"
         store.set_task_status(conn, task_id, TaskStatus.BLOCKED, str(exc.reason))
-        store.append_run_event(conn, run.id, "blocked", str(exc.reason))
+        emit_event(conn, run.id, "blocked", str(exc.reason))
         _finalize_child_delegation(conn, task, run, f"blocked: {exc.reason}", failed=True)
         return run, None, None
     except ExecutionError as exc:
@@ -269,7 +288,7 @@ def schedule_run(
         run.status = RunStatus.FAILED
         run.output_excerpt = str(exc)
         store.set_task_status(conn, task_id, TaskStatus.FAILED)
-        store.append_run_event(conn, run.id, "error", str(exc))
+        emit_event(conn, run.id, "error", str(exc))
         _finalize_child_delegation(conn, task, run, str(exc), failed=True)
         return run, None, failed
     except Exception as exc:  # explicit failure, never silent success
@@ -278,7 +297,7 @@ def schedule_run(
         run.status = RunStatus.FAILED
         run.output_excerpt = message
         store.set_task_status(conn, task_id, TaskStatus.FAILED)
-        store.append_run_event(conn, run.id, "error", message)
+        emit_event(conn, run.id, "error", message)
         _finalize_child_delegation(conn, task, run, message, failed=True)
         return run, None, None
     finally:
@@ -294,7 +313,7 @@ def schedule_run(
 
     duration_s = time.monotonic() - started
     ok = result.exit_code == 0
-    store.append_run_event(
+    emit_event(
         conn,
         run.id,
         "result",
