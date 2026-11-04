@@ -231,6 +231,45 @@ def test_health_reports_secret_key_state(tmp_path, monkeypatch, secret_key_env) 
     assert h2.json()["secret_key"] == "absent"
 
 
+def test_health_reports_auth_mode_configured(tmp_path, monkeypatch) -> None:
+    """With NERDBOT_TOKEN set the server is in 'configured' mode and says
+    nothing about the token itself — the owner must type it."""
+    monkeypatch.setenv("NERDBOT_TOKEN", "tok")
+    monkeypatch.setenv("NERDBOT_DB", str(tmp_path / "auth.db"))
+    monkeypatch.setenv("NERDBOT_DATA", str(tmp_path / "data"))
+    client = TestClient(create_app(), headers={"Authorization": "Bearer tok"})
+    h = client.get("/health").json()
+    assert h["auth"] == "configured"
+    assert "dev_token" not in h
+
+
+def test_health_reports_auth_mode_dev(tmp_path, monkeypatch) -> None:
+    """With the explicit dev opt-in the server hands back the well-known token
+    so the first browser visit can connect itself instead of forcing the
+    owner to retype a value everyone can read in the docs."""
+    monkeypatch.delenv("NERDBOT_TOKEN", raising=False)
+    monkeypatch.setenv("NERDBOT_INSECURE_DEV_TOKEN", "1")
+    monkeypatch.setenv("NERDBOT_DB", str(tmp_path / "auth.db"))
+    monkeypatch.setenv("NERDBOT_DATA", str(tmp_path / "data"))
+    client = TestClient(create_app())
+    h = client.get("/health").json()
+    assert h["auth"] == "dev"
+    assert h["dev_token"] == "dev-token-change-me"
+
+
+def test_health_reports_auth_mode_closed(tmp_path, monkeypatch) -> None:
+    """Fail-closed: with no token and no opt-in, no token is valid and the
+    server says nothing about one."""
+    monkeypatch.delenv("NERDBOT_TOKEN", raising=False)
+    monkeypatch.delenv("NERDBOT_INSECURE_DEV_TOKEN", raising=False)
+    monkeypatch.setenv("NERDBOT_DB", str(tmp_path / "auth.db"))
+    monkeypatch.setenv("NERDBOT_DATA", str(tmp_path / "data"))
+    client = TestClient(create_app())
+    h = client.get("/health").json()
+    assert h["auth"] == "closed"
+    assert "dev_token" not in h
+
+
 # -- store-level: rotation integrity ------------------------------------------
 
 

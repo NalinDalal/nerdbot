@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.responses import Response
 
-from . import approval_flow, orchestrator, run_events, schemas, store
+from . import approval_flow, auth as auth_mod, orchestrator, run_events, schemas, store
 from . import backup as backup_mod
 from . import boards as boards_mod
 from . import capabilities as capabilities_mod
@@ -361,13 +361,23 @@ def create_app() -> FastAPI:
             secret_key_state = "configured" if secrets_mod.keyring() else "absent"
         except Exception:
             secret_key_state = "absent"
-        return {
+        response: dict[str, Any] = {
             "status": "ok",
             "version": "0.1.0",
             "db": "ok" if db_ok else "error",
             "secret_key": secret_key_state,
             "restarts": restarts,
         }
+        # Auth mode lives here because the dashboard reads it. In the
+        # explicit dev opt-in the bearer token is a well-known constant, so
+        # serving it lets the first browser visit connect itself instead of
+        # making the owner retype a value everyone can read in the docs.
+        # Any other mode says nothing about its token.
+        mode = auth_mod.token_status()
+        response["auth"] = mode
+        if mode == "dev":
+            response["dev_token"] = auth_mod.DEV_DEFAULT_TOKEN
+        return response
 
     @app.post("/projects")
     def create_project(

@@ -4,6 +4,7 @@ import { Toaster, toast } from "sonner";
 import {
   ApiError,
   api,
+  autoConnectDev,
   describeError as apiDescribeError,
   getSession,
   setSession,
@@ -406,9 +407,26 @@ function Sidebar({
 export default function App() {
   const [route, setRoute] = useState<Route>(parseRoute);
   const [connected, setConnected] = useState(() => getSession() !== null);
+  // Without a stored session there may still be one to obtain silently:
+  // a dev-token server publishes it in /health, so probe once before
+  // showing the Connect form.
+  const [probing, setProbing] = useState(() => getSession() === null);
   const [activeThreadId, setActiveThread] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const { setTheme } = useTheme();
+
+  useEffect(() => {
+    if (!probing) return;
+    let alive = true;
+    autoConnectDev(defaultApiBase()).then((ok) => {
+      if (!alive) return;
+      if (ok) setConnected(true);
+      setProbing(false);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [probing]);
 
   useEffect(() => {
     const remove = onRouteChange(() => setRoute(parseRoute()));
@@ -426,6 +444,14 @@ export default function App() {
   };
 
   if (!connected) {
+    if (probing) {
+      return (
+        <div className="flex h-full flex-col items-center justify-center bg-[var(--bg)] text-[var(--muted)] text-[var(--text)]">
+          <p className="text-step-0">Connecting to {defaultApiBase()}.</p>
+          <Toaster position="bottom-right" richColors closeButton />
+        </div>
+      );
+    }
     return <ConnectScreen onConnected={() => setConnected(true)} />;
   }
 
@@ -587,6 +613,23 @@ export function defaultApiBase(): string {
   return "http://127.0.0.1:8080";
 }
 
+/** The dev server hands back its well-known token so the owner never has to
+ *  retype a value everyone can read in the docs. Any other auth mode says
+ *  nothing about its token, so a blank field stays a blank field. */
+export function resolveConnectToken(health: unknown, typed: string): string {
+  if (typed) return typed;
+  if (
+    typeof health === "object" &&
+    health !== null &&
+    (health as { auth?: unknown }).auth === "dev" &&
+    typeof (health as { dev_token?: unknown }).dev_token === "string" &&
+    (health as { dev_token?: string }).dev_token
+  ) {
+    return (health as { dev_token: string }).dev_token;
+  }
+  return "";
+}
+
 function ConnectScreen({ onConnected }: { onConnected: () => void }) {
   const [baseUrl, setBaseUrl] = useState(defaultApiBase);
   const [token, setToken] = useState("");
@@ -597,8 +640,18 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }) {
     e.preventDefault();
     setError(null);
     setBusy(true);
-    setSession({ baseUrl: baseUrl.replace(/\/+$/, ""), token });
     try {
+      // Probe first: in dev mode the server hands back the well-known token so
+      // the owner never has to type it. The probe is best-effort — a failure
+      // here just means the real connect attempt below will surface the error.
+      let tokenToUse = token;
+      try {
+        const health = await api.health();
+        tokenToUse = resolveConnectToken(health, tokenToUse);
+      } catch {
+        // fall through
+      }
+      setSession({ baseUrl: baseUrl.replace(/\/+$/, ""), token: tokenToUse });
       const health = await api.health();
       if (health.status !== "ok")
         throw new Error("Server reported unhealthy status");
@@ -647,14 +700,15 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }) {
             </div>
             <div>
               <span className="mb-1.5 block font-medium tracking-wide text-[var(--muted)] text-step--1 uppercase">
-                API token (kept in this browser's local storage
-                only)
+                API token
+                <span className="ml-1 normal-case text-[var(--faint)]">
+                  (optional in dev mode — the server hands one back)
+                </span>
               </span>
               <input
                 type="password"
                 value={token}
                 onChange={(e) => setToken(e.target.value)}
-                required
                 autoComplete="off"
                 className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step-0 text-[var(--text)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
               />

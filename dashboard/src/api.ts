@@ -120,6 +120,30 @@ export function describeError(err: unknown): string {
   return String(err);
 }
 
+/** Silent first connect when the server runs in dev-token mode.
+ *
+ *  A first-ever visit should not ask the owner to retype a value the server
+ *  already published in /health (NERDBOT_INSECURE_DEV_TOKEN=1 is an explicit
+ *  human opt-in and the token is a well-known constant). Any other auth mode
+ *  says nothing about its token, so this resolves to false and the Connect
+ *  screen shows normally. */
+export async function autoConnectDev(base: string): Promise<boolean> {
+  const clean = base.replace(/\/+$/, "");
+  try {
+    const res = await fetch(`${clean}/health`);
+    if (!res.ok) return false;
+    const health: unknown = await res.json();
+    if (typeof health !== "object" || health === null) return false;
+    const probe = health as { status?: unknown; dev_token?: unknown };
+    if (probe.status !== "ok") return false;
+    if (typeof probe.dev_token !== "string" || !probe.dev_token) return false;
+    setSession({ baseUrl: clean, token: probe.dev_token });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function joinUrl(base: string, path: string): string {
   return `${base.replace(/\/+$/, "")}${path}`;
 }
