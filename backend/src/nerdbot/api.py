@@ -2645,6 +2645,18 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _provider_public(updated)
 
+    @app.get("/providers/{provider_id}/health")
+    def provider_health(
+        provider_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        provider = store.get_provider(conn, provider_id)
+        if provider is None:
+            raise HTTPException(status_code=404, detail="provider not found")
+        require_project_owner(conn, provider.project_id, principal)
+        return providers_impl.health_check(provider)
+
     @app.get("/providers/{provider_id}/models")
     def provider_models(
         provider_id: str,
