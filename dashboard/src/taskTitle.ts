@@ -12,9 +12,20 @@ export function taskTitle(description: string): string {
 }
 
 
-/** Return the next ~100 chars after the title. */
+/** Return the next ~100 chars after the title: the first line after any
+ *  separator rows (drawn from only "=", "-", "#", "*", whitespace) that is
+ *  not the title line itself, cleaned of markdown markers like taskTitle. */
 export function taskPreview(description: string): string {
   const title = taskTitle(description);
-  const rest = (description || "").slice(title.length).trim();
-  return rest.slice(0, 100);
+  const lines = (description || "").split(/\r?\n/);
+  let rest = "";
+  for (const line of lines) {
+    const cleaned = line.trim().replace(/^[\s#*-]+/, "").replace(/\s+/g, " ").trim();
+    if (!cleaned) continue;
+    if (/^[=\-*#\s]+$/.test(line.trim())) continue;
+    if (cleaned === title) continue;
+    rest = cleaned;
+    break;
+  }
+  return rest.length > 100 ? `${rest.slice(0, 99)}…` : rest;
 }
