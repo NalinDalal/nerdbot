@@ -317,6 +317,7 @@ class ProviderKind(StrEnum):
     LOCAL = "local"
     MOCK = "mock"
     OPENAI_COMPATIBLE = "openai-compatible"
+    OLLAMA = "ollama"
 
 
 class ProviderStatus(StrEnum):

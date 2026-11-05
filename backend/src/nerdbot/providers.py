@@ -105,6 +105,13 @@ def health_check(provider: Provider, transport: Any = None) -> dict[str, Any]:
             if resp.status_code != 200:
                 raise ProviderProtocolError(f"upstream returned {resp.status_code}")
             result["healthy"] = True
+        elif provider.kind.value == "ollama":
+            base_url = str(provider.config.get("base_url", "http://localhost:11434")).rstrip("/")
+            with httpx.Client(timeout=5.0, transport=transport) as client:
+                resp = client.get(base_url + "/api/tags")
+            if resp.status_code != 200:
+                raise ProviderProtocolError(f"upstream returned {resp.status_code}")
+            result["healthy"] = True
         else:
             raise ProviderConfigurationError(f"unknown provider kind {provider.kind}")
     except Exception as exc:  # noqa: BLE001
@@ -584,6 +591,12 @@ def adapter_for_provider(provider: Provider | None) -> RuntimeAdapter:
         return default_command_runtime()
     if provider.kind == ProviderKind.MOCK:
         return MockRuntimeAdapter()
+    if provider.kind == ProviderKind.OLLAMA:
+        cfg = dict(provider.config)
+        base = str(cfg.get("base_url", "http://localhost:11434")).rstrip("/")
+        if not base.endswith("/v1"):
+            cfg["base_url"] = base + "/v1"
+        return OpenAICompatibleAdapter({k: v for k, v in cfg.items() if isinstance(v, object)})
     return OpenAICompatibleAdapter(
         {k: v for k, v in provider.config.items() if isinstance(v, object)}
     )
