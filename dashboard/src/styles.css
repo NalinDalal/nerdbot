@@ -183,7 +183,7 @@ body,
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
-  font-size: var(--step-0);
+  font-size: 14px;
   line-height: 1.55;
   height: 100%;
   overflow: hidden;
