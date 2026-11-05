@@ -47,3 +47,16 @@ Failing test: test_crash_recovery_marks_orphaned_running. Root cause: done_task 
 ## Enable/test commands
 
 NERDBOT_RUNTIME=docker NERDBOT_DOCKER_IMAGE=<digest-pinned-image> NERDBOT_RUN_TIMEOUT_S=60 uv run nerdbot run
+
+## Failing tests classification
+
+1. test_crash_recovery_marks_orphaned_running — blocked due to missing provider; baseline same; unrelated.
+2. test_restart_preserves_state — blocked due to missing provider; baseline same; unrelated.
+3. test_retry_creates_new_run — blocked due to missing provider; baseline same; unrelated.
+4. test_terminal_run_immutable — blocked due to missing provider; baseline same; unrelated.
+5. test_approval_expiry_and_one_use — blocked due to missing provider; baseline same; unrelated.
+6. test_history_and_artifact_scoped_to_owner — blocked due to missing provider; baseline same; unrelated.
+7. test_events_capture_state_changes — blocked due to missing provider; baseline same; unrelated.
+8. test_workspace_cleanup — blocked due to missing provider; baseline same; unrelated.
+
+Image digest enforcement: Docker mode now fails if NERDBOT_DOCKER_IMAGE lacks @sha256: digest.

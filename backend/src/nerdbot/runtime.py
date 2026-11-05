@@ -288,7 +288,7 @@ def docker_config() -> dict[str, Any]:
             return default
 
     return {
-        "image": os.environ.get("NERDBOT_DOCKER_IMAGE", "nerdbot-agent@sha256:0000000000000000000000000000000000000000000000000000000000000000"),
+        "image": os.environ.get("NERDBOT_DOCKER_IMAGE", ""),
         "cpus": os.environ.get("NERDBOT_DOCKER_CPUS", "1.0"),
         "memory": os.environ.get("NERDBOT_DOCKER_MEMORY", "512m"),
         "pids": int(os.environ.get("NERDBOT_DOCKER_PIDS", "128")),
@@ -319,6 +319,9 @@ class DockerRuntimeAdapter:
             raise RunCancelled("run cancelled before it started")
 
         cfg = docker_config()
+        image = cfg["image"]
+        if "@" not in image or "sha256:" not in image:
+            raise ExecutionError("Docker runtime requires a digest-pinned image (name@sha256:...)")
         run_id = getattr(context, "run_id", None) or str(_uuid.uuid4())
         container_name = f"nerdbot-run-{run_id}".replace(" ", "-")
         output_dir = Path(_tf.mkdtemp(prefix="nerdbot-out-"))
@@ -343,7 +346,7 @@ class DockerRuntimeAdapter:
             "-v", f"{workspace}:/workspace:rw",
             "-v", f"{output_dir}:/output:rw",
             "-w", "/workspace",
-            cfg["image"],
+            image,
             "sh", "-c", command,
         ]
 
