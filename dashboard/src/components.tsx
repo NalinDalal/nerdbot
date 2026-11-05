@@ -169,7 +169,7 @@ export function Page({
   className?: string;
 }) {
   return (
-    <div className={`flex-1 overflow-y-auto ${className}`}>
+    <div className={`flex-1 overflow-y-auto overflow-x-hidden ${className}`}>
       {/* pl-14 on mobile reserves the gutter the fixed menu button floats in
           (app.tsx: `fixed left-3 top-3`), so a page heading is never
           painted underneath it. md:px-8 releases the gutter on desktop. */}
