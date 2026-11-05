@@ -86,6 +86,33 @@ class ProviderToolError(RuntimeError):
     """A tool call failed repeatedly inside the bounded loop."""
 
 
+def health_check(provider: Provider, transport: Any = None) -> dict[str, Any]:
+    """Return a non-secret health report for a provider."""
+    import time as _time
+
+    start = _time.monotonic()
+    result = {"provider_id": provider.id, "kind": provider.kind.value, "healthy": False, "error": None, "latency_ms": 0}
+    try:
+        if provider.kind == ProviderKind.MOCK or provider.kind == ProviderKind.LOCAL:
+            result["healthy"] = True
+        elif provider.kind == ProviderKind.OPENAI_COMPATIBLE:
+            api_key = resolve_api_key(provider.config)
+            base_url = str(provider.config.get("base_url", "")).rstrip("/")
+            if not base_url or not api_key:
+                raise ProviderConfigurationError("missing base_url or api_key")
+            with httpx.Client(timeout=5.0, transport=transport) as client:
+                resp = client.get(base_url + "/models", headers={"Authorization": f"Bearer {api_key}"})
+            if resp.status_code != 200:
+                raise ProviderProtocolError(f"upstream returned {resp.status_code}")
+            result["healthy"] = True
+        else:
+            raise ProviderConfigurationError(f"unknown provider kind {provider.kind}")
+    except Exception as exc:  # noqa: BLE001
+        result["error"] = str(exc)
+    result["latency_ms"] = int((_time.monotonic() - start) * 1000)
+    return result
+
+
 def resolve_api_key(config: dict[str, Any]) -> str:
     """Resolve the credential without persisting it anywhere.
 
