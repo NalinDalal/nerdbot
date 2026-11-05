@@ -1,54 +1,61 @@
-# Docker Runtime Threat Model
+# Docker Runtime Threat Model (Revised)
 
-## Assets
+## Scope
 
-- Host filesystem and credentials.
-- NerdBot DB and workspaces.
-- Provider secrets.
-- Agent task outputs/artifacts.
+Threats from agent code, network, resources, secrets, images, and host boundary.
 
-## Threats and mitigations
+## Docker daemon boundary
 
-1. Container escape / privileged execution
-   - Mitigation: non-root, no privileged, no host namespaces, seccomp default, read-only root FS.
+Docker daemon is privileged host boundary. Only backend invokes it. Agent containers cannot access socket. Backend compromise is host-level risk; mitigations: service account, no shell interpolation, audit logging, secrets hygiene.
 
-2. Docker socket access
-   - Mitigation: do not mount socket; backend (outside container) controls Docker.
+## Network threat model
 
-3. Host credential leakage
-   - Mitigation: sanitize env, never export `NERDBOT_TOKEN`, `NERDBOT_SECRET_KEY`; redact output.
+- Bridge networking is not an allowlist.
+- Default no network.
+- Approved outbound requires proxy/firewall with destination allowlist and DNS control.
+- Block private/loopback/link-local/metadata.
+- DNS restrictions via proxy or fixed resolver.
 
-4. Cross-workspace access
-   - Mitigation: mount only task workspace; no parent data dir.
+## Command execution
 
-5. Network exfiltration
-   - Mitigation: default network none; allowlist explicit.
+- Host uses subprocess arg arrays.
+- `check_command` deny list.
+- Shell injection prevented by no host shell interpolation.
+- Untrusted code isolated in container but may exploit kernel/container runtime.
 
-6. Resource exhaustion
-   - Mitigation: CPU/memory/pids/disk/time limits.
+## Resource exhaustion
 
-7. Untrusted output execution
-   - Mitigation: frame output as untrusted; never execute.
+- CPU/mem/pids/time enforced by Docker.
+- Disk quota host-dependent; backend enforces artifact max size and cleanup.
+- Repeated cancellation handled idempotently.
 
-8. Stale containers after crash
-   - Mitigation: labels + reconciliation + cleanup job.
+## Secrets
 
-9. Image tampering
-   - Mitigation: pinned image digest, trusted registry.
+- Explicit allowlist.
+- Backend authorization.
+- Prefer files; env residual exposure.
+- Redaction in logs.
+- Removal after execution via container cleanup.
 
-10. Secret in image
-   - Mitigation: no secrets baked in; inject at runtime only.
+## Image security
+
+- Trusted sources, digest pins, scanning, no arbitrary pulls, non-root verification.
+
+## Crash recovery
+
+- Deterministic labels and reconciliation.
+- Interrupted status, no automatic replay of privileged actions.
 
 ## Residual risks
 
-- Kernel vulnerabilities in Docker.
-- Misconfigured allowlisted network.
-- User explicitly enabling broad access.
-- Host compromise outside container scope.
+- Kernel/container runtime vulnerabilities.
+- Misconfigured proxy/firewall.
+- Backend compromise.
+- Host quota limitations.
+- Image supply chain if trust boundary breached.
 
-## Security invariants
+## Unresolved risks and assumptions
 
-- Backend authorization remains authoritative.
-- Container cannot escalate to host Docker control.
-- No host env by default.
-- Cleanup always attempted.
+- External firewall/proxy required for true allowlisting.
+- Disk quotas depend on storage backend.
+- Recovery cannot prove side-effect uniqueness after crash.

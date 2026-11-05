@@ -1,131 +1,92 @@
-# Docker Runtime Design
+# Docker Runtime Design (Revised)
 
-## Purpose
+## 1. Docker daemon security
 
-Add an optional Docker-based execution runtime alongside the existing local runtime. The local runtime remains the default and must continue to work without Docker installed.
+Docker daemon is a privileged host boundary. Only the NerdBot backend process (single owner) may invoke Docker. Agent containers never receive `/var/run/docker.sock` or any equivalent. Backend runs Docker CLI via subprocess argument arrays with a restricted service account where possible.
 
-## Reuse vs change
+If backend is compromised, attacker gains Docker control; therefore backend hardening, token secrecy, and least privilege are prerequisites. Agent containers are not a containment boundary against backend compromise.
 
-Reusable:
-- `RuntimeAdapter` protocol (`start_run`, `RunResult`, `CancelToken`, `BlockedError`, `ExecutionError`, `RunCancelled`).
-- `check_command`, `scrub_secrets`, `child_env`, `frame_untrusted`.
-- Workspace path contract: task runs in its isolated workspace directory.
-- Orchestrator registration/unregistration and cancel endpoint integration.
+## 2. Runtime adapter contract
 
-Must change:
-- Docker adapter implementation.
-- Runtime selection/config plumbing.
-- Cleanup/recovery logic for containers.
-- Artifact collection from container workspace volume.
+Reuse existing `RuntimeAdapter`, `RunResult`, `CancelToken`, typed errors. Docker adapter must match signature exactly. Selection via config (`NERDBOT_RUNTIME`), default local.
 
-## Proposed interface
+## 3. Command execution
 
-```python
-class DockerRuntimeAdapter:
-    name = "docker"
+- Validate with existing `check_command` before container start.
+- Construct Docker invocation as Python list, never shell string.
+- Pass task command as container command array: `["sh", "-c", command]` only inside container; host never shells out with command interpolation.
+- Treat task code/output as untrusted; frame output.
 
-    def start_run(self, command, workspace, timeout_s=60.0, context=None, *, cancel=None) -> RunResult:
-        ...
-```
+## 4. Container configuration
 
-Same signature as local adapter. Internally:
-1. Validate command with `check_command`.
-2. Build container config from runtime settings.
-3. Mount workspace read/write into container at `/workspace`.
-4. Mount empty output/artifact directory read/write.
-5. Run with resource limits and timeout.
-6. Stream logs to backend.
-7. On completion, collect stdout/stderr, exit code, workspace diff/patch, artifacts.
-8. Ensure container removal.
+- Image pinned by digest.
+- User non-root (uid/gid from image or `--user`).
+- `--read-only` root FS, tmpfs `/tmp`.
+- `--cap-drop ALL`, no privileged, no host namespaces.
+- Mounts: task workspace rw at `/workspace`; output dir rw; no parent data dir.
+- Env: sanitized `child_env()`, plus explicitly authorized secrets only.
+- Labels: `nerdbot.run_id`, `nerdbot.task_id`, `nerdbot.runtime=docker`.
 
-## Lifecycle
+## 5. Network isolation
 
-1. Orchestrator calls adapter.
-2. Adapter creates container with:
-   - image from config
-   - command `sh -c <command>`
-   - working dir `/workspace`
-   - env from sanitized `child_env()` plus explicitly authorized secrets
-   - mounts: workspace rw, output rw
-   - limits: CPU, memory, pids, timeout
-   - network: none by default or allowlisted bridge
-   - user: non-root uid/gid
-   - read-only root FS where possible
-3. Poll container status and cancel token.
-4. On cancel: `docker stop` then `docker kill`.
-5. On timeout: kill container.
-6. Collect outputs.
-7. Remove container and temporary mounts metadata.
+Default `--network none`. Bridge networking alone is not an allowlist. Approved outbound access requires either:
+- host firewall rules, or
+- controlled proxy with destination allowlist and DNS restrictions.
+Protect against private/loopback/link-local/metadata IPs (127.0.0.0/8, 10/8, 172.16/12, 192.168/16, 169.254.169.254). DNS restricted to proxy or fixed resolver.
 
-## Inputs/outputs
+## 6. Resource limits
 
-- Input workspace mounted at `/workspace`.
-- Command output captured via Docker logs.
-- Patch/artifact collection by comparing workspace after run or explicit output dir.
-- RunResult same fields; output truncated to 8000 chars.
+Immediately enforceable:
+- CPU: `--cpus`
+- Memory: `--memory`, `--memory-swap`
+- PIDs: `--pids-limit`
+- Timeout: adapter deadline + `docker stop --time`
 
-## Resource limits
+Host-dependent / not hard guarantees:
+- Disk/workspace quota: depends on storage driver/filesystem; document as best-effort unless enforced by volume driver.
+- Max artifact size: enforced by backend collection (reject above configured bytes).
+- Temp files cleaned by container removal and post-run cleanup.
 
-- CPU: `--cpus` or cgroup quota.
-- Memory: `--memory`, `--memory-swap`.
-- PIDs: `--pids-limit`.
-- Disk: separate volume size limit or workspace quota.
-- Time: adapter-level deadline + Docker `--stop-timeout`.
+## 7. Crash recovery
 
-## Network
+- Unique run ID and container name/label.
+- DB stores `container_id`, runtime, status.
+- On startup, reconcile labeled containers:
+  - running container + DB run running -> adopt or mark interrupted
+  - container gone + DB run running -> mark interrupted/failed
+  - unknown container -> remove if labeled
+- Backend restart during creation: if container ID stored, reconcile; else mark run failed.
+- Backend restart during execution: mark run interrupted; do not rerun automatically.
+- Orphan cleanup retries with backoff.
+- Interrupted runs represented as `interrupted` (new status or metadata) and recoverable manually.
+- Recovery never repeats privileged actions; approvals remain consumed and audit log records execution.
 
-- Default `--network none`.
-- Optional allowlisted network for approved integrations.
-- No host networking.
-- No Docker socket.
+## 8. Secrets
 
-## Security
+- Only explicitly authorized provider secrets may enter container.
+- Authorization by backend based on task/teammate policy.
+- Prefer mounted read-only secret files over env where possible; env allowed only for short-lived authorized values.
+- Redact secrets and ciphertext from logs/output.
+- Remove secret mounts after run; container removal destroys ephemeral state.
+- Container inspection may expose env, so prefer files and scrub; document residual exposure.
 
-- Non-root user.
-- Read-only root filesystem with tmpfs for `/tmp`.
-- No privileged.
-- No host env by default.
-- Secrets only via explicit runtime context.
-- Backend authorization remains source of truth.
+## 9. Image security
 
-## Recovery
+- Trusted sources only (configured registry/namespace).
+- Digest pinning required.
+- Update policy: manual approved updates, no `:latest`.
+- Vulnerability scanning expected before approval.
+- No arbitrary image pulls by agents.
+- Verify non-root user and permissions at startup (image metadata check).
 
-- Track container IDs in DB or runtime registry.
-- On server restart, reconcile dangling containers by label and remove or adopt.
-- Cancel tokens are process-local; recovery marks interrupted runs failed/cancelled and cleans containers.
+## 10. Tests
 
-## Config
+See implementation plan.
 
-Environment/config:
-- `NERDBOT_RUNTIME=docker|local`
-- `NERDBOT_DOCKER_IMAGE`
-- `NERDBOT_DOCKER_CPU`
-- `NERDBOT_DOCKER_MEMORY`
-- `NERDBOT_DOCKER_PIDS`
-- `NERDBOT_DOCKER_NETWORK=none|allowlist`
-- `NERDBOT_DOCKER_TIMEOUT`
+## Unresolved risks and assumptions
 
-## DB changes
-
-- `runs.runtime` (local/docker)
-- `runs.container_id` nullable
-- `runs.resource_limits` JSON
-- optional `runtime_events` table for container lifecycle
-
-## Test cases
-
-- Adapter conformance tests matching local adapter.
-- Cancel kills container.
-- Timeout kills container.
-- Blocked command rejected before container start.
-- Secret redaction in logs.
-- Cleanup after crash.
-- Recovery reconciliation.
-- No Docker socket/env leakage.
-
-## Deployment
-
-- Docker Compose optional profile.
-- macOS dev: Docker Desktop.
-- Linux: Docker Engine.
-- Keep local runtime default.
+- Docker daemon compromise equals host compromise.
+- Host filesystem quota enforcement not guaranteed.
+- macOS Docker Desktop virtualization differences.
+- Recovery cannot fully prevent duplicate side effects if container completed but backend crashed before recording; mitigation via idempotency/approval audit, not automatic replay.
+- Network allowlisting requires external proxy/firewall beyond Docker.

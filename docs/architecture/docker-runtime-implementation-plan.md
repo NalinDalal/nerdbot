@@ -1,41 +1,39 @@
-# Docker Runtime Implementation Plan
+# Docker Runtime Implementation Plan (Revised)
 
-## Smallest safe implementation
+## Exact implementation sequence
 
-1. Add `DockerRuntimeAdapter` implementing existing `RuntimeAdapter`.
-2. Add config flags and runtime selection.
-3. Implement container lifecycle with subprocess `docker` CLI (avoid Docker SDK dependency initially).
-4. Mount workspace and output dirs.
-5. Enforce limits and timeout.
-6. Collect logs and exit code.
-7. Container cleanup on all paths.
-8. Recovery reconciliation on startup.
-9. Tests with mocked docker CLI.
+1. Add config and runtime selection (default local).
+2. Add DB fields (runtime, container_id, resource limits, interrupted status handling).
+3. Implement Docker adapter with subprocess arg arrays.
+4. Implement container lifecycle and cleanup.
+5. Implement recovery reconciliation at startup.
+6. Add tests (mocked Docker CLI).
+7. Add deployment docs and compose profile.
 
-## Files to change (future)
+## Tests expanded
 
-- `backend/src/nerdbot/runtime.py`
-- `backend/src/nerdbot/models.py` / migrations
-- `backend/src/nerdbot/api.py`
-- config/settings
-- tests
+- Malicious command args rejected.
+- Network access attempts blocked/default none.
+- Private IP/metadata access blocked.
+- CPU/memory/pid/time limits configured.
+- Resource exhaustion handling.
+- Secret leakage redaction.
+- Backend crash during creation.
+- Backend crash during execution.
+- Orphan cleanup.
+- Repeated cancellation.
+- Duplicate action prevention (approval audit).
+- Image digest/user verification.
 
-## Compatibility
+## Decisions requiring human approval
 
-- No Docker required by default.
-- Local runtime unchanged.
-- API contract unchanged.
-- DB migration additive.
-
-## Deferred
-
-- GPU inference in containers.
-- Advanced orchestration frameworks.
-- Browser automation integration.
-- MCP in containers.
-- Complex volume quota enforcement beyond basic limits.
-- Multi-host scheduling.
+- Enabling Docker runtime in production.
+- Allowing any outbound network.
+- Secret classes permitted in containers.
+- Trusted image registry and digest.
+- Resource defaults.
+- Recovery behavior (fail vs manual retry).
 
 ## Recommendation
 
-Worth implementing now as optional adapter. Smallest safe version uses Docker CLI, default network none, strict limits, additive DB fields, and mocked tests. Defer advanced orchestration and GPU.
+Smallest safe version is practical: Docker CLI adapter, default network none, strict limits, additive DB changes, mocked tests, manual recovery. Defer true destination allowlisting to proxy/firewall integration, hard disk quotas to storage-specific implementation, GPU, and orchestration frameworks.
