@@ -152,6 +152,7 @@ class RunResult:
     output: str
     stdout: str = ""
     stderr: str = ""
+    container_id: str = ""
 
 
 class RuntimeAdapter(Protocol):
@@ -275,3 +276,132 @@ def frame_untrusted(output: str) -> str:
     """Mark run output as untrusted data so downstream prompts never treat
     it as instructions."""
     return "<<<UNTRUSTED_RUN_OUTPUT>>>\n" + output + "\n<<<END_UNTRUSTED_RUN_OUTPUT>>>"
+
+
+def docker_config() -> dict[str, Any]:
+    import os
+
+    def _float(name: str, default: float) -> float:
+        try:
+            return float(os.environ.get(name, default))
+        except ValueError:
+            return default
+
+    return {
+        "image": os.environ.get("NERDBOT_DOCKER_IMAGE", "nerdbot-agent@sha256:0000000000000000000000000000000000000000000000000000000000000000"),
+        "cpus": os.environ.get("NERDBOT_DOCKER_CPUS", "1.0"),
+        "memory": os.environ.get("NERDBOT_DOCKER_MEMORY", "512m"),
+        "pids": int(os.environ.get("NERDBOT_DOCKER_PIDS", "128")),
+        "timeout": _float("NERDBOT_RUN_TIMEOUT_S", 60.0),
+    }
+
+
+class DockerRuntimeAdapter:
+    name = "docker"
+
+    def start_run(
+        self,
+        command: str,
+        workspace: Path,
+        timeout_s: float = 60.0,
+        context: Any | None = None,
+        *,
+        cancel: CancelToken | None = None,
+    ) -> RunResult:
+        import subprocess as _sp
+        import tempfile as _tf
+        import uuid as _uuid
+
+        if not command.strip():
+            raise ExecutionError("empty command")
+        check_command(command)
+        if cancel is not None and cancel.cancelled:
+            raise RunCancelled("run cancelled before it started")
+
+        cfg = docker_config()
+        run_id = getattr(context, "run_id", None) or str(_uuid.uuid4())
+        container_name = f"nerdbot-run-{run_id}".replace(" ", "-")
+        output_dir = Path(_tf.mkdtemp(prefix="nerdbot-out-"))
+        started = time.monotonic()
+        deadline = started + timeout_s
+
+        args = [
+            "docker", "run", "--rm", "--name", container_name,
+            "--label", f"nerdbot.run_id={run_id}",
+            "--label", "nerdbot.runtime=docker",
+            "--user", "1000:1000",
+            "--read-only",
+            "--tmpfs", "/tmp",
+            "--cap-drop", "ALL",
+            "--security-opt", "no-new-privileges",
+            "--network", "none",
+            "--cpus", cfg["cpus"],
+            "--memory", cfg["memory"],
+            "--memory-swap", cfg["memory"],
+            "--pids-limit", str(cfg["pids"]),
+            "--stop-timeout", "5",
+            "-v", f"{workspace}:/workspace:rw",
+            "-v", f"{output_dir}:/output:rw",
+            "-w", "/workspace",
+            cfg["image"],
+            "sh", "-c", command,
+        ]
+
+        proc = _sp.Popen(
+            args,
+            stdout=_sp.PIPE,
+            stderr=_sp.PIPE,
+            text=True,
+            env=child_env(),
+        )
+        # Store container id best-effort; docker run name is used for control.
+        container_id = container_name
+
+        try:
+            while True:
+                try:
+                    proc.wait(timeout=POLL_INTERVAL_S)
+                    break
+                except subprocess.TimeoutExpired:
+                    pass
+                if cancel is not None and cancel.cancelled:
+                    _sp.run(["docker", "stop", "-t", "5", container_name], capture_output=True, text=True)
+                    elapsed = time.monotonic() - started
+                    stdout, stderr = proc.communicate(timeout=KILL_GRACE_S) if False else ("", "")
+                    raise RunCancelled(f"run cancelled after {elapsed:.1f}s", stdout=stdout, stderr=stderr) from None
+                if time.monotonic() >= deadline:
+                    _sp.run(["docker", "kill", container_name], capture_output=True, text=True)
+                    raise ExecutionError(f"command timed out after {timeout_s:g}s") from None
+        finally:
+            pass
+
+        stdout_raw, stderr_raw = proc.communicate()
+        stdout = scrub_secrets(stdout_raw or "")
+        stderr = scrub_secrets(stderr_raw or "")
+        # enforce artifact max size
+        max_artifact = 10 * 1024 * 1024
+        for pth in output_dir.rglob("*"):
+            if pth.is_file() and pth.stat().st_size > max_artifact:
+                raise ExecutionError("artifact exceeds maximum size")
+        output = stdout + (("\n" if stdout else "") + stderr if stderr else "")
+        result = RunResult(exit_code=proc.returncode, output=output[-8000:], stdout=stdout, stderr=stderr)
+        result.container_id = container_id
+        # cleanup temp output dir
+        import shutil as _shutil
+
+        _shutil.rmtree(output_dir, ignore_errors=True)
+        return result
+
+
+def recover_docker_runs(conn: Any) -> None:
+    import subprocess as _sp
+
+    rows = conn.execute("SELECT id FROM runs WHERE runtime='docker' AND status IN ('running','queued')").fetchall()
+    for row in rows:
+        rid = row["id"]
+        conn.execute("UPDATE runs SET status='interrupted' WHERE id=?", (rid,))
+    conn.commit()
+    # remove labeled containers
+    out = _sp.run(["docker", "ps", "-aq", "--filter", "label=nerdbot.runtime=docker"], capture_output=True, text=True)
+    for cid in out.stdout.split():
+        _sp.run(["docker", "rm", "-f", cid], capture_output=True, text=True)

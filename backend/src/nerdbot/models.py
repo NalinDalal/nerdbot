@@ -223,6 +223,8 @@ class Run(BaseModel):
     duration_s: float = 0.0
     provider_id: str | None = None
     cancel_requested: bool = False
+    container_id: str = ""
+    resource_limits: dict[str, Any] = Field(default_factory=dict)
 
 
 class MemoryEntry(BaseModel):

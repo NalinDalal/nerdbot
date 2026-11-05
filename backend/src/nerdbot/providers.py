@@ -24,13 +24,13 @@ from urllib.parse import urlparse
 import httpx
 
 from . import agent_tools, store
+from . import runtime as runtime_mod
 from .fetch import FetchProtocolError, FetchTimeoutError
 from .models import Provider, ProviderKind, ProviderStatus
 from .runtime import (
     BlockedError,
     CancelToken,
     ExecutionError,
-    LocalRuntimeAdapter,
     RunCancelled,
     RunResult,
     RuntimeAdapter,
@@ -554,13 +554,21 @@ class MockRuntimeAdapter:
 def adapter_for_provider(provider: Provider | None) -> RuntimeAdapter:
     """Resolve the runtime adapter for a provider (None = default local)."""
     if provider is None or provider.kind == ProviderKind.LOCAL:
-        return LocalRuntimeAdapter()
+        return default_command_runtime()
     if provider.kind == ProviderKind.MOCK:
         return MockRuntimeAdapter()
     return OpenAICompatibleAdapter(
         {k: v for k, v in provider.config.items() if isinstance(v, object)}
     )
 
+
+
+
+def default_command_runtime() -> Any:
+    import os
+    if os.environ.get("NERDBOT_RUNTIME", "local").lower() == "docker":
+        return runtime_mod.DockerRuntimeAdapter()
+    return runtime_mod.LocalRuntimeAdapter()
 
 def list_upstream_models(
     provider: Provider, transport: httpx.BaseTransport | None = None
@@ -646,8 +654,8 @@ def resolve_run_provider(
                 provider = candidate
                 break
     if provider is not None and provider.project_id != project_id:
-        return provider, LocalRuntimeAdapter(), "provider belongs to another project"
+        return provider, default_command_runtime(), "provider belongs to another project"
     reason = provider_block_reason(provider)
     if reason is not None:
-        return provider, LocalRuntimeAdapter(), reason
+        return provider, default_command_runtime(), reason
     return provider, adapter_for_provider(provider), None

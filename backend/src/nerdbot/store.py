@@ -546,6 +546,14 @@ _PHASE22_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "tasks": [("title", "TEXT NOT NULL DEFAULT ''")],
 }
 
+_PHASE23_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    # Optional Docker runtime tracking.
+    "runs": [
+        ("container_id", "TEXT NOT NULL DEFAULT ''"),
+        ("resource_limits", "TEXT NOT NULL DEFAULT ''"),
+    ],
+}
+
 
 _PHASE20_COLUMNS: dict[str, list[tuple[str, str]]] = {
     # Bot persona files (ai-teammates model): a bot's identity, its active
@@ -577,7 +585,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
                   _PHASE10_COLUMNS, _PHASE11_COLUMNS, _PHASE12_COLUMNS, _PHASE13_COLUMNS,
                   _PHASE14_COLUMNS, _PHASE15_COLUMNS, _PHASE16_COLUMNS, _PHASE17_COLUMNS,
                   _PHASE18_COLUMNS, _PHASE19_COLUMNS, _PHASE20_COLUMNS,
-                  _PHASE21_COLUMNS, _PHASE22_COLUMNS):
+                  _PHASE21_COLUMNS, _PHASE22_COLUMNS, _PHASE23_COLUMNS):
         for table, columns in phase.items():
             phases.setdefault(table, []).extend(columns)
     for table, columns in phases.items():
@@ -2277,8 +2285,9 @@ def create_run(
     )
     conn.execute(
         "INSERT INTO runs (id, task_id, runtime, session, status, started_at, finished_at,"
-        " exit_code, output_excerpt, command, stdout, stderr, duration_s, provider_id)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " exit_code, output_excerpt, command, stdout, stderr, duration_s, provider_id,"
+        " container_id, resource_limits)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             run.id,
             run.task_id,
@@ -2294,6 +2303,8 @@ def create_run(
             "",
             0.0,
             run.provider_id,
+            run.container_id,
+            __import__("json").dumps(run.resource_limits),
         ),
     )
     conn.commit()
@@ -2362,6 +2373,8 @@ def _run_from_row(r: sqlite3.Row) -> Run:
         duration_s=r["duration_s"] if "duration_s" in keys and r["duration_s"] else 0.0,
         provider_id=r["provider_id"] if "provider_id" in keys else None,
         cancel_requested=bool(r["cancel_requested"]) if "cancel_requested" in keys else False,
+        container_id=r["container_id"] if "container_id" in keys and r["container_id"] else "",
+        resource_limits=__import__("json").loads(r["resource_limits"]) if "resource_limits" in keys and r["resource_limits"] else {},
     )
 
 
