@@ -21,8 +21,24 @@ describe("taskPreview", () => {
       "# nerdbot-personas-v3.yaml",
       "# Full persona configuration for the DriftLock organization.",
     ].join("\n");
-    expect(taskTitle(description)).toBe("create other bots please:");
+    expect(taskTitle(description)).toBe("create other bots please");
     expect(taskPreview(description)).toBe("nerdbot-personas-v3.yaml");
+  });
+
+  it("trailing separator punctuation is stripped from the title", () => {
+    expect(taskTitle("Ship it:")).toBe("Ship it");
+    expect(taskTitle("Deploy the build -")).toBe("Deploy the build");
+    expect(taskTitle("# Overview ##")).toBe("Overview");
+    expect(taskTitle("DriftLock org —")).toBe("DriftLock org");
+  });
+
+  it("meaningful trailing text is kept", () => {
+    expect(taskTitle("v3.yaml")).toBe("v3.yaml");
+    expect(taskTitle("3 - 2 = 1")).toBe("3 - 2 = 1");
+  });
+
+  it("leading and trailing cleanup compose: '# Run: ' stays a title, not an empty line", () => {
+    expect(taskTitle("# Run: ")).toBe("Run");
   });
 
   it("line of '=' alone is a separator, not the preview", () => {
