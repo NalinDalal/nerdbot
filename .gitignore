@@ -16,6 +16,10 @@ build/
 # generated face renders (dashboard/scripts/render-*.ts)
 dashboard/out/
 
+# playwright local runs (screenshots, reports, last-run marker)
+dashboard/test-results/
+dashboard/playwright-report/
+
 # runtime task checkouts + produced evidence (never committed)
 workspaces/
 artifacts/
