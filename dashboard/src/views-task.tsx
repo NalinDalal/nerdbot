@@ -286,6 +286,7 @@ function InstructionsSection({
   command,
   parent,
   projectId,
+  ownerSlot,
   expanded,
   onToggle,
 }: {
@@ -293,6 +294,10 @@ function InstructionsSection({
   command: string;
   parent: { id: string; description: string } | null;
   projectId: string;
+  /** The owner chip and Assign control, folded in from the old Owner
+   *  section: one details area holds everything about how the task runs
+   *  and who runs it. */
+  ownerSlot?: ReactNode;
   expanded: boolean;
   onToggle: () => void;
 }) {
@@ -370,6 +375,14 @@ function InstructionsSection({
               </span>
             )}
           </div>
+          {ownerSlot ? (
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1.5">
+              <span className="w-32 shrink-0 text-[var(--muted)]">Owner</span>
+              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+                {ownerSlot}
+              </div>
+            </div>
+          ) : null}
         </div>
       </div>
     </section>
@@ -870,22 +883,15 @@ export function TaskDetailView({
         command={task.command}
         parent={parent}
         projectId={projectId}
-        expanded={showInstructions}
-        onToggle={() => setShowInstructions((value) => !value)}
-      />
-
-      {/* Owner */}
-      <section className="mb-6">
-        <SectionLabel className="mb-2">Owner</SectionLabel>
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
-          {owner ? (
-            <BotChip persona={owner.persona || "bot"} id={owner.id} status={owner.status} face={owner.face} />
-          ) : (
-            <span className="text-step--1 text-[var(--muted)]">
-              Unassigned. Pick a bot to own this task.
-            </span>
-          )}
-          <div className="flex items-center gap-2">
+        ownerSlot={
+          <>
+            {owner ? (
+              <BotChip persona={owner.persona || "bot"} id={owner.id} status={owner.status} face={owner.face} />
+            ) : (
+              <span className="text-step--1 text-[var(--muted)]">
+                Unassigned. Pick a bot to own this task.
+              </span>
+            )}
             <select
               aria-label="Assign owner teammate"
               value={assignTo}
@@ -912,9 +918,11 @@ export function TaskDetailView({
             >
               {busy === "assign" ? "Saving…" : "Assign"}
             </Button>
-          </div>
-        </div>
-      </section>
+          </>
+        }
+        expanded={showInstructions}
+        onToggle={() => setShowInstructions((value) => !value)}
+      />
 
       {showReview ? (
         <Modal title="Submit review" onClose={() => setShowReview(false)}>
