@@ -260,6 +260,7 @@ export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenT
             ]}
             rows={filteredTasks}
             onRowClick={(task) => onOpenTask(task.id)}
+            stack={{ title: "task", badge: "status", meta: ["owner"] }}
           />
         ) : (
           <EmptyState
@@ -296,6 +297,7 @@ export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenT
             ]}
             rows={runs.data.runs}
             onRowClick={(run) => onOpenTask(run.task_id)}
+            stack={{ title: "task", badge: "status", meta: ["run", "exit", "runtime"] }}
           />
         ) : (
           <EmptyState title="No runs yet" hint="Create a task, then run it from the task page." />
