@@ -250,6 +250,114 @@ function RunTimeline({ run, live }: { run: Run; live: boolean }) {
   );
 }
 
+/** How much description counts as "long": above it the instructions block
+ *  starts collapsed, so a 40k-char persona YAML does not bury the page. */
+const LONG_INSTRUCTIONS = 400;
+
+/**
+ * The task's full instructions, plus the two facts to read next to them:
+ * the command that executes them, and where the task was delegated from.
+ *
+ * A long description starts collapsed — the persona YAML a bot hands over
+ * can run tens of thousands of characters — with an expand/collapse toggle,
+ * a Copy button, and a character count. The block is capped at ~320px with
+ * internal scroll, so a wall of text never pushes the rest of the page away.
+ */
+function InstructionsSection({
+  description,
+  command,
+  parent,
+  projectId,
+  expanded,
+  onToggle,
+}: {
+  description: string;
+  command: string;
+  parent: { id: string; description: string } | null;
+  projectId: string;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const long = description.length > LONG_INSTRUCTIONS;
+  const collapsed = long && !expanded;
+  const parentTitle = parent?.description.trim() || "Untitled";
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(description);
+      toast.success("Instructions copied.");
+    } catch {
+      toast.error("Copy failed. Select the text manually.");
+    }
+  };
+  return (
+    <section className="mb-6">
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+        <SectionLabel>Instructions</SectionLabel>
+        <span className="text-step--2 text-[var(--faint)]">
+          {description.length.toLocaleString()} chars
+        </span>
+      </div>
+      <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+        <div
+          className={`relative ${
+            collapsed
+              ? "max-h-40 overflow-hidden"
+              : "max-h-[320px] overflow-y-auto overflow-x-hidden"
+          }`}
+        >
+          {description ? (
+            <pre className="whitespace-pre-wrap break-words font-sans text-step--1 leading-relaxed text-[var(--text-soft)]">
+              {description}
+            </pre>
+          ) : (
+            <p className="text-step--1 text-[var(--muted)]">No written instructions.</p>
+          )}
+          {collapsed ? (
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-[var(--surface)] to-transparent"
+            />
+          ) : null}
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          {long ? (
+            <Button onClick={onToggle}>{expanded ? "Collapse" : "Expand"}</Button>
+          ) : null}
+          <Button onClick={() => void copy()}>Copy</Button>
+        </div>
+        <div className="mt-3 flex flex-col gap-1.5 border-t border-[var(--border-dim)] pt-3 text-step--1">
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+            <span className="w-32 shrink-0 text-[var(--muted)]">Command</span>
+            {command ? (
+              <code className="mono min-w-0 break-all text-[var(--text)]">{command}</code>
+            ) : (
+              <span className="min-w-0 flex-1 text-[var(--muted)]">
+                none — this task runs on the model alone
+              </span>
+            )}
+          </div>
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+            <span className="w-32 shrink-0 text-[var(--muted)]">Delegated from</span>
+            {parent ? (
+              <a
+                className="min-w-0 max-w-full truncate text-[var(--accent)] hover:underline"
+                href={`/p/${projectId}/t/${parent.id}`}
+                title={parentTitle}
+              >
+                {parentTitle}
+              </a>
+            ) : (
+              <span className="min-w-0 flex-1 text-[var(--muted)]">
+                none. This is a root task
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export function TaskDetailView({
   projectId,
   taskId,
@@ -262,6 +370,7 @@ export function TaskDetailView({
   const view = useAsync(() => api.taskView(taskId), [taskId]);
   const [busy, setBusy] = useState<string | null>(null);
   const [showMore, setShowMore] = useState(false);
+  const [showInstructions, setShowInstructions] = useState(false);
   const [showReview, setShowReview] = useState(false);
   const [showPackage, setShowPackage] = useState(false);
   const [showKnowledge, setShowKnowledge] = useState(false);
@@ -405,6 +514,7 @@ export function TaskDetailView({
     headingSource.length > 110
       ? `${cut.replace(/\s+\S*$/, "") || cut}…`
       : headingSource;
+  const description = (task.description || "").trim();
   const pendingApprovals = approvalRows.filter((approval) => approvalIsPending(approval));
   const latestOutput = unwrapRunOutput(
     latestRun?.output_excerpt?.trim() ||
@@ -711,6 +821,15 @@ export function TaskDetailView({
           </span>
         </div>
       ) : null}
+
+      <InstructionsSection
+        description={description}
+        command={task.command}
+        parent={parent}
+        projectId={projectId}
+        expanded={showInstructions}
+        onToggle={() => setShowInstructions((value) => !value)}
+      />
 
       {/* Owner */}
       <section className="mb-6">
