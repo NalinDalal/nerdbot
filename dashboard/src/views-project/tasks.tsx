@@ -1,15 +1,67 @@
 import { useState } from "react";
 import { api } from "../api";
-import { Button, CHIP_SHELL, EmptyState, ErrorState, LoadingState, Modal, PageSection, StatusBadge, relativeTime, useAsync } from "../components";
+import { notifyError } from "../app";
+import { Button, CHIP_SHELL, EmptyState, ErrorState, Field, FORM_INPUT, LoadingState, Modal, PageSection, StatusBadge, ERROR_BOX, relativeTime, useAsync } from "../components";
 import { DataTable } from "../DataTable";
+import { EntityPicker } from "../EntityPicker";
 import { taskTitle, taskPreview } from "../taskTitle";
-import { EntityForm } from "../forms";
 
 export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenTask: (id: string) => void }) {
   const [showCreate, setShowCreate] = useState(false);
+  /* New task drafts the two text fields (title + details), the executable
+     command, and the owner/issue picks — the EntityPicker turns raw
+     `owner_teammate_id` inputs into a searchable select. */
+  const [title, setTitle] = useState("");
+  const [details, setDetails] = useState("");
+  const [command, setCommand] = useState("");
+  const [ownerId, setOwnerId] = useState("");
+  const [issueId, setIssueId] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<unknown>(null);
   const tasks = useAsync(() => api.projectTasks(projectId), [projectId]);
   const runs = useAsync(() => api.projectRuns(projectId), [projectId]);
   const mates = useAsync(() => api.listTeammates(projectId), [projectId]);
+  const issues = useAsync(() => api.listIssues(projectId), [projectId]);
+  const mateItems = (mates.data?.teammates ?? []).map((mate) => ({
+    id: mate.id,
+    name: mate.persona || "Unnamed teammate",
+  }));
+  const issueItems = (issues.data?.issues ?? []).map((issue) => ({
+    id: issue.id,
+    name: issue.title || issue.id,
+  }));
+  const resetDraft = () => {
+    setTitle("");
+    setDetails("");
+    setCommand("");
+    setOwnerId("");
+    setIssueId("");
+    setSaveError(null);
+  };
+  const createTask = async () => {
+    if (!details.trim() || saving) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const trimmedTitle = title.trim();
+      const description = trimmedTitle ? `${trimmedTitle}\n\n${details.trim()}` : details.trim();
+      const task = await api.createTask(projectId, {
+        title: trimmedTitle,
+        description,
+        command: command.trim(),
+        owner_teammate_id: ownerId || null,
+        issue_id: issueId || null,
+      });
+      setShowCreate(false);
+      resetDraft();
+      onOpenTask(task.id);
+    } catch (err) {
+      setSaveError(err);
+      notifyError(err);
+    } finally {
+      setSaving(false);
+    }
+  };
   const ownerName = (id: string | null): string => {
     if (!id) return "Unassigned";
     return mates.data?.teammates.find((m) => m.id === id)?.persona || "Assigned";
@@ -23,20 +75,66 @@ export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenT
     <div>
       {showCreate ? (
         <Modal title="New task" onClose={() => setShowCreate(false)}>
-          <EntityForm
-            submitLabel="Create task"
-            fields={[
-              { name: "description", label: "Description", required: true, type: "textarea" },
-              { name: "command", label: "Command", placeholder: "echo ok" },
-              { name: "owner_teammate_id", label: "Owner teammate ID (optional)" },
-              { name: "issue_id", label: "Issue ID (optional)" },
-            ]}
-            onSubmit={async (values) => {
-              const task = await api.createTask(projectId, values);
-              setShowCreate(false);
-              onOpenTask(task.id);
+          <form
+            className="flex flex-col gap-1"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void createTask();
             }}
-          />
+          >
+            {saveError ? (
+              <div className={`${ERROR_BOX} mb-3`} role="alert">
+                {String(saveError)}
+              </div>
+            ) : null}
+            <Field label="Title">
+              <input
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="Short title shown in lists"
+                className={FORM_INPUT}
+              />
+            </Field>
+            <Field label="Details">
+              <textarea
+                rows={4}
+                value={details}
+                onChange={(e) => setDetails(e.target.value)}
+                required
+                placeholder="What the bot should do, in full"
+                className={`${FORM_INPUT} resize-y`}
+              />
+            </Field>
+            <Field label="Command">
+              <input
+                value={command}
+                onChange={(e) => setCommand(e.target.value)}
+                placeholder="echo ok"
+                className={FORM_INPUT}
+              />
+            </Field>
+            <Field label="Owner">
+              <EntityPicker
+                items={mateItems}
+                value={ownerId}
+                onChange={setOwnerId}
+                placeholder="Search teammates"
+              />
+            </Field>
+            <Field label="Issue">
+              <EntityPicker
+                items={issueItems}
+                value={issueId}
+                onChange={setIssueId}
+                placeholder="Search issues"
+              />
+            </Field>
+            <div className="mt-2 flex justify-end">
+              <Button variant="primary" type="submit" disabled={saving || !details.trim()}>
+                {saving ? "Creating…" : "Create task"}
+              </Button>
+            </div>
+          </form>
         </Modal>
       ) : null}
       <PageSection
