@@ -113,6 +113,9 @@ TOOL_PERMISSIONS: dict[str, str] = {
     "list_teammates": "task.delegate",
     "send_message": "message.send",
     "read_knowledge": "knowledge.read",
+    "attach_knowledge": "knowledge.read",
+    "ingest_knowledge": "knowledge.write",
+    "web_search": "web.search",
     "write_memory": "memory.write",
     "create_board": "board.create",
     "read_board": "board.read",
@@ -372,6 +375,42 @@ def app_tool_schemas(permissions: frozenset[str] | set[str]) -> list[dict[str, A
                 ["query"],
             )
         )
+        schemas.append(
+            _schemas(
+                "attach_knowledge",
+                "Retrieve project knowledge for a query and persist the citations as"
+                " a knowledge artifact on this task.",
+                {
+                    "query": {"type": "string"},
+                    "top_k": {"type": "integer"},
+                },
+                ["query"],
+            )
+        )
+    if "knowledge.write" in granted:
+        schemas.append(
+            _schemas(
+                "ingest_knowledge",
+                "Ingest a text source into project knowledge (chunked + cited).",
+                {
+                    "title": {"type": "string"},
+                    "content": {"type": "string"},
+                    "source": {"type": "string"},
+                    "kind": {"type": "string"},
+                },
+                ["title", "content"],
+            )
+        )
+    if "web.search" in granted:
+        schemas.append(
+            _schemas(
+                "web_search",
+                "Search the public web (DuckDuckGo Lite) for research. Returns"
+                " bounded title/url/snippet results.",
+                {"query": {"type": "string"}},
+                ["query"],
+            )
+        )
     if "memory.write" in granted:
         schemas.append(
             _schemas(
@@ -578,6 +617,7 @@ def execute_app_tool(
     data_dir: str = ".",
     run_id: str = "",
     workspace_path: str | None = None,
+    transport: Any = None,
     raise_on_denial: bool = False,
 ) -> str:
     """Execute one app tool call for the acting identity in ``ctx``.
@@ -591,7 +631,7 @@ def execute_app_tool(
     and it must not be mistaken for a success.
     """
     try:
-        return _dispatch(ctx, name, arguments, data_dir, run_id, workspace_path)
+        return _dispatch(ctx, name, arguments, data_dir, run_id, workspace_path, transport)
     except HTTPException as exc:
         return f"tool error (HTTP {exc.status_code}): {exc.detail}"
     except gates.GateDenied as exc:
@@ -639,6 +679,7 @@ def _dispatch(
     data_dir: str,
     run_id: str,
     workspace_path: str | None,
+    transport: Any = None,
 ) -> str:
     # Every tool acts as a validated teammate: the identity is re-checked
     # against the store before any handler runs.
@@ -884,6 +925,51 @@ def _dispatch(
             for c in citations
         ]
         return truncate_output("\n".join(lines))
+
+    if name == "attach_knowledge":
+        from . import knowledge as knowledge_mod
+
+        query = str(args.get("query", ""))
+        top_k = min(int(args.get("top_k", 3) or 3), 10)
+        try:
+            artifact_id, citations = knowledge_mod.attach_evidence(
+                conn, task.id, query, data_dir, run_id=run_id, top_k=top_k,
+            )
+        except (KeyError, ValueError) as exc:
+            return f"tool error: {exc}"
+        return (
+            f"attached {len(citations)} citations as artifact {artifact_id}"
+            + (f" for query {query!r}" if query else "")
+        )
+
+    if name == "ingest_knowledge":
+        from . import knowledge as knowledge_mod
+
+        title = str(args.get("title", "")).strip()
+        content = str(args.get("content", ""))
+        source = str(args.get("source", "")).strip() or f"teammate:{mate.id}"
+        kind = str(args.get("kind", "text") or "text")
+        if not title or not content.strip():
+            return "tool error: title and content are required"
+        try:
+            source_id, chunk_count = knowledge_mod.ingest_knowledge(
+                conn, task.project_id, title, content, source, kind=kind,
+            )
+        except (KeyError, ValueError) as exc:
+            return f"tool error: {exc}"
+        return f"ingested knowledge source {source_id} ({chunk_count} chunks)"
+
+    if name == "web_search":
+        from . import search as search_mod
+
+        query = args.get("query", "")
+        if not isinstance(query, str):
+            return "tool error: query must be a string"
+        try:
+            payload = search_mod.tool_payload(query, transport=transport)
+        except Exception as exc:  # surface provider errors as tool results
+            return f"tool error: {exc}"
+        return truncate_output(payload)
 
     if name == "write_memory":
         content = str(args.get("content", "")).strip()

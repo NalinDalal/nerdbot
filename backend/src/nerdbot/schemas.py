@@ -89,6 +89,12 @@ class TeammateCreate(_Body):
     memory_scope: str | None = None
     permissions: list[str] | None = None
     provider_id: str | None = None
+    model: str | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
+    context_limit: int | None = None
+    fallback_provider_id: str | None = None
+    fallback_model: str | None = None
     # The face: {shape, color, expression}. Kept as a plain dict so the
     # catalogue check stays in the handler and keeps its 400 response — a
     # face the catalogue does not know is a bad request, not a malformed
@@ -107,6 +113,12 @@ class TeammateUpdate(_Body):
     tool_policy: dict[str, Any] | None = None
     provider_id: str | None = None
     clear_provider: bool | None = None
+    model: str | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
+    context_limit: int | None = None
+    fallback_provider_id: str | None = None
+    fallback_model: str | None = None
     face: dict[str, Any] | None = None
     # ai-teammates persona files. A bot's soul, goals and wisdom are the
     # durable parts of its identity; they survive runs and are read at the

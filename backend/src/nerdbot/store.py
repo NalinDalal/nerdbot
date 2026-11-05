@@ -354,6 +354,7 @@ class ApprovalAlreadyResumed(ValueError):
 # the CLI sweeps and the dashboard can all write at once; without this the
 # second writer fails immediately with "database is locked".
 BUSY_TIMEOUT_MS = 5000
+_UNSET = object()
 
 
 def connect(db_path: str | Path) -> sqlite3.Connection:
@@ -882,12 +883,12 @@ def update_teammate(
     tool_policy: dict[str, Any] | None = None,
     provider_id: str | None = None,
     clear_provider: bool = False,
-    model: str | None = None,
-    temperature: float | None = None,
-    max_tokens: int | None = None,
-    context_limit: int | None = None,
-    fallback_provider_id: str | None = None,
-    fallback_model: str | None = None,
+    model: Any = _UNSET,
+    temperature: Any = _UNSET,
+    max_tokens: Any = _UNSET,
+    context_limit: Any = _UNSET,
+    fallback_provider_id: Any = _UNSET,
+    fallback_model: Any = _UNSET,
     face: dict[str, str] | None = None,
     soul: str | None = None,
     goals: str | None = None,
@@ -931,18 +932,22 @@ def update_teammate(
         mate.persona_version = persona_version
     if clear_provider:
         mate.provider_id = None
-    if model is not None:
-        mate.model = model
-    if temperature is not None:
+    if model is not _UNSET:
+        mate.model = model if model is not None else ""
+    if temperature is not _UNSET:
         mate.temperature = temperature
-    if max_tokens is not None:
+    if max_tokens is not _UNSET:
         mate.max_tokens = max_tokens
-    if context_limit is not None:
+    if context_limit is not _UNSET:
         mate.context_limit = context_limit
-    if fallback_provider_id is not None:
+    if fallback_provider_id is not _UNSET:
+        if fallback_provider_id is not None:
+            fb = get_provider(conn, fallback_provider_id)
+            if fb is None or fb.project_id != mate.project_id:
+                raise ValueError("fallback provider must belong to the same project")
         mate.fallback_provider_id = fallback_provider_id
-    if fallback_model is not None:
-        mate.fallback_model = fallback_model
+    if fallback_model is not _UNSET:
+        mate.fallback_model = fallback_model if fallback_model is not None else ""
     elif provider_id is not None:
         provider = get_provider(conn, provider_id)
         if provider is None or provider.project_id != mate.project_id:

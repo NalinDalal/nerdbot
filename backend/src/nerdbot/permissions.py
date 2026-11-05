@@ -45,6 +45,8 @@ AGENT_PERMISSIONS: frozenset[str] = frozenset(
         "board.read",
         "memory.write",
         "knowledge.read",
+        "knowledge.write",
+        "web.search",
         "message.send",
     }
 )
@@ -84,6 +86,14 @@ PERMISSION_INFO: dict[str, dict[str, str]] = {
     "knowledge.read": {
         "kind": "agent",
         "summary": "Search workspace knowledge sources.",
+    },
+    "knowledge.write": {
+        "kind": "agent",
+        "summary": "Ingest or attach project knowledge sources and evidence.",
+    },
+    "web.search": {
+        "kind": "agent",
+        "summary": "Search the public web for research.",
     },
     "message.send": {
         "kind": "agent",

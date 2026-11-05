@@ -52,11 +52,12 @@ export function ProvidersTab({ projectId }: { projectId: string }) {
   );
 }
 
-const BASE_URL_PRESETS: Array<{ label: string; url: string }> = [
+const BASE_URL_PRESETS: Array<{ label: string; url: string; kind?: string }> = [
   { label: "Groq", url: "https://api.groq.com/openai/v1" },
   { label: "OpenRouter", url: "https://openrouter.ai/api/v1" },
   { label: "OpenAI", url: "https://api.openai.com/v1" },
   { label: "Kimi (Moonshot)", url: "https://api.moonshot.cn/v1" },
+  { label: "Ollama (local)", url: "http://localhost:11434", kind: "ollama" },
 ];
 
 function providerModelName(config: Record<string, unknown>): string {
@@ -66,7 +67,21 @@ function providerModelName(config: Record<string, unknown>): string {
 function ProviderCard({ provider, onChanged }: { provider: Provider; onChanged: () => void }) {
   const [showModels, setShowModels] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
+  const [health, setHealth] = useState<{ healthy: boolean; error: string | null; latency_ms: number } | null>(null);
+  const [checkingHealth, setCheckingHealth] = useState(false);
   const disabled = provider.status !== "active";
+
+  const checkHealth = async () => {
+    setCheckingHealth(true);
+    try {
+      const result = await api.providerHealth(provider.id);
+      setHealth({ healthy: result.healthy, error: result.error, latency_ms: result.latency_ms });
+    } catch (err) {
+      setHealth({ healthy: false, error: describeError(err), latency_ms: 0 });
+    } finally {
+      setCheckingHealth(false);
+    }
+  };
 
   return (
     <div className={CARD_SHELL} style={disabled ? { opacity: 0.6 } : undefined}>
@@ -79,8 +94,16 @@ function ProviderCard({ provider, onChanged }: { provider: Provider; onChanged: 
           ) : (
             <span className={`${CHIP_SHELL} text-[var(--muted)]`}>no model set</span>
           )}
+          {health ? (
+            <span className={CHIP_SHELL} style={{ color: health.healthy ? "var(--ok, #16a34a)" : "var(--danger, #dc2626)" }}>
+              {health.healthy ? `healthy ${health.latency_ms}ms` : `unhealthy: ${health.error ?? "unknown"}`}
+            </span>
+          ) : null}
         </div>
         <div className="flex items-center gap-3">
+          <Button onClick={() => void checkHealth()} disabled={checkingHealth}>
+            {checkingHealth ? "Checking…" : "Health"}
+          </Button>
           <Button onClick={() => setShowModels(true)}>Models</Button>
           <Button onClick={() => setShowEdit(true)}>Edit</Button>
           <Button
@@ -101,6 +124,9 @@ function ProviderCard({ provider, onChanged }: { provider: Provider; onChanged: 
       </div>
       <div className="mono text-[var(--muted)]" style={{ marginTop: 8 }}>
         {provider.id} · {String(provider.config.base_url ?? "")}
+        {provider.capabilities && provider.capabilities.length > 0 ? (
+          <> · capabilities {provider.capabilities.join(", ")}</>
+        ) : null}
         {typeof provider.config.api_key === "string" && provider.config.api_key ? (
           <> · key <code>{String(maskSecrets(provider.config).api_key)}</code></>
         ) : typeof provider.config.api_key_env === "string" && provider.config.api_key_env ? (
@@ -208,6 +234,7 @@ function EditProviderForm({ provider, onDone }: { provider: Provider; onDone: ()
 }
 
 function ProviderForm({ projectId, onDone }: { projectId?: string; onDone?: () => void }) {
+  const [kind, setKind] = useState("openai-compatible");
   const [name, setName] = useState("");
   const [baseUrl, setBaseUrl] = useState(BASE_URL_PRESETS[0].url);
   const [model, setModel] = useState("");
@@ -221,6 +248,7 @@ function ProviderForm({ projectId, onDone }: { projectId?: string; onDone?: () =
     if (preset) {
       setPresetLabel(label);
       setBaseUrl(preset.url);
+      if (preset.kind) setKind(preset.kind);
     }
   };
   const [presetLabel, setPresetLabel] = useState(BASE_URL_PRESETS[0].label);
@@ -243,7 +271,7 @@ function ProviderForm({ projectId, onDone }: { projectId?: string; onDone?: () =
         if (apiKey) config.api_key = apiKey;
         if (apiKeyEnv) config.api_key_env = apiKeyEnv;
         try {
-          await api.createProvider(target, { kind: "openai-compatible", name, config });
+          await api.createProvider(target, { kind, name, config });
           onDone?.();
         } catch (err) {
           setError(describeError(err));
@@ -253,6 +281,14 @@ function ProviderForm({ projectId, onDone }: { projectId?: string; onDone?: () =
       }}
     >
       {projectId ? null : <input type="hidden" />}
+      <Field label="Kind">
+        <select value={kind} onChange={(e) => setKind(e.target.value)}>
+          <option value="openai-compatible">openai-compatible</option>
+          <option value="ollama">ollama</option>
+          <option value="mock">mock</option>
+          <option value="local">local</option>
+        </select>
+      </Field>
       <Field label="Preset">
         <select value={presetLabel} onChange={(e) => applyPreset(e.target.value)}>
           {BASE_URL_PRESETS.map((p) => (

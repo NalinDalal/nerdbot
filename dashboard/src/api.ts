@@ -3,6 +3,7 @@ import type {
   ApprovalInboxItem,
   ApprovalResume,
   Artifact,
+  BoardExecution,
   Board,
   BoardMember,
   BoardMessage,
@@ -251,6 +252,8 @@ export const api = {
   disableTeammate: (id: string) => post<Teammate>(`/teammates/${id}/disable`),
   archiveTeammate: (id: string) => post<Teammate>(`/teammates/${id}/archive`),
   patchTeammate: (id: string, body: Record<string, unknown>) => patch<Teammate>(`/teammates/${id}`, body),
+  getPersona: (id: string) => req<{ soul: string; goals: string; wisdom: string; version: string }>(`/teammates/${id}/persona`),
+  putPersona: (id: string, body: Record<string, unknown>) => req<{ soul: string; goals: string; wisdom: string; version: string }>(`/teammates/${id}/persona`, { method: "PUT", body }),
 
   createTeam: (body: Record<string, unknown>) => post<Team>("/teams", body),
   listTeams: () => req<{ teams: Team[]; counts: Record<string, TeamCounts> }>("/teams"),
@@ -286,6 +289,8 @@ export const api = {
     req<{ board: Board; members: BoardMember[]; messages: BoardMessage[]; inbox: BoardMessage[] }>(
       `/boards/${boardId}`
     ),
+  getBoardExecution: (boardId: string) =>
+    req<BoardExecution>(`/boards/${boardId}/execution`),
   updateBoard: (boardId: string, body: Record<string, unknown>) =>
     patch<Board>(`/boards/${boardId}`, body),
   deleteBoard: (boardId: string) =>
@@ -329,6 +334,8 @@ export const api = {
       "/executor/sweep"
     ),
 
+  createObjective: (projectId: string, body: Record<string, unknown>) =>
+    post<Record<string, unknown>>(`/projects/${projectId}/objectives`, body),
   createTask: (projectId: string, body: Record<string, unknown>) =>
     post<TaskView["task"]>(`/projects/${projectId}/tasks`, body),
   taskView: (taskId: string) => req<TaskView>(`/tasks/${taskId}`),
@@ -470,6 +477,14 @@ export const api = {
   disableProvider: (id: string) => post<Provider>(`/providers/${id}/disable`),
   patchProvider: (id: string, body: Record<string, unknown>) => patch<Provider>(`/providers/${id}`, body),
   providerModels: (id: string) => req<{ models: string[] }>(`/providers/${id}/models`),
+  providerHealth: (id: string) =>
+    req<{
+      provider_id: string;
+      kind: string;
+      healthy: boolean;
+      error: string | null;
+      latency_ms: number;
+    }>(`/providers/${id}/health`),
 
   ingestKnowledge: (projectId: string, body: Record<string, unknown>) =>
     post<{ source_id: string; chunks: number }>(`/projects/${projectId}/knowledge`, body),

@@ -462,6 +462,12 @@ def create_app() -> FastAPI:
             memory_scope=body.memory_scope or "project",
             permissions=list(body.permissions or []),
             provider_id=body.provider_id or None,
+            model=body.model,
+            temperature=body.temperature,
+            max_tokens=body.max_tokens,
+            context_limit=body.context_limit,
+            fallback_provider_id=body.fallback_provider_id,
+            fallback_model=body.fallback_model,
             face=face,
             acting=acting,
         )
@@ -528,6 +534,12 @@ def create_app() -> FastAPI:
             "provider_id": body.get("provider_id"),
             # provider_id: null is an explicit DETACH (absent = no change)
             "clear_provider": ("provider_id" in body and body["provider_id"] is None),
+            **({"model": body.get("model")} if "model" in body else {}),
+            **({"temperature": body.get("temperature")} if "temperature" in body else {}),
+            **({"max_tokens": body.get("max_tokens")} if "max_tokens" in body else {}),
+            **({"context_limit": body.get("context_limit")} if "context_limit" in body else {}),
+            **({"fallback_provider_id": body.get("fallback_provider_id")} if "fallback_provider_id" in body else {}),
+            **({"fallback_model": body.get("fallback_model")} if "fallback_model" in body else {}),
             "soul": body.get("soul"),
             "goals": body.get("goals"),
             "wisdom": body.get("wisdom"),
@@ -823,6 +835,58 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="board not found")
         require_project_owner(conn, board.project_id, principal)
         return boards_mod.board_detail_with_members(conn, board_id)
+
+    @app.get("/boards/{board_id}/execution")
+    def board_execution_endpoint(
+        board_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """Aggregated execution + deliverables view for one board (objective)."""
+        board = store.get_board(conn, board_id)
+        if board is None:
+            raise HTTPException(status_code=404, detail="board not found")
+        require_project_owner(conn, board.project_id, principal)
+        tasks = [
+            t for t in store.list_tasks_for_project(conn, board.project_id)
+            if t.board_id == board_id
+        ]
+        task_rows: list[dict[str, Any]] = []
+        deliverables: list[dict[str, Any]] = []
+        for task in tasks:
+            runs = store.list_runs_for_task(conn, task.id)
+            latest = runs[-1] if runs else None
+            artifacts = store.list_artifacts_for_task(conn, task.id)
+            for art in artifacts:
+                deliverables.append(
+                    {
+                        "task_id": task.id,
+                        "artifact_id": art.id,
+                        "type": art.type,
+                        "verification_status": art.verification_status.value,
+                        "summary": art.summary,
+                        "location": art.location,
+                    }
+                )
+            task_rows.append(
+                {
+                    "task": task.model_dump(mode="json"),
+                    "latest_run": latest.model_dump(mode="json") if latest else None,
+                    "run_count": len(runs),
+                    "artifacts": [a.model_dump(mode="json") for a in artifacts],
+                }
+            )
+        approvals = [
+            a.model_dump(mode="json")
+            for a in store.list_approvals_for_project(conn, board.project_id)
+            if getattr(a, "task_id", None) and any(t.id == a.task_id for t in tasks)
+        ] if hasattr(store, "list_approvals_for_project") else []
+        return {
+            "board": board.model_dump(mode="json"),
+            "tasks": task_rows,
+            "deliverables": deliverables,
+            "approvals": approvals,
+        }
 
     @app.patch("/boards/{board_id}")
     def update_board_endpoint(
@@ -1133,6 +1197,90 @@ def create_app() -> FastAPI:
             raise HTTPException(
                 status_code=400, detail="no provider available for decomposition"
             )
+        try:
+            result = decomposition_mod.decompose_objective(
+                conn,
+                project_id=project_id,
+                objective=objective,
+                provider=provider,
+                board_name=str(body.get("board_name", "")) or None,
+                create_board=create_board,
+                acting_teammate_id=acting.id if acting else None,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            http_exc = _provider_error_to_http(exc)
+            if http_exc is None:
+                raise
+            raise http_exc from exc
+        return result
+
+    @app.post("/projects/{project_id}/objectives")
+    def create_objective(
+        project_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Any = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        objective = str(body.get("objective", "")).strip()
+        if not objective:
+            raise HTTPException(status_code=400, detail="objective is required")
+        preview = bool(body.get("preview", False))
+        plan_payload = body.get("plan")
+        create_board = bool(body.get("create_board", True))
+
+        # Preview leg: side-effect-free plan for review.
+        if preview:
+            provider = decomposition_mod.resolve_provider(conn, project_id)
+            if provider is None:
+                raise HTTPException(status_code=400, detail="no provider available for decomposition")
+            try:
+                plan = decomposition_mod.plan_objective(conn, project_id, objective, provider)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except Exception as exc:
+                http_exc = _provider_error_to_http(exc)
+                if http_exc is None:
+                    raise
+                raise http_exc from exc
+            return {"board": None, "tasks": [], "plan": plan.model_dump(), "objective": objective, "preview": True}
+
+        # Materialize leg: exact reviewed plan.
+        if plan_payload is not None:
+            try:
+                plan = decomposition_mod.Plan.model_validate(plan_payload)
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"invalid plan: {exc}") from exc
+            known = {
+                m.id
+                for m in store.list_all_teammates(conn)
+                if m.project_id == project_id and m.status == TeammateStatus.ACTIVE
+            }
+            problems = decomposition_mod.validate_plan(
+                plan,
+                project_id=project_id,
+                acting_teammate_id=acting.id if acting else "",
+                known_teammate_ids=known,
+            )
+            if problems:
+                raise HTTPException(status_code=400, detail=f"plan rejected: {'; '.join(problems)}")
+            return decomposition_mod.materialize_plan(
+                conn,
+                project_id,
+                plan,
+                objective=objective,
+                board_name=str(body.get("board_name", "")) or None,
+                create_board=create_board,
+                acting_teammate_id=acting.id if acting else None,
+            )
+
+        # One-shot: plan and materialize in a single call.
+        provider = decomposition_mod.resolve_provider(conn, project_id)
+        if provider is None:
+            raise HTTPException(status_code=400, detail="no provider available for decomposition")
         try:
             result = decomposition_mod.decompose_objective(
                 conn,

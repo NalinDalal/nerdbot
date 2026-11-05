@@ -698,6 +698,48 @@ export function TaskDetailView({
         </div>
       ) : null}
 
+      {/* Status at a glance: what this task is and where it stands. */}
+      <section className="mb-6 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-step--1">
+          <span className="font-medium text-[var(--text)]">{task.status}</span>
+          <span className="text-[var(--muted)]">
+            {owner ? owner.persona || owner.id : "Unassigned"}
+          </span>
+          {latestRun ? (
+            <span className="text-[var(--muted)]">
+              latest run: {runStatusLabel(latestRun.status)} · {Number(latestRun.duration_s ?? 0).toFixed(1)}s
+            </span>
+          ) : (
+            <span className="text-[var(--faint)]">no runs yet</span>
+          )}
+          {latestRun?.exit_code !== null && latestRun?.exit_code !== undefined ? (
+            <span className="mono text-[var(--faint)]">exit {latestRun.exit_code}</span>
+          ) : null}
+        </div>
+        {task.blocked_reason ? (
+          <div className="mt-2 text-step--1 text-[var(--warn)]">{task.blocked_reason}</div>
+        ) : null}
+      </section>
+
+      {/* Deliverables: what this task actually produced. */}
+      {artifacts && artifacts.length > 0 ? (
+        <section className="mb-6">
+          <SectionLabel>Deliverables</SectionLabel>
+          <div className="mt-2 flex flex-col gap-2">
+            {artifacts.map((artifact) => (
+              <a
+                key={artifact.id}
+                href={`/artifacts/${artifact.id}`}
+                className="flex items-center justify-between rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step--1 hover:bg-[var(--surface-2)]"
+              >
+                <span className="font-medium text-[var(--text)]">{artifact.type}</span>
+                <span className="text-[var(--muted)]">{artifact.summary || artifact.location}</span>
+              </a>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       {/* The answer comes before the machinery. A run that produced a result
           is the point of the task; the runs, approvals and evidence are how
           it got there. */}

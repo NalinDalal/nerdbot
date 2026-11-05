@@ -29,6 +29,12 @@ def create_teammate_service(
     memory_scope: str = "project",
     permissions: list[str] | None = None,
     provider_id: str | None = None,
+    model: str | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    context_limit: int | None = None,
+    fallback_provider_id: str | None = None,
+    fallback_model: str | None = None,
     face: dict[str, str] | None = None,
     acting: Teammate | None = None,
 ) -> Teammate:
@@ -81,6 +87,24 @@ def create_teammate_service(
     if provider_id is not None:
         try:
             mate = store.update_teammate(conn, mate.id, provider_id=provider_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    model_updates: dict[str, Any] = {}
+    if model is not None:
+        model_updates["model"] = model
+    if temperature is not None:
+        model_updates["temperature"] = temperature
+    if max_tokens is not None:
+        model_updates["max_tokens"] = max_tokens
+    if context_limit is not None:
+        model_updates["context_limit"] = context_limit
+    if fallback_provider_id is not None:
+        model_updates["fallback_provider_id"] = fallback_provider_id
+    if fallback_model is not None:
+        model_updates["fallback_model"] = fallback_model
+    if model_updates:
+        try:
+            mate = store.update_teammate(conn, mate.id, **model_updates)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     return mate

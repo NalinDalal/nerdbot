@@ -232,10 +232,10 @@ function Sidebar({
     href: string;
     badge?: number;
   }> = [
-    { label: "Home", icon: "home", routes: ["home"], href: "/" },
+    { label: "Command Center", icon: "home", routes: ["home", "chat"], href: "/" },
     { label: "Work", icon: "work", routes: ["work", "task"], href: "/work" },
     {
-      label: "Teammates",
+      label: "Workforce",
       icon: "teammates",
       routes: ["bots", "bot"],
       href: "/bots",
@@ -381,7 +381,7 @@ function Sidebar({
 
         <div className="mt-auto flex flex-col gap-1 border-t border-[var(--border-dim)] pt-3">
           <NavItem
-            label="Settings"
+            label="Control Room"
             icon="settings"
             active={route.name === "settings" || route.name === "capabilities"}
             onClick={() => onNavigate("/settings")}

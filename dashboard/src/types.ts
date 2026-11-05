@@ -37,6 +37,12 @@ export interface Teammate {
   status: string;
   tool_policy: Record<string, unknown>;
   provider_id: string | null;
+  model: string;
+  temperature: number | null;
+  max_tokens: number | null;
+  context_limit: number | null;
+  fallback_provider_id: string | null;
+  fallback_model: string;
   face: BotFace;
 }
 
@@ -244,6 +250,25 @@ export interface Delegation {
   finished_at: string | null;
 }
 
+export interface BoardExecutionTask {
+  task: Task;
+  latest_run: Run | null;
+  run_count: number;
+  artifacts: Artifact[];
+}
+export interface BoardExecution {
+  board: Board;
+  tasks: BoardExecutionTask[];
+  deliverables: Array<{
+    task_id: string;
+    artifact_id: string;
+    type: string;
+    verification_status: string;
+    summary: string;
+    location: string;
+  }>;
+  approvals: Array<Record<string, unknown>>;
+}
 export interface Board {
   id: string;
   owner: string;
@@ -425,6 +450,7 @@ export interface PlanSubTask {
   description: string;
   command: string;
   depends_on: number[];
+  owner_teammate_id?: string;
 }
 
 export interface Plan {

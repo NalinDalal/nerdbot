@@ -45,6 +45,7 @@ export function BotDetailView({
   const tasks = useAsync(() => api.teammateTasks(teammateId), [teammateId]);
   const runs = useAsync(() => api.teammateRuns(teammateId), [teammateId]);
   const memory = useAsync(() => api.teammateMemory(teammateId), [teammateId]);
+  const persona = useAsync(() => api.getPersona(teammateId), [teammateId]);
   const boards = useAsync(() => api.listBoards(), [teammateId]);
   /* Resolve the model name rather than printing "model connected": the owner
      needs to know which model a bot will think with. */
@@ -174,7 +175,7 @@ export function BotDetailView({
     }
   };
 
-  if (all.loading || tasks.loading || runs.loading || memory.loading || boards.loading) {
+  if (all.loading || tasks.loading || runs.loading || memory.loading || boards.loading || persona.loading) {
     return <LoadingState lines={4} />;
   }
   if (all.error || tasks.error || runs.error || memory.error || boards.error) {
@@ -300,6 +301,25 @@ export function BotDetailView({
         </div>
       </div>
 
+      <section className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
+          <div className="text-step--2 text-[var(--faint)]">Model</div>
+          <div className="text-step--1 font-medium text-[var(--text)]">{modelName || (mate.provider_id ? "Connected" : "None")}</div>
+        </div>
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
+          <div className="text-step--2 text-[var(--faint)]">Memory</div>
+          <div className="text-step--1 font-medium text-[var(--text)]">{mate.memory_scope}</div>
+        </div>
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
+          <div className="text-step--2 text-[var(--faint)]">Tasks</div>
+          <div className="text-step--1 font-medium text-[var(--text)]">{taskList.length}</div>
+        </div>
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
+          <div className="text-step--2 text-[var(--faint)]">Runs</div>
+          <div className="text-step--1 font-medium text-[var(--text)]">{runList.length}</div>
+        </div>
+      </section>
+
       {mate.instructions ? (
         <details className="mb-6 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
           <summary className="cursor-pointer text-step--1 font-medium text-[var(--text-soft)]">
@@ -310,6 +330,31 @@ export function BotDetailView({
           </p>
         </details>
       ) : null}
+
+      <details className="mb-6 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
+        <summary className="cursor-pointer text-step--1 font-medium text-[var(--text-soft)]">
+          Persona (soul · goals · wisdom)
+        </summary>
+        {persona.data ? (
+          <div className="mt-3 space-y-3 text-step-0 text-[var(--text-soft)]">
+            <div>
+              <div className="text-step--2 uppercase tracking-[0.14em] text-[var(--faint)]">Soul</div>
+              <p className="whitespace-pre-wrap">{persona.data.soul || "—"}</p>
+            </div>
+            <div>
+              <div className="text-step--2 uppercase tracking-[0.14em] text-[var(--faint)]">Goals</div>
+              <p className="whitespace-pre-wrap">{persona.data.goals || "—"}</p>
+            </div>
+            <div>
+              <div className="text-step--2 uppercase tracking-[0.14em] text-[var(--faint)]">Wisdom</div>
+              <p className="whitespace-pre-wrap">{persona.data.wisdom || "—"}</p>
+            </div>
+            <div className="text-step--2 text-[var(--faint)]">version {persona.data.version}</div>
+          </div>
+        ) : (
+          <p className="mt-3 text-step--1 text-[var(--muted)]">No persona loaded.</p>
+        )}
+      </details>
 
       <details className="mb-6">
         <summary className="mb-2 cursor-pointer text-step--2 uppercase tracking-[0.14em] text-[var(--faint)]">

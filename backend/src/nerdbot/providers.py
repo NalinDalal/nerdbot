@@ -350,6 +350,7 @@ class OpenAICompatibleAdapter:
             base_url=base_url,
             timeout=per_call_timeout,
             transport=self._transport,
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
         )
         try:
             for _ in range(max_turns):
@@ -454,9 +455,14 @@ class OpenAICompatibleAdapter:
     ) -> str:
         from . import app_tools
 
-        if name in app_tools.APP_TOOL_NAMES:
-            if context is None or getattr(context, "teammate", None) is None:
-                raise ValueError(f"tool {name!r} requires an acting teammate")
+        # App tools are teammate-scoped: only route to them when an acting
+        # teammate is present. Otherwise a name that also exists as a base
+        # workspace tool (e.g. web_search) keeps working through the base path.
+        if (
+            name in app_tools.APP_TOOL_NAMES
+            and context is not None
+            and getattr(context, "teammate", None) is not None
+        ):
             return app_tools.execute_app_tool(
                 context,
                 name,
@@ -464,10 +470,12 @@ class OpenAICompatibleAdapter:
                 data_dir=getattr(context, "data_dir", "."),
                 run_id=getattr(context, "run_id", ""),
                 workspace_path=str(workspace),
+                transport=self._transport,
             )
         # Workspace tools: pass the database connection and the acting
         # teammate's id so persona/memory tools can scope their writes.
         mate = getattr(context, "teammate", None) if context is not None else None
+        task = getattr(context, "task", None)
         return agent_tools.execute_tool(
             workspace,
             name,
@@ -505,7 +513,7 @@ class OpenAICompatibleAdapter:
                 last_error = ProviderTimeoutError(f"provider timed out: {exc}")
                 continue
             except httpx.TransportError as exc:
-                last_error = ProviderTimeoutError(f"provider unreachable: {exc}")
+                last_error = ProviderNetworkError(f"provider unreachable: {exc}")
                 continue
             if response.status_code in (401, 403):
                 raise ProviderAuthenticationError(
@@ -664,7 +672,10 @@ def provider_block_reason(provider: Provider | None) -> str | None:
     task is never handed to a provider that cannot run it.
     """
     if provider is None:
-        return "no model configured for this teammate or project"
+        # No model attached: a task that carries its own command can still run
+        # through the local runtime. Only a *configured but unusable* provider
+        # blocks, so plain command tasks and the baseline slice keep working.
+        return None
     if provider.status != ProviderStatus.ACTIVE:
         return f"provider is {provider.status.value}"
     if provider.kind == ProviderKind.OPENAI_COMPATIBLE:
@@ -679,26 +690,45 @@ def provider_block_reason(provider: Provider | None) -> str | None:
 
 
 def resolve_run_provider(
-    conn: sqlite3.Connection, task_owner_provider_id: str | None, project_id: str
+    conn: sqlite3.Connection,
+    task_owner_provider_id: str | None,
+    project_id: str,
+    teammate: Any = None,
 ) -> tuple[Provider | None, RuntimeAdapter, str | None]:
     """Return (provider, adapter, block_reason) for a run.
 
     ``block_reason`` is set when an explicit provider cannot serve: the
     caller must record a blocked run instead of executing.
+
+    When ``teammate`` is given, honor its configured model override and
+    fallback provider/model (previously stored but ignored).
     """
-    provider = store.get_provider(conn, task_owner_provider_id) if task_owner_provider_id else None
-    if provider is None:
-        # Project-level default: first active provider in this project.
-        for candidate in store.list_providers(conn, project_id):
-            if candidate.status == ProviderStatus.ACTIVE:
-                provider = candidate
-                break
+    fallback_used = False
+    model_override = ""
+    if teammate is not None:
+        provider, model_override, fallback_used, _reason = select_provider_for_teammate(
+            conn, teammate
+        )
+        model_override = model_override or ""
+    else:
+        provider = store.get_provider(conn, task_owner_provider_id) if task_owner_provider_id else None
+        if provider is None:
+            # Project-level default: first active provider in this project.
+            for candidate in store.list_providers(conn, project_id):
+                if candidate.status == ProviderStatus.ACTIVE:
+                    provider = candidate
+                    break
     if provider is not None and provider.project_id != project_id:
         return provider, default_command_runtime(), "provider belongs to another project"
     reason = provider_block_reason(provider)
     if reason is not None:
         return provider, default_command_runtime(), reason
-    return provider, adapter_for_provider(provider), None
+    effective_provider = provider
+    if effective_provider is not None and model_override:
+        effective_provider = effective_provider.model_copy(
+            update={"config": {**effective_provider.config, "model": model_override}}
+        )
+    return effective_provider, adapter_for_provider(effective_provider), None
 
 
 def select_provider_for_teammate(conn, teammate, task_requirements=None):

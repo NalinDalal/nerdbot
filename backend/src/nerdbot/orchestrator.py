@@ -160,15 +160,20 @@ def schedule_run(
             return run, None, None
     if adapter is None:
         owner_provider_id = None
+        owner = None
         if task.owner_teammate_id is not None:
             owner = store.get_teammate(conn, task.owner_teammate_id)
             owner_provider_id = owner.provider_id if owner else None
         from . import providers as providers_mod
 
         provider, adapter, block_reason = providers_mod.resolve_run_provider(
-            conn, owner_provider_id, task.project_id
+            conn, owner_provider_id, task.project_id, teammate=owner
         )
         provider_id = provider.id if provider else None
+        # A task with neither a runnable command nor a model cannot do
+        # anything: block explicitly instead of failing as "empty command".
+        if block_reason is None and provider is None and not (task.command or "").strip():
+            block_reason = "no command and no model configured for this teammate or project"
         if block_reason is not None:
             run = store.create_run(
                 conn, task_id, runtime=adapter.name, session=task.id, provider_id=provider_id

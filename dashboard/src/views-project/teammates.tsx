@@ -69,6 +69,7 @@ function BotCard({
   const [showAttach, setShowAttach] = useState(false);
   const [showPerms, setShowPerms] = useState(false);
   const [showFace, setShowFace] = useState(false);
+  const [showModelSettings, setShowModelSettings] = useState(false);
   const [faceDraft, setFaceDraft] = useState<FaceChoice>(DEFAULT_FACE);
   const [hovered, setHovered] = useState(false);
   const catalogue = usePermissionCatalogue();
@@ -100,6 +101,7 @@ function BotCard({
           <Button onClick={() => setShowAttach(true)}>
             {attached ? "Switch model" : "Attach model"}
           </Button>
+          <Button onClick={() => setShowModelSettings(true)}>Model settings</Button>
           <Button onClick={() => setShowPerms(true)}>Permissions</Button>
           <Button
             onClick={() => {
@@ -152,6 +154,8 @@ function BotCard({
         {attached ? (
           <>
             {attached.name} · {String(attached.config.model ?? "model not set")}
+            {mate.model ? <> · override {mate.model}</> : null}
+            {mate.fallback_provider_id ? <> · fallback {mate.fallback_model || mate.fallback_provider_id}</> : null}
           </>
         ) : mate.provider_id ? (
           <>{mate.provider_id} (connection not found)</>
@@ -194,6 +198,18 @@ function BotCard({
               ))}
             </div>
           )}
+        </Modal>
+      ) : null}
+      {showModelSettings ? (
+        <Modal title={`Model settings for ${mate.persona || mate.id}`} onClose={() => setShowModelSettings(false)}>
+          <ModelSettingsForm
+            mate={mate}
+            providers={providers}
+            onSaved={() => {
+              setShowModelSettings(false);
+              onChanged();
+            }}
+          />
         </Modal>
       ) : null}
       {showFace ? (
@@ -331,6 +347,92 @@ function PermissionsForm({ mate, onSaved }: { mate: TeammateT; onSaved: () => vo
       <div className="flex items-center gap-3" style={{ marginTop: 8 }}>
         <Button variant="primary" type="submit" disabled={busy || catalogue.loading || unknownHeld.length > 0}>
           {busy ? "Saving…" : "Save permissions"}
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+function ModelSettingsForm({
+  mate,
+  providers,
+  onSaved,
+}: {
+  mate: TeammateT;
+  providers: Provider[];
+  onSaved: () => void;
+}) {
+  const [model, setModel] = useState(mate.model || "");
+  const [temperature, setTemperature] = useState(
+    mate.temperature === null || mate.temperature === undefined ? "" : String(mate.temperature),
+  );
+  const [maxTokens, setMaxTokens] = useState(
+    mate.max_tokens === null || mate.max_tokens === undefined ? "" : String(mate.max_tokens),
+  );
+  const [contextLimit, setContextLimit] = useState(
+    mate.context_limit === null || mate.context_limit === undefined ? "" : String(mate.context_limit),
+  );
+  const [fallbackProviderId, setFallbackProviderId] = useState(mate.fallback_provider_id || "");
+  const [fallbackModel, setFallbackModel] = useState(mate.fallback_model || "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <form
+      onSubmit={async (e) => {
+        e.preventDefault();
+        setBusy(true);
+        setError(null);
+        try {
+          await api.patchTeammate(mate.id, {
+            model: model.trim(),
+            temperature: temperature.trim() === "" ? null : Number(temperature),
+            max_tokens: maxTokens.trim() === "" ? null : Number(maxTokens),
+            context_limit: contextLimit.trim() === "" ? null : Number(contextLimit),
+            fallback_provider_id: fallbackProviderId || null,
+            fallback_model: fallbackModel.trim(),
+          });
+          onSaved();
+        } catch (err) {
+          setError(describeError(err));
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <Field label="Model override (leave empty to use the connection's model)">
+        <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="openai/gpt-oss-120b" />
+      </Field>
+      <Field label="Temperature">
+        <input type="number" step="0.1" value={temperature} onChange={(e) => setTemperature(e.target.value)} />
+      </Field>
+      <Field label="Max tokens">
+        <input type="number" value={maxTokens} onChange={(e) => setMaxTokens(e.target.value)} />
+      </Field>
+      <Field label="Context limit">
+        <input type="number" value={contextLimit} onChange={(e) => setContextLimit(e.target.value)} />
+      </Field>
+      <Field label="Fallback connection">
+        <select value={fallbackProviderId} onChange={(e) => setFallbackProviderId(e.target.value)}>
+          <option value="">(none)</option>
+          {providers.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name || p.id}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <Field label="Fallback model">
+        <input value={fallbackModel} onChange={(e) => setFallbackModel(e.target.value)} />
+      </Field>
+      {error ? (
+        <div className="text-[var(--danger)]" style={{ marginBottom: 8 }}>
+          {error}
+        </div>
+      ) : null}
+      <div className="flex items-center gap-3" style={{ marginTop: 8 }}>
+        <Button variant="primary" type="submit" disabled={busy}>
+          {busy ? "Saving…" : "Save model settings"}
         </Button>
       </div>
     </form>

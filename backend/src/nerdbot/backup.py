@@ -226,6 +226,12 @@ _IMPORT_COLUMNS: dict[str, frozenset[str]] = {
             "goals",
             "wisdom",
             "persona_version",
+            "model",
+            "temperature",
+            "max_tokens",
+            "context_limit",
+            "fallback_provider_id",
+            "fallback_model",
         }
     ),
     "issues": frozenset(

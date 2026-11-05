@@ -248,7 +248,12 @@ def execute_tool(
         return truncate_output(fetch_mod.fetch_url_text(url, transport=transport))
     if name == "web_search":
         from . import search as search_mod
+        from . import store as store_mod
 
+        if teammate_id:
+            mate = store_mod.get_teammate(conn, teammate_id) if conn is not None else None
+            if mate is not None and "web.search" not in (mate.permissions or []):
+                raise ValueError("web_search requires the web.search permission")
         query = arguments.get("query", "")
         if not isinstance(query, str):
             raise ValueError("web_search requires a query string")

@@ -51,9 +51,14 @@ def _available_bot(
             continue
         if mate.status != TeammateStatus.ACTIVE:
             continue
-        if mate.provider_id is None:
+        # Honor teammate-specific routing and configured fallbacks, not just
+        # the primary provider_id: a bot whose primary is unusable but whose
+        # fallback can serve is still available.
+        provider, _model, _fallback, _reason = providers_mod.select_provider_for_teammate(
+            conn, mate
+        )
+        if provider is None:
             continue
-        provider = store.get_provider(conn, mate.provider_id)
         if providers_mod.provider_block_reason(provider) is not None:
             continue
         if mate.id in busy:
@@ -73,9 +78,12 @@ def _provider_block_reason(conn: sqlite3.Connection, project_id: str) -> str | N
             continue
         if mate.status != TeammateStatus.ACTIVE:
             continue
-        if mate.provider_id is None:
+        provider, _model, _fallback, _reason = providers_mod.select_provider_for_teammate(
+            conn, mate
+        )
+        if provider is None:
             continue
-        reason = providers_mod.provider_block_reason(store.get_provider(conn, mate.provider_id))
+        reason = providers_mod.provider_block_reason(provider)
         if reason is not None:
             return reason
     return None

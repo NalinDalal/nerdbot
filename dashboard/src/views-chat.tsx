@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import { toast } from "sonner";
 import { api, ApiError } from "./api";
 import { notifyError, navigate } from "./app";
-import type { ChatMessage, ChatThread, Provider, Project, ProjectCounts, Teammate } from "./types";
+import type { ChatMessage, ChatThread, Plan, Provider, Project, ProjectCounts, Teammate } from "./types";
 import { AttentionBanner, useWorkspaceSummary } from "./views-home";
 import { providerIsUsable, usableProviders } from "./readiness";
 import {
@@ -494,6 +494,8 @@ function ThreadPane({
   const [useStream, setUseStream] = useState(true);
   const [retryFrom, setRetryFrom] = useState<string | null>(null);
   const [execView, setExecView] = useState<{ kind: "task"; taskId: string; projectId: string } | null>(null);
+  const [planPreview, setPlanPreview] = useState<{ objective: string; plan: Plan } | null>(null);
+  const [planBusy, setPlanBusy] = useState(false);
   const [contextPanel, setContextPanel] = useState<"files" | "bots" | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<Array<{ name: string; content: string }>>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -511,6 +513,22 @@ function ThreadPane({
     e.preventDefault();
     const content = draft.trim();
     if (!content || busy) return;
+    // Objective-like requests get a reviewable plan instead of a plain reply.
+    const objectiveLike = /\b(build|create|research|launch|implement|design|compare|analyze|write|generate|develop|plan)\b/i.test(content) && content.split(/\s+/).length >= 4;
+    if (objectiveLike && projectId) {
+      setPlanBusy(true);
+      try {
+        const res = await api.createObjective(projectId, { objective: content, preview: true });
+        setPlanPreview({ objective: content, plan: res.plan as Plan });
+        setDraft("");
+        return;
+      } catch (err) {
+        notifyError(err);
+      } finally {
+        setPlanBusy(false);
+      }
+      return;
+    }
     const controller = new AbortController();
     abortRef.current = controller;
     setBusy(true);
@@ -721,6 +739,50 @@ function ThreadPane({
       ) : null}
 
       {execView && <ExecutionView state={execView} onClose={() => setExecView(null)} />}
+
+      {planPreview && (
+        <div className="mx-4 mb-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 md:mx-6">
+          <div className="mb-2 text-step-1 font-semibold text-[var(--text)]">Plan preview</div>
+          <div className="mb-2 text-step--1 text-[var(--muted)]">{planPreview.objective}</div>
+          <ol className="mb-3 list-decimal pl-5 text-step--1 text-[var(--text-soft)]">
+            {planPreview.plan.tasks.map((t, i) => (
+              <li key={i} className="mb-1">
+                {t.description}
+                {t.owner_teammate_id ? <span className="ml-2 text-[var(--faint)]">({t.owner_teammate_id})</span> : null}
+                {t.depends_on?.length ? <span className="ml-2 text-[var(--faint)]">depends on {t.depends_on.map((d) => d + 1).join(", ")}</span> : null}
+              </li>
+            ))}
+          </ol>
+          <div className="flex gap-2">
+            <Button
+              variant="primary"
+              disabled={planBusy}
+              onClick={async () => {
+                setPlanBusy(true);
+                try {
+                  const res = await api.createObjective(projectId!, {
+                    objective: planPreview.objective,
+                    plan: planPreview.plan,
+                    create_board: true,
+                  });
+                  const boardId = (res as { board?: { id?: string } }).board?.id;
+                  setPlanPreview(null);
+                  if (boardId) navigate(`/board/${boardId}`);
+                } catch (err) {
+                  notifyError(err);
+                } finally {
+                  setPlanBusy(false);
+                }
+              }}
+            >
+              Approve & execute
+            </Button>
+            <Button onClick={() => setPlanPreview(null)} disabled={planBusy}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Messages */}
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-6">
@@ -1355,6 +1417,8 @@ function GettingStartedSteps({
 
   const setupComplete = hasWorkspace && hasModel && hasBot;
 
+  if (setupComplete) return null;
+
   return (
     <div className="mb-6">
       <div className="mb-4 flex items-baseline justify-between gap-3">
@@ -1392,12 +1456,9 @@ function GettingStartedSteps({
       )}
 
       {/* What exists right now */}
-      <div className="mt-5 grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <StatStripItem label="Projects" value={workspaces.length} />
-        <StatStripItem label="Teammates" value={bots.length} />
-        <StatStripItem label="Models" value={realModels.length} />
-        <StatStripItem label="Tasks" value={totalTasks} />
-      </div>
+      <p className="mt-3 text-step--2 text-[var(--faint)]">
+        {workspaces.length} projects · {bots.length} teammates · {realModels.length} models · {totalTasks} tasks
+      </p>
       {hasMockOnly ? (
         <p className="mt-2 text-step--2 text-[var(--faint)]">
           Only a demo model is connected. Replies are canned and nothing runs
@@ -1408,16 +1469,6 @@ function GettingStartedSteps({
   );
 }
 
-function StatStripItem({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3 text-center">
-      <div className="text-step-1 font-semibold text-[var(--text)] tabular-nums">
-        {value}
-      </div>
-      <div className="mt-0.5 text-step--2 text-[var(--muted)]">{label}</div>
-    </div>
-  );
-}
 
 /* --- Command Center (Home landing) --- */
 
@@ -1491,6 +1542,8 @@ function CommandCenter({
 
   const [busy, setBusy] = useState(false);
   const [streaming, setStreaming] = useState("");
+  const [planDraft, setPlanDraft] = useState<any>(null);
+  const [planObjective, setPlanObjective] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [showConfigure, setShowConfigure] = useState(false);
@@ -1561,6 +1614,84 @@ function CommandCenter({
       <div className="mx-auto flex w-full max-w-[860px] flex-col gap-6 px-4 py-8 md:px-6">
         {/* The workspace banner renders once above this pane (ConversationView). */}
 
+        {/* Welcome hero: what NerdBot is and what it can do today. */}
+        <div className="space-y-1">
+          <h2 className="text-step-2 font-semibold tracking-tight text-[var(--text)]">
+            NerdBot
+          </h2>
+          <p className="mt-2 max-w-2xl text-step-0 text-[var(--text-soft)]">
+            Your personal AI fleet. Chat with models, delegate work to bots, run
+            tasks across projects, and approve what matters — all from one place.
+          </p>
+          <p className="mt-4 text-step-1 font-medium text-[var(--text)]">
+            What can I help you with today?
+          </p>
+        </div>
+
+        {planDraft?.plan?.tasks ? (
+          <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-step-1 font-semibold">Plan preview</h3>
+              <Button variant="ghost" onClick={() => { setPlanDraft(null); setPlanObjective(""); }}>
+                Cancel
+              </Button>
+            </div>
+            <p className="mb-3 text-step--1 text-[var(--muted)]">{planObjective}</p>
+            <div className="space-y-3">
+              {(planDraft.plan.tasks as any[]).map((task, idx) => (
+                <div key={idx} className="rounded-lg border border-[var(--border-dim)] p-3">
+                  <input
+                    className="mb-2 w-full rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2 py-1 text-step--1"
+                    value={task.description}
+                    onChange={(e) => {
+                      const next = { ...planDraft };
+                      next.plan.tasks[idx] = { ...next.plan.tasks[idx], description: e.target.value };
+                      setPlanDraft(next);
+                    }}
+                  />
+                  <input
+                    className="w-full rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2 py-1 font-mono text-step--2"
+                    value={task.command || ""}
+                    placeholder="command (optional)"
+                    onChange={(e) => {
+                      const next = { ...planDraft };
+                      next.plan.tasks[idx] = { ...next.plan.tasks[idx], command: e.target.value };
+                      setPlanDraft(next);
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 flex justify-end">
+              <Button
+                variant="primary"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  try {
+                    const result = await api.createObjective(projectId, {
+                      objective: planObjective,
+                      plan: planDraft.plan,
+                      create_board: true,
+                    });
+                    toast.success("Plan executed");
+                    setPlanDraft(null);
+                    setPlanObjective("");
+                    const boardId = (result as { board?: { id?: string } })?.board?.id;
+                    if (boardId) navigate(`/p/${projectId}?tab=tasks`);
+                  } catch (err) {
+                    notifyError(err);
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                Execute plan
+              </Button>
+            </div>
+          </section>
+        ) : null}
+
         {/* Getting-started path: tells the owner what exists, what they can
             do, and how to do it. Shown above the composer so it is the first
             thing a new user sees. */}
@@ -1617,9 +1748,32 @@ function CommandCenter({
                     ■ Stop
                   </Button>
                 ) : (
-                  <Button variant="primary" type="submit" disabled={busy || !draft.trim() || !hasProvider}>
-                    Send ⏎
-                  </Button>
+                  <>
+                    <Button
+                      type="button"
+                      disabled={busy || !draft.trim() || !hasProvider}
+                      onClick={async () => {
+                        const content = draft.trim();
+                        if (!content) return;
+                        setBusy(true);
+                        try {
+                          const result = await api.createObjective(projectId, { objective: content, preview: true });
+                          setPlanObjective(content);
+                          setPlanDraft(result as any);
+                          setDraft("");
+                        } catch (err) {
+                          notifyError(err);
+                        } finally {
+                          setBusy(false);
+                        }
+                      }}
+                    >
+                      Plan & execute
+                    </Button>
+                    <Button variant="primary" type="submit" disabled={busy || !draft.trim() || !hasProvider}>
+                      Send ⏎
+                    </Button>
+                  </>
                 )}
               </div>
             </div>
@@ -1729,59 +1883,6 @@ function CommandCenter({
           )}
         </div>
 
-
-        {/* Work pulse. The inbox itself lives on the Work page; Home only
-            says whether there is anything to look at. */}
-        <section>
-          <div className="mb-2 flex items-center justify-between">
-            <SectionLabel>Work</SectionLabel>
-            <a
-              href="/work"
-              className="text-step--1 text-[var(--muted)] hover:text-[var(--text)]"
-            >
-              Open work →
-            </a>
-          </div>
-          {summary.data ? (
-            <div className="grid grid-cols-3 overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
-              {[
-                { label: "Running", value: summary.data.summary.runningTasks },
-                { label: "Queued", value: summary.data.summary.queuedTasks },
-                {
-                  label: "Needs you",
-                  value:
-                    summary.data.summary.blockedTasks +
-                    summary.data.summary.pendingApprovals.length,
-                },
-              ].map((item, index) => (
-                <a
-                  key={item.label}
-                  href="/work"
-                  className={`px-4 py-3 transition-colors hover:bg-[var(--surface-2)] ${
-                    index > 0 ? "border-l border-[var(--border-dim)]" : ""
-                  }`}
-                >
-                  <div
-                    className={`text-step-1 font-semibold tracking-tight ${
-                      item.value === 0
-                        ? "text-[var(--faint)]"
-                        : item.label === "Needs you"
-                          ? "text-[var(--warn)]"
-                          : item.label === "Running"
-                            ? "text-[var(--accent)]"
-                            : "text-[var(--text)]"
-                    }`}
-                  >
-                    {item.value}
-                  </div>
-                  <div className="text-step--2 text-[var(--faint)]">{item.label}</div>
-                </a>
-              ))}
-            </div>
-          ) : (
-            <LoadingState lines={1} />
-          )}
-        </section>
 
         {/* One list. Home has no conversation rail, so this is the whole
             history rather than a second copy of it. */}

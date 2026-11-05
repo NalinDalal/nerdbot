@@ -123,6 +123,7 @@ export function BoardDetailView({
   boardId: string;
 }) {
   const detail = useAsync(() => api.getBoard(boardId), [boardId]);
+  const execution = useAsync(() => api.getBoardExecution(boardId), [boardId]);
   const [showAddMember, setShowAddMember] = useState(false);
   const [newMemberId, setNewMemberId] = useState("");
   const [newRole, setNewRole] = useState("member");
@@ -296,6 +297,106 @@ export function BoardDetailView({
         ) : (
           <EmptyState title="No members" hint="Add teammates to this board so they can own tasks and send messages." />
         )}
+      </section>
+
+      {/* Execution & deliverables */}
+      <section className="mb-8">
+        <SectionLabel className="mb-2">Execution & deliverables</SectionLabel>
+        {execution.loading ? (
+          <LoadingState lines={2} />
+        ) : execution.error ? (
+          <ErrorState error={execution.error} onRetry={execution.reload} />
+        ) : execution.data ? (
+          <>
+            <div className="mb-3 text-step--1 text-[var(--muted)]">
+              {execution.data.tasks.length} tasks · {execution.data.deliverables.length} deliverables
+            </div>
+            {execution.data.tasks.length === 0 ? (
+              <EmptyState title="No tasks on this board yet" hint="Decompose an objective to create tasks." />
+            ) : (
+              <div className={TABLE_SHELL}>
+                <table className="w-full">
+                  <thead>
+                    <tr>
+                      <th className={TH}>Task</th>
+                      <th className={TH}>Status</th>
+                      <th className={TH}>Latest run</th>
+                      <th className={TH}>Artifacts</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {execution.data.tasks.map((row) => (
+                      <tr key={row.task.id} className="transition-colors hover:bg-[var(--surface-2)]">
+                        <td className={TD}>
+                          <button
+                            className="text-left text-[var(--text)] hover:underline"
+                            onClick={() => navigate(`/p/${row.task.project_id}/t/${row.task.id}`)}
+                          >
+                            {row.task.description || row.task.id}
+                          </button>
+                          <div className="mono text-step--2 text-[var(--faint)]">{row.task.id}</div>
+                        </td>
+                        <td className={TD}>
+                          <StatusBadge status={row.task.status} />
+                        </td>
+                        <td className={TD}>
+                          {row.latest_run ? (
+                            <span className="text-step--1">
+                              {row.latest_run.status}
+                              {row.latest_run.exit_code !== null ? ` (exit ${row.latest_run.exit_code})` : ""}
+                            </span>
+                          ) : (
+                            <span className="text-[var(--faint)]">—</span>
+                          )}
+                        </td>
+                        <td className={TD}>
+                          {row.artifacts.length === 0 ? (
+                            <span className="text-[var(--faint)]">—</span>
+                          ) : (
+                            <div className="flex flex-col gap-1">
+                              {row.artifacts.map((a) => (
+                                <span key={a.id} className="text-step--1">
+                                  {a.type} · {a.verification_status}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {execution.data.deliverables.length > 0 ? (
+              <div className="mt-4">
+                <SectionLabel className="mb-2">Deliverables</SectionLabel>
+                <div className={TABLE_SHELL}>
+                  <table className="w-full">
+                    <thead>
+                      <tr>
+                        <th className={TH}>Type</th>
+                        <th className={TH}>Task</th>
+                        <th className={TH}>Status</th>
+                        <th className={TH}>Summary</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {execution.data.deliverables.map((d) => (
+                        <tr key={d.artifact_id} className="transition-colors hover:bg-[var(--surface-2)]">
+                          <td className={TD}>{d.type}</td>
+                          <td className={`${TD} mono text-step--2`}>{d.task_id}</td>
+                          <td className={TD}>{d.verification_status}</td>
+                          <td className={TD}>{d.summary}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : null}
+          </>
+        ) : null}
       </section>
 
       {/* Board-to-board messages */}

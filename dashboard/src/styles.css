@@ -44,14 +44,14 @@
   --surface-hover: #242e37;
   --border: #242e37;
   --border-dim: #1c242c;
-  --border-focus: #2e9e6b;
+  --border-focus: #f59e0b;
   --text: #e7ecf0;
   --text-soft: #b9c4cf;
   --text-inverse: #071014;
   --muted: #8b98a5;
   /* AA-checked: 4.99:1 on --surface, 5.43:1 on --bg */
   --faint: #79899a;
-  --ring: rgba(46, 158, 107, 0.35);
+  --ring: rgba(245, 158, 11, 0.35);
 
   /* Bot faces — the plate a face is drawn on. The eyes of a bot are holes
      punched through its body, so the plate is what shows in them, and the
@@ -63,16 +63,16 @@
   --face-plate-dark: #0c1116;
 
   /* Semantic colors */
-  --accent: #2e9e6b;
-  --accent-dim: rgba(46, 158, 107, 0.10);
-  --accent-hover: #3ab078;
+  --accent: #f59e0b;
+  --accent-dim: rgba(245, 158, 11, 0.10);
+  --accent-hover: #fbbf24;
   --danger: #d75f5d;
   --danger-dim: rgba(215, 95, 93, 0.08);
   --warn: #c98f33;
   --warn-dim: rgba(201, 143, 51, 0.08);
   --info: #5aa9e6;
   --info-dim: rgba(90, 169, 230, 0.08);
-  --success: #2e9e6b;
+  --success: #f59e0b;
 
   /* Radius / shadows / motion */
   --radius: 8px;
@@ -116,7 +116,7 @@
   --surface-hover: #e1e4e8;
   --border: #d4d9dd;
   --border-dim: #c4c9d0;
-  --border-focus: #2e9e6b;
+  --border-focus: #f59e0b;
   --text: #0f171d;
   --text-soft: #47535f;
   --text-inverse: #f7f8f9;
@@ -126,16 +126,16 @@
   --faint: #68737f;
   --ring: rgba(46, 158, 107, 0.25);
 
-  --accent: #2e9e6b;
-  --accent-dim: rgba(46, 158, 107, 0.12);
-  --accent-hover: #2a8c5f;
+  --accent: #f59e0b;
+  --accent-dim: rgba(245, 158, 11, 0.12);
+  --accent-hover: #fbbf24;
   --danger: #c0504f;
   --danger-dim: rgba(192, 80, 79, 0.10);
   --warn: #b07a2c;
   --warn-dim: rgba(176, 122, 44, 0.10);
   --info: #4589c7;
   --info-dim: rgba(69, 137, 199, 0.10);
-  --success: #2e9e6b;
+  --success: #f59e0b;
 
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 1px 1px rgba(0, 0, 0, 0.04);
   --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.08);
@@ -157,7 +157,7 @@
     --text-inverse: #071014;
     --muted: #8b98a5;
     --faint: #79899a;
-    --accent-dim: rgba(46, 158, 107, 0.10);
+    --accent-dim: rgba(245, 158, 11, 0.10);
     --danger-dim: rgba(215, 95, 93, 0.08);
     --warn-dim: rgba(201, 143, 51, 0.08);
     --info-dim: rgba(90, 169, 230, 0.08);
