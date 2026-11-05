@@ -324,7 +324,7 @@ function InstructionsSection({
           }`}
         >
           {description ? (
-            <pre className="whitespace-pre-wrap break-words font-sans text-step--1 leading-relaxed text-[var(--text-soft)]">
+            <pre className="mono whitespace-pre-wrap break-words text-step--1 leading-relaxed text-[var(--text-soft)]">
               {description}
             </pre>
           ) : (
