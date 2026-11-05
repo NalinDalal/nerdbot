@@ -66,7 +66,7 @@ export function ProjectDetailView({
   };
 
   return (
-    <Page>
+    <Page width="fill">
       <a
         href="/projects"
         className="mb-3 inline-flex items-center gap-1 text-step--1 text-[var(--muted)] transition-colors hover:text-[var(--text)]"
@@ -121,11 +121,7 @@ export function ProjectDetailView({
       </div>
       <div role="tabpanel" id="project-tab-panel" aria-labelledby={`project-tab-${tab}`} className="min-h-0">
         {tab === "Tasks" && <TasksTab projectId={projectId} onOpenTask={onOpenTask} />}
-        {tab === "Chat" && (
-          <div className="h-[70vh] min-h-[420px] overflow-hidden rounded-xl border border-[var(--border)]">
-            <ConversationView projectId={projectId} />
-          </div>
-        )}
+        {tab === "Chat" && <ConversationView projectId={projectId} />}
         {tab === "Teammates" && <TeammatesTab projectId={projectId} />}
         {tab === "Providers" && <ProvidersTab projectId={projectId} />}
         {tab === "Issues" && <IssuesTab projectId={projectId} />}

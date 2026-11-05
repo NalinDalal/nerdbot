@@ -366,7 +366,7 @@ export function TaskDetailView({
 
   if (view.loading || teammates.loading || delegations.loading) {
     return (
-      <Page>
+      <Page width="data">
         <LoadingState lines={6} />
       </Page>
     );

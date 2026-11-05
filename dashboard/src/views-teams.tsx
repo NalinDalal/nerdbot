@@ -42,7 +42,7 @@ export function TeamsView() {
   };
 
   return (
-    <Page>
+    <Page width="data">
       <PageHeader
         eyebrow="Advanced"
         title="Teams"

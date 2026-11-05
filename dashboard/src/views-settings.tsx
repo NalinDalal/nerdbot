@@ -77,7 +77,7 @@ export function SettingsView() {
   };
 
   return (
-    <Page>
+    <Page width="reading">
       <PageHeader
         title="Settings"
         description="Projects, model connections, and the machine underneath."

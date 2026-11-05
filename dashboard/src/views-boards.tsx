@@ -18,7 +18,7 @@ export function BoardsView() {
     (teams.data?.teams ?? []).find((t) => t.id === id)?.name || id;
 
   return (
-    <Page>
+    <Page width="data">
       <PageHeader
         eyebrow="Advanced"
         title="Boards"

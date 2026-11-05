@@ -102,7 +102,7 @@ export function WorkView() {
 
   if (data.loading) {
     return (
-      <Page>
+      <Page width="data">
         <LoadingState lines={6} />
       </Page>
     );

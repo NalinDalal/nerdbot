@@ -132,7 +132,7 @@ export function ApprovalsView() {
   const items = inbox.data?.approvals ?? [];
 
   return (
-    <Page>
+    <Page width="data">
       <PageHeader
         title="Approvals"
         description="Requests that need your answer. Approving carries out only the exact action that was asked for."
