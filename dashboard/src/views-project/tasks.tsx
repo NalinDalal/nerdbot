@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { api } from "../api";
-import { Button, EmptyState, ErrorState, LoadingState, Modal, StatusBadge, TABLE_TD, TABLE_TH, relativeTime, useAsync } from "../components";
+import { Button, EmptyState, ErrorState, LoadingState, Modal, PageSection, StatusBadge, relativeTime, useAsync } from "../components";
+import { DataTable } from "../DataTable";
+import { taskTitle, taskPreview } from "../taskTitle";
 import { EntityForm } from "../forms";
 
 export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenTask: (id: string) => void }) {
@@ -21,7 +23,7 @@ export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenT
 
   return (
     <div>
-      <div className="flex items-center gap-3" style={{ marginBottom: 12 }}>
+      <div className="flex items-center gap-3" >
         <Button variant="primary" onClick={() => setShowCreate(true)}>
           New task
         </Button>
@@ -45,108 +47,55 @@ export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenT
           />
         </Modal>
       ) : null}
-      <h2>Tasks</h2>
+      <PageSection title="Tasks"><div /></PageSection>
       {tasks.loading ? (
         <LoadingState />
       ) : tasks.error ? (
         <ErrorState error={tasks.error} onRetry={tasks.reload} />
       ) : tasks.data && tasks.data.tasks.length > 0 ? (
-        <table className="w-full">
-          <thead>
-            <tr>
-              <th className={TABLE_TH}>Task</th>
-              <th className={TABLE_TH}>Status</th>
-              <th className={TABLE_TH}>Owner</th>
-              <th className={TABLE_TH}>Delegated from</th>
-              <th className={TABLE_TH}>Command</th>
-            </tr>
-          </thead>
-          <tbody>
-            {tasks.data.tasks.map((task) => (
-              <tr className="transition-colors hover:bg-[var(--surface-2)]" key={task.id}>
-                <td className={TABLE_TD}>
-                  <a href={`/p/${projectId}/t/${task.id}`} onClick={() => onOpenTask(task.id)}>
-                    {task.description || "Untitled task"}
-                  </a>
-                </td>
-                <td className={TABLE_TD}>
-                  <StatusBadge status={task.status} />
-                  {task.blocked_reason ? (
-                    <div
-                      className="mt-0.5 max-w-[12rem] truncate text-step--2 text-[var(--muted)]"
-                      title={task.blocked_reason}
-                    >
-                      {task.blocked_reason}
-                    </div>
-                  ) : null}
-                </td>
-                <td className="text-[var(--muted)]">{ownerName(task.owner_teammate_id)}</td>
-                <td className="text-[var(--muted)]">
-                  {task.parent_task_id ? (
-                    <a
-                      href={`/p/${projectId}/t/${task.parent_task_id}`}
-                      className="hover:underline"
-                    >
-                      Parent task
-                    </a>
-                  ) : (
-                    <span>—</span>
-                  )}
-                </td>
-                <td className={TABLE_TD}>
-                  <div
-                    className="mono max-w-[16rem] truncate text-step--1 text-[var(--muted)]"
-                    title={task.command || undefined}
-                  >
-                    {task.command || "—"}
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataTable
+          columns={[
+            { key: "task", header: "Task", render: (task) => (
+              <div>
+                <a href={`/p/${projectId}/t/${task.id}`} onClick={() => onOpenTask(task.id)} className="line-clamp-2 break-words">
+                  {task.title || taskTitle(task.description)}
+                </a>
+                <div className="text-[var(--muted)] text-step--2">{taskPreview(task.description)}</div>
+                {task.description && task.description.length > 1000 ? <span className="text-step--2">{(task.description.length/1000).toFixed(1)}k chars</span> : null}
+              </div>
+            ) },
+            { key: "status", header: "Status", render: (task) => (
+              <div>
+                <StatusBadge status={task.status} />
+                {task.blocked_reason ? <div className="text-step--2 text-[var(--muted)]">{task.blocked_reason}</div> : null}
+              </div>
+            ) },
+            { key: "owner", header: "Owner", render: (task) => ownerName(task.owner_teammate_id) },
+          ]}
+          rows={tasks.data.tasks}
+          onRowClick={(task) => onOpenTask(task.id)}
+        />
       ) : (
         <EmptyState title="No tasks yet" hint="Create a task above, or let a bot decompose an objective into one." />
       )}
 
-      <h2>Runs across tasks</h2>
+      <PageSection title="Runs across tasks"><div /></PageSection>
       {runs.loading ? (
         <LoadingState />
       ) : runs.error ? (
         <ErrorState error={runs.error} onRetry={runs.reload} />
       ) : runs.data && runs.data.runs.length > 0 ? (
-        <table className="w-full">
-          <thead>
-            <tr>
-              <th className={TABLE_TH}>Run</th>
-              <th className={TABLE_TH}>Task</th>
-              <th className={TABLE_TH}>Status</th>
-              <th className={TABLE_TH}>Exit</th>
-              <th className={TABLE_TH}>Runtime</th>
-            </tr>
-          </thead>
-          <tbody>
-            {runs.data.runs.map((run) => (
-              <tr className="transition-colors hover:bg-[var(--surface-2)]" key={run.id}>
-                <td className="text-[var(--muted)]">{relativeTime(run.started_at)}</td>
-                <td className={TABLE_TD}>
-                  <a
-                    href={`/p/${projectId}/t/${run.task_id}`}
-                    className="block max-w-[16rem] truncate hover:underline"
-                    title={taskName(run.task_id)}
-                  >
-                    {taskName(run.task_id)}
-                  </a>
-                </td>
-                <td className={TABLE_TD}>
-                  <StatusBadge status={run.status} />
-                </td>
-                <td className={`${TABLE_TD} mono`}>{run.exit_code ?? "—"}</td>
-                <td className="text-[var(--muted)]">{run.runtime}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataTable
+          columns={[
+            { key: "run", header: "Run", render: (run) => relativeTime(run.started_at) },
+            { key: "task", header: "Task", render: (run) => taskName(run.task_id) },
+            { key: "status", header: "Status", render: (run) => <StatusBadge status={run.status} /> },
+            { key: "exit", header: "Exit", render: (run) => run.exit_code ?? "—" },
+            { key: "runtime", header: "Runtime", render: (run) => run.runtime },
+          ]}
+          rows={runs.data.runs}
+          onRowClick={(run) => onOpenTask(run.task_id)}
+        />
       ) : (
         <EmptyState title="No runs yet" hint="Create a task, then run it from the task page." />
       )}
