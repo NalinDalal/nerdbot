@@ -28,6 +28,7 @@ import {
   useAsync,
   runStatusLabel,
 } from "./components";
+import { taskTitle } from "./taskTitle";
 import { EntityForm } from "./forms";
 import { Markdown } from "./markdown";
 
@@ -398,12 +399,12 @@ export function TaskDetailView({
   const owner = task.owner_teammate_id
     ? teammates.data?.teammates.find((m) => m.id === task.owner_teammate_id)
     : undefined;
-  const headingText = (task.description || task.command || "Untitled task").trim();
-  const cut = headingText.slice(0, 110);
+  const headingSource = task.title || taskTitle(task.description);
+  const cut = headingSource.slice(0, 110);
   const heading =
-    headingText.length > 110
+    headingSource.length > 110
       ? `${cut.replace(/\s+\S*$/, "") || cut}…`
-      : headingText;
+      : headingSource;
   const pendingApprovals = approvalRows.filter((approval) => approvalIsPending(approval));
   const latestOutput = unwrapRunOutput(
     latestRun?.output_excerpt?.trim() ||
