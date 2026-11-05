@@ -699,3 +699,25 @@ def resolve_run_provider(
     if reason is not None:
         return provider, default_command_runtime(), reason
     return provider, adapter_for_provider(provider), None
+
+
+def select_provider_for_teammate(conn, teammate, task_requirements=None):
+    """Explicit routing: teammate provider/model, with configured fallback.
+
+    Returns (provider, model_override, fallback_used, reason).
+    """
+    from . import store as store_mod
+
+    task_requirements = task_requirements or {}
+    provider = store_mod.get_provider(conn, teammate.provider_id) if getattr(teammate, "provider_id", None) else None
+    model = getattr(teammate, "model", "") or ""
+    fallback_used = False
+    reason = None
+    if provider is None or provider.status != ProviderStatus.ACTIVE:
+        fb = getattr(teammate, "fallback_provider_id", None)
+        if fb:
+            provider = store_mod.get_provider(conn, fb)
+            model = getattr(teammate, "fallback_model", "") or model
+            fallback_used = True
+            reason = "primary provider unavailable; using configured fallback"
+    return provider, model, fallback_used, reason
