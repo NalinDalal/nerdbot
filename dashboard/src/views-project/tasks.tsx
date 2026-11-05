@@ -5,7 +5,8 @@ import { Button, CHIP_SHELL, EmptyState, ErrorState, Field, FORM_INPUT, LoadingS
 import { DataTable } from "../DataTable";
 import { EntityPicker } from "../EntityPicker";
 import { taskTitle, taskPreview } from "../taskTitle";
-import type { Task } from "../types";
+import { explainRunError } from "../explainRunError";
+import type { Run, Task } from "../types";
 
 /** The task-status filter chips, in display order. "All" is one of them:
  *  the owner flips to Failed when something broke, then back to All. */
@@ -103,18 +104,15 @@ export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenT
       : allTasks.filter((task) => FILTER_STATUSES[statusFilter].has(task.status));
 
   /**
-   * The text a failed run recorded for this task's latest failure — stderr
-   * first, then the output excerpt — or "" when the API provides no error
-   * text (runs still loading, or the run failed without recording one), in
-   * which case the badge line shows nothing rather than a guess.
+   * The latest failed run recorded for a task (newest by start time), or
+   * null when the runs have not loaded or this task never failed.
    */
-  const latestRunError = (task: Task): string => {
+  const latestFailedRun = (task: Task): Run | null => {
     const failedRuns = (runs.data?.runs ?? []).filter(
       (run) => run.task_id === task.id && run.status === "failed",
     );
-    if (failedRuns.length === 0) return "";
-    const latest = failedRuns.reduce((a, b) => (b.started_at > a.started_at ? b : a));
-    return latest.stderr.trim() || latest.output_excerpt.trim();
+    if (failedRuns.length === 0) return null;
+    return failedRuns.reduce((a, b) => (b.started_at > a.started_at ? b : a));
   };
 
   return (
@@ -235,21 +233,29 @@ export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenT
                   {task.description && task.description.length > 1000 ? <span className={CHIP_SHELL}>{(task.description.length/1000).toFixed(1)}k chars</span> : null}
                 </div>
               ) },
-              { key: "status", header: "Status", render: (task) => (
-                <div>
-                  <StatusBadge status={task.status} />
-                  {task.blocked_reason ? (
-                    <div className="text-step--2 text-[var(--muted)]">{task.blocked_reason}</div>
-                  ) : task.status === "failed" && latestRunError(task) ? (
-                    <div
-                      className="max-w-[22rem] line-clamp-2 text-step--2 text-[var(--muted)]"
-                      title={latestRunError(task)}
-                    >
-                      {latestRunError(task)}
-                    </div>
-                  ) : null}
-                </div>
-              ) },
+              { key: "status", header: "Status", render: (task) => {
+                const failedRun = task.status === "failed" ? latestFailedRun(task) : null;
+                const failure = failedRun ? explainRunError(task, failedRun) : null;
+                return (
+                  <div>
+                    <StatusBadge status={task.status} />
+                    {task.blocked_reason ? (
+                      <div className="text-step--2 text-[var(--muted)]">{task.blocked_reason}</div>
+                    ) : failure && failure.message && failedRun ? (
+                      /* The failure explanation: guidance for the
+                         empty-command case, the run's own error text for
+                         anything else. Full text on hover, line-clamped to
+                         two lines so a long diagnosis stays row-height. */
+                      <div
+                        className="max-w-[22rem] line-clamp-2 text-step--2 text-[var(--muted)]"
+                        title={failure.message}
+                      >
+                        {failure.message}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              } },
               { key: "owner", header: "Owner", render: (task) => ownerName(task.owner_teammate_id) },
             ]}
             rows={filteredTasks}

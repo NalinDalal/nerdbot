@@ -29,6 +29,7 @@ import {
   runStatusLabel,
 } from "./components";
 import { taskTitle } from "./taskTitle";
+import { explainRunError, type RunErrorExplanation } from "./explainRunError";
 import { EntityForm } from "./forms";
 import { Markdown } from "./markdown";
 
@@ -253,6 +254,23 @@ function RunTimeline({ run, live }: { run: Run; live: boolean }) {
 /** How much description counts as "long": above it the instructions block
  *  starts collapsed, so a 40k-char persona YAML does not bury the page. */
 const LONG_INSTRUCTIONS = 400;
+
+/**
+ * The explanation banner to show for a task's newest failed run — the
+ * translated "nothing ran" guidance — or null when there is nothing to
+ * add: unknown failures need no banner, because the raw output rendered
+ * below already carries their text.
+ */
+function bestFailureExplanation(
+  task: { id: string; command: string; project_id: string },
+  runs: Run[],
+): RunErrorExplanation | null {
+  const failedRuns = runs.filter((run) => run.task_id === task.id && run.status === "failed");
+  if (failedRuns.length === 0) return null;
+  const latest = failedRuns.reduce((a, b) => (b.started_at > a.started_at ? b : a));
+  const failure = explainRunError(task, latest);
+  return failure.actions.length > 0 ? failure : null;
+}
 
 /**
  * The task's full instructions, plus the two facts to read next to them:
@@ -687,6 +705,31 @@ export function TaskDetailView({
                 Run failed with exit code <span className="mono">{latestRun.exit_code}</span>.
               </div>
             ) : null}
+            {(() => {
+              const failure = bestFailureExplanation(task, runs);
+              if (!failure) return null;
+              return (
+                <div
+                  className="mb-3 rounded-md border border-[var(--warn)] bg-[var(--warn-dim)] px-3 py-2 text-step--1 text-[var(--text)]"
+                  role="status"
+                >
+                  <div>{failure.message}</div>
+                  {failure.actions.length > 0 ? (
+                    <div className="mt-2 flex flex-wrap gap-3">
+                      {failure.actions.map((action) => (
+                        <a
+                          key={action.href}
+                          className="text-step--1 text-[var(--accent)] hover:underline"
+                          href={action.href}
+                        >
+                          {action.label}
+                        </a>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })()}
             {latestOutput ? (
               <>
                 <div className="max-h-[28rem] overflow-y-auto pr-1">
