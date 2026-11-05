@@ -58,6 +58,7 @@ export interface Task {
   parent_task_id: string;
   /** Why the task is blocked, in plain words. Empty when not blocked. */
   blocked_reason: string;
+  title?: string;
 }
 
 export interface Run {

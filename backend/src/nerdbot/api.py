@@ -1170,6 +1170,7 @@ def create_app() -> FastAPI:
                 command=body.command or "",
                 issue_id=body.issue_id or None,
                 workspace_mode=body.workspace_mode or "checkout",
+                title=body.title or "",
             )
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1630,12 +1631,13 @@ def create_app() -> FastAPI:
                 task = store.update_task_dependencies(
                     conn, task_id, list(body.get("dependencies", []))
                 )
-            if "description" in body or "command" in body:
+            if "description" in body or "command" in body or "title" in body:
                 conn.execute(
-                    "UPDATE tasks SET description = ?, command = ? WHERE id = ?",
+                    "UPDATE tasks SET description = ?, command = ?, title = ? WHERE id = ?",
                     (
                         str(body.get("description", task.description)),
                         str(body.get("command", task.command)),
+                        str(body.get("title", task.title)),
                         task_id,
                     ),
                 )

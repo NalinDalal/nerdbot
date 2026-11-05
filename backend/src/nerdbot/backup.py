@@ -290,6 +290,7 @@ _IMPORT_COLUMNS: dict[str, frozenset[str]] = {
             "board_id",
             "parent_task_id",
             "blocked_reason",
+            "title",
         }
     ),
 }

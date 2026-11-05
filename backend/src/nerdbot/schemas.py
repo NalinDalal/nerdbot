@@ -47,6 +47,7 @@ class ProjectCreate(_Body):
 
 
 class TaskCreate(_Body):
+    title: str | None = None
     description: str | None = None
     command: str | None = None
     owner_teammate_id: str | None = None

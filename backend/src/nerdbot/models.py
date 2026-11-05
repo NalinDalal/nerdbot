@@ -153,6 +153,8 @@ class Task(BaseModel):
     # cleared when it leaves it, so a blocked task can always explain
     # itself instead of showing a bare status.
     blocked_reason: str = ""
+    # Short display name. Empty means derive on display.
+    title: str = ""
 
 
 class BoardStatus(StrEnum):

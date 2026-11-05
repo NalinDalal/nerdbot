@@ -541,6 +541,11 @@ _PHASE21_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "tasks": [("workspace_mode", "TEXT NOT NULL DEFAULT 'checkout'")],
 }
 
+_PHASE22_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    # Short display title for a task. Empty means derive on display.
+    "tasks": [("title", "TEXT NOT NULL DEFAULT ''")],
+}
+
 
 _PHASE20_COLUMNS: dict[str, list[tuple[str, str]]] = {
     # Bot persona files (ai-teammates model): a bot's identity, its active
@@ -572,7 +577,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
                   _PHASE10_COLUMNS, _PHASE11_COLUMNS, _PHASE12_COLUMNS, _PHASE13_COLUMNS,
                   _PHASE14_COLUMNS, _PHASE15_COLUMNS, _PHASE16_COLUMNS, _PHASE17_COLUMNS,
                   _PHASE18_COLUMNS, _PHASE19_COLUMNS, _PHASE20_COLUMNS,
-                  _PHASE21_COLUMNS):
+                  _PHASE21_COLUMNS, _PHASE22_COLUMNS):
         for table, columns in phase.items():
             phases.setdefault(table, []).extend(columns)
     for table, columns in phases.items():
@@ -1137,6 +1142,7 @@ def create_task(
     board_id: str = "",
     parent_task_id: str = "",
     workspace_mode: str = "checkout",
+    title: str = "",
 ) -> Task:
     if get_project(conn, project_id) is None:
         raise KeyError(f"unknown project {project_id}")
@@ -1184,11 +1190,12 @@ def create_task(
         board_id=board_id,
         parent_task_id=parent_task_id,
         workspace_mode=workspace_mode,
+        title=title,
     )
     conn.execute(
         "INSERT INTO tasks (id, project_id, description, status, owner_teammate_id,"
         " dependencies, command, issue_id, branch, workspace_path, board_id, parent_task_id,"
-        " workspace_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " workspace_mode, title) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             task.id,
             task.project_id,
@@ -1203,6 +1210,7 @@ def create_task(
             task.board_id,
             task.parent_task_id,
             task.workspace_mode,
+            task.title,
         ),
     )
     conn.commit()
@@ -1258,6 +1266,7 @@ def _task_from_row(row: sqlite3.Row) -> Task:
         board_id=row["board_id"] if "board_id" in keys else "",
         parent_task_id=row["parent_task_id"] if "parent_task_id" in keys and row["parent_task_id"] else "",
         blocked_reason=row["blocked_reason"] if "blocked_reason" in keys and row["blocked_reason"] else "",
+        title=row["title"] if "title" in keys and row["title"] else "",
     )
 
 
