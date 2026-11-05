@@ -171,7 +171,9 @@ export function Page({
   width?: "reading" | "data" | "fill";
 }) {
   const max = width === "reading" ? "max-w-[880px]" : width === "data" ? "max-w-[1280px]" : "max-w-none";
-  const pad = width === "fill" ? "" : "px-4 py-6 pl-14 md:px-8 md:py-8";
+  /* `fill` keeps the page gutters; only the max-width is waived, so a
+     full-width view still clears the sidebar and the window edge. */
+  const pad = "px-4 py-6 pl-14 md:px-8 md:py-8";
   return (
     <div className={`flex-1 overflow-y-auto overflow-x-hidden ${className}`}>
       <div className={`mx-auto w-full ${max} ${pad}`}>
