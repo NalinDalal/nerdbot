@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api } from "../api";
-import { Button, EmptyState, ErrorState, LoadingState, Modal, PageSection, StatusBadge, relativeTime, useAsync } from "../components";
+import { Button, CHIP_SHELL, EmptyState, ErrorState, LoadingState, Modal, PageSection, StatusBadge, relativeTime, useAsync } from "../components";
 import { DataTable } from "../DataTable";
 import { taskTitle, taskPreview } from "../taskTitle";
 import { EntityForm } from "../forms";
@@ -14,8 +14,6 @@ export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenT
     if (!id) return "Unassigned";
     return mates.data?.teammates.find((m) => m.id === id)?.persona || "Assigned";
   };
-  const taskName = (id: string): string =>
-    tasks.data?.tasks.find((task) => task.id === id)?.description?.trim() || "Task";
   const reload = () => {
     tasks.reload();
     runs.reload();
@@ -60,8 +58,8 @@ export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenT
                 <a href={`/p/${projectId}/t/${task.id}`} onClick={() => onOpenTask(task.id)} className="line-clamp-2 break-words">
                   {task.title || taskTitle(task.description)}
                 </a>
-                <div className="text-[var(--muted)] text-step--2">{taskPreview(task.description)}</div>
-                {task.description && task.description.length > 1000 ? <span className="text-step--2">{(task.description.length/1000).toFixed(1)}k chars</span> : null}
+                <div className="text-[var(--muted)] text-step--2 truncate">{taskPreview(task.description)}</div>
+                {task.description && task.description.length > 1000 ? <span className={CHIP_SHELL}>{(task.description.length/1000).toFixed(1)}k chars</span> : null}
               </div>
             ) },
             { key: "status", header: "Status", render: (task) => (
@@ -88,7 +86,11 @@ export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenT
         <DataTable
           columns={[
             { key: "run", header: "Run", render: (run) => relativeTime(run.started_at) },
-            { key: "task", header: "Task", render: (run) => taskName(run.task_id) },
+            { key: "task", header: "Task", render: (run) => {
+              const taskData = tasks.data?.tasks.find((task) => task.id === run.task_id);
+              const label = taskData ? taskData.title || taskTitle(taskData.description) : "Task";
+              return <span className="block truncate max-w-[24rem]" title={label}>{label}</span>;
+            } },
             { key: "status", header: "Status", render: (run) => <StatusBadge status={run.status} /> },
             { key: "exit", header: "Exit", render: (run) => run.exit_code ?? "—" },
             { key: "runtime", header: "Runtime", render: (run) => run.runtime },
