@@ -8,7 +8,7 @@ describe("explainRunError", () => {
   it("empty command on a command-less task → guidance message with tab links", () => {
     const explained = explainRunError(NO_COMMAND, EMPTY_COMMAND_RUN);
     expect(explained.message).toBe(
-      "Nothing ran: this task has no command and no model is attached. Attach a model to the owner, or set a command.",
+      "Nothing ran: the shell runtime got no command. If this task should run on a model, attach one to the owner and enable a provider.",
     );
     expect(explained.actions).toEqual([
       { label: "Open the Teammates tab", href: "/p/prj_x?tab=Teammates" },

@@ -54,7 +54,7 @@ export function explainRunError(
   if (errorText === EMPTY_COMMAND_ERROR && !task.command.trim()) {
     return {
       message:
-        "Nothing ran: this task has no command and no model is attached. Attach a model to the owner, or set a command.",
+        "Nothing ran: the shell runtime got no command. If this task should run on a model, attach one to the owner and enable a provider.",
       actions: [
         { label: "Open the Teammates tab", href: `/p/${task.project_id}?tab=Teammates` },
         { label: "Open the Providers tab", href: `/p/${task.project_id}?tab=Providers` },

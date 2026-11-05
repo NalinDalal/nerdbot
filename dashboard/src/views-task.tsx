@@ -350,7 +350,7 @@ function InstructionsSection({
               <code className="mono min-w-0 break-all text-[var(--text)]">{command}</code>
             ) : (
               <span className="min-w-0 flex-1 text-[var(--muted)]">
-                none — this task runs on the model alone
+                none (when a model runs this task, the description is the instruction)
               </span>
             )}
           </div>
