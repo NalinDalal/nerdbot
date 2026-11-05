@@ -70,6 +70,7 @@ function BotCard({
   const [showPerms, setShowPerms] = useState(false);
   const [showFace, setShowFace] = useState(false);
   const [faceDraft, setFaceDraft] = useState<FaceChoice>(DEFAULT_FACE);
+  const [hovered, setHovered] = useState(false);
   const catalogue = usePermissionCatalogue();
   const act = async (fn: () => Promise<unknown>) => {
     try {
@@ -82,10 +83,14 @@ function BotCard({
   const attached = providers.find((p) => p.id === mate.provider_id);
 
   return (
-    <div className={CARD_SHELL}>
+    <div
+      className={CARD_SHELL}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
       <div className="flex items-center gap-3" style={{ justifyContent: "space-between" }}>
         <div className="flex items-center gap-2.5">
-          <BotFace face={mate.face} size={32} state={faceStateFor(mate.status)} />
+          <BotFace face={mate.face} size={32} state={faceStateFor(mate.status)} animated={hovered} />
           <div>
             <strong>{mate.persona || "Unnamed bot"}</strong>{" "}
             <span className="mono text-[var(--muted)]">{mate.id}</span> <StatusBadge status={mate.status} />

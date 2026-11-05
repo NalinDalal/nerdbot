@@ -413,6 +413,7 @@ export function BotFace({
   size = 28,
   status,
   state,
+  animated = false,
   className = "",
 }: {
   face?: BotFaceSpec | null;
@@ -420,6 +421,8 @@ export function BotFace({
   status?: string;
   /** The pose, when the caller knows it. Defaults to the status's pose. */
   state?: StateId;
+  /** Animate the face. Falls back to a static frame under reduced motion. */
+  animated?: boolean;
   className?: string;
 }) {
   const tone = status ? statusTone(status) : "neutral";
@@ -439,7 +442,7 @@ export function BotFace({
       style={{ width: size, height: size }}
       aria-hidden
     >
-      <BotAvatar face={face} size={size} state={state ?? faceStateFor(status)} />
+      <BotAvatar face={face} size={size} state={state ?? faceStateFor(status)} animated={animated} />
       {status ? (
         <span
           className="absolute -bottom-0.5 -right-0.5 rounded-full ring-2 ring-[var(--surface)]"
