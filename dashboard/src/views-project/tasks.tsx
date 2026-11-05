@@ -5,9 +5,22 @@ import { Button, CHIP_SHELL, EmptyState, ErrorState, Field, FORM_INPUT, LoadingS
 import { DataTable } from "../DataTable";
 import { EntityPicker } from "../EntityPicker";
 import { taskTitle, taskPreview } from "../taskTitle";
+import type { Task } from "../types";
+
+/** The task-status filter chips, in display order. "All" is one of them:
+ *  the owner flips to Failed when something broke, then back to All. */
+type StatusFilter = "all" | "failed" | "running" | "blocked" | "done";
+const STATUS_FILTERS: Array<{ id: StatusFilter; label: string }> = [
+  { id: "all", label: "All" },
+  { id: "failed", label: "Failed" },
+  { id: "running", label: "Running" },
+  { id: "blocked", label: "Blocked" },
+  { id: "done", label: "Done" },
+];
 
 export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenTask: (id: string) => void }) {
   const [showCreate, setShowCreate] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   /* New task drafts the two text fields (title + details), the executable
      command, and the owner/issue picks — the EntityPicker turns raw
      `owner_teammate_id` inputs into a searchable select. */
@@ -69,6 +82,39 @@ export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenT
   const reload = () => {
     tasks.reload();
     runs.reload();
+  };
+
+  /* --- Status filter --- */
+
+  /** The task statuses each filter chip matches. `blocked` also covers
+   *  awaiting_approval: the task is standstill either way, and the owner
+   *  looks for it under Blocked. */
+  const FILTER_STATUSES: Record<StatusFilter, Set<string>> = {
+    all: new Set(),
+    failed: new Set(["failed"]),
+    running: new Set(["running"]),
+    blocked: new Set(["blocked", "awaiting_approval"]),
+    done: new Set(["done"]),
+  };
+  const allTasks = tasks.data?.tasks ?? [];
+  const filteredTasks =
+    statusFilter === "all"
+      ? allTasks
+      : allTasks.filter((task) => FILTER_STATUSES[statusFilter].has(task.status));
+
+  /**
+   * The text a failed run recorded for this task's latest failure — stderr
+   * first, then the output excerpt — or "" when the API provides no error
+   * text (runs still loading, or the run failed without recording one), in
+   * which case the badge line shows nothing rather than a guess.
+   */
+  const latestRunError = (task: Task): string => {
+    const failedRuns = (runs.data?.runs ?? []).filter(
+      (run) => run.task_id === task.id && run.status === "failed",
+    );
+    if (failedRuns.length === 0) return "";
+    const latest = failedRuns.reduce((a, b) => (b.started_at > a.started_at ? b : a));
+    return latest.stderr.trim() || latest.output_excerpt.trim();
   };
 
   return (
@@ -148,11 +194,36 @@ export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenT
           </>
         }
       >
+        <div className="mb-3 flex flex-wrap items-center gap-1.5">
+          {STATUS_FILTERS.map(({ id, label }) => {
+            const count =
+              id === "all"
+                ? allTasks.length
+                : allTasks.filter((task) => FILTER_STATUSES[id].has(task.status)).length;
+            const active = statusFilter === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                aria-pressed={active}
+                onClick={() => setStatusFilter(id)}
+                className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-step--2 font-medium transition-colors ${
+                  active
+                    ? "bg-[var(--surface-3)] text-[var(--text)] shadow-sm"
+                    : "bg-[var(--surface-2)] text-[var(--muted)] hover:text-[var(--text)]"
+                }`}
+              >
+                {label}
+                <span className="tabular-nums text-[var(--faint)]">{count}</span>
+              </button>
+            );
+          })}
+        </div>
         {tasks.loading ? (
           <LoadingState />
         ) : tasks.error ? (
           <ErrorState error={tasks.error} onRetry={tasks.reload} />
-        ) : tasks.data && tasks.data.tasks.length > 0 ? (
+        ) : filteredTasks.length > 0 ? (
           <DataTable
             columns={[
               { key: "task", header: "Task", render: (task) => (
@@ -167,16 +238,32 @@ export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenT
               { key: "status", header: "Status", render: (task) => (
                 <div>
                   <StatusBadge status={task.status} />
-                  {task.blocked_reason ? <div className="text-step--2 text-[var(--muted)]">{task.blocked_reason}</div> : null}
+                  {task.blocked_reason ? (
+                    <div className="text-step--2 text-[var(--muted)]">{task.blocked_reason}</div>
+                  ) : task.status === "failed" && latestRunError(task) ? (
+                    <div
+                      className="max-w-[22rem] line-clamp-2 text-step--2 text-[var(--muted)]"
+                      title={latestRunError(task)}
+                    >
+                      {latestRunError(task)}
+                    </div>
+                  ) : null}
                 </div>
               ) },
               { key: "owner", header: "Owner", render: (task) => ownerName(task.owner_teammate_id) },
             ]}
-            rows={tasks.data.tasks}
+            rows={filteredTasks}
             onRowClick={(task) => onOpenTask(task.id)}
           />
         ) : (
-          <EmptyState title="No tasks yet" hint="Create a task above, or let a bot decompose an objective into one." />
+          <EmptyState
+            title={allTasks.length > 0 ? "No tasks match this filter" : "No tasks yet"}
+            hint={
+              allTasks.length > 0
+                ? "Nothing with that status right now."
+                : "Create a task above, or let a bot decompose an objective into one."
+            }
+          />
         )}
       </PageSection>
 
