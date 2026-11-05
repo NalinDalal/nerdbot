@@ -554,6 +554,17 @@ _PHASE23_COLUMNS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
+_PHASE24_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "teammates": [
+        ("model", "TEXT NOT NULL DEFAULT ''"),
+        ("temperature", "REAL"),
+        ("max_tokens", "INTEGER"),
+        ("context_limit", "INTEGER"),
+        ("fallback_provider_id", "TEXT"),
+        ("fallback_model", "TEXT NOT NULL DEFAULT ''"),
+    ],
+}
+
 
 _PHASE20_COLUMNS: dict[str, list[tuple[str, str]]] = {
     # Bot persona files (ai-teammates model): a bot's identity, its active
@@ -585,7 +596,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
                   _PHASE10_COLUMNS, _PHASE11_COLUMNS, _PHASE12_COLUMNS, _PHASE13_COLUMNS,
                   _PHASE14_COLUMNS, _PHASE15_COLUMNS, _PHASE16_COLUMNS, _PHASE17_COLUMNS,
                   _PHASE18_COLUMNS, _PHASE19_COLUMNS, _PHASE20_COLUMNS,
-                  _PHASE21_COLUMNS, _PHASE22_COLUMNS, _PHASE23_COLUMNS):
+                  _PHASE21_COLUMNS, _PHASE22_COLUMNS, _PHASE23_COLUMNS, _PHASE24_COLUMNS):
         for table, columns in phase.items():
             phases.setdefault(table, []).extend(columns)
     for table, columns in phases.items():
@@ -807,6 +818,12 @@ def _teammate_from_row(row: sqlite3.Row) -> Teammate:
         if "tool_policy" in keys and row["tool_policy"]
         else {},
         provider_id=row["provider_id"] if "provider_id" in keys else None,
+        model=row["model"] if "model" in keys and row["model"] else "",
+        temperature=row["temperature"] if "temperature" in keys else None,
+        max_tokens=row["max_tokens"] if "max_tokens" in keys else None,
+        context_limit=row["context_limit"] if "context_limit" in keys else None,
+        fallback_provider_id=row["fallback_provider_id"] if "fallback_provider_id" in keys else None,
+        fallback_model=row["fallback_model"] if "fallback_model" in keys and row["fallback_model"] else "",
         face=_face_from_row(row),
         soul=row["soul"] if "soul" in keys else "",
         goals=row["goals"] if "goals" in keys else "",
@@ -865,6 +882,12 @@ def update_teammate(
     tool_policy: dict[str, Any] | None = None,
     provider_id: str | None = None,
     clear_provider: bool = False,
+    model: str | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    context_limit: int | None = None,
+    fallback_provider_id: str | None = None,
+    fallback_model: str | None = None,
     face: dict[str, str] | None = None,
     soul: str | None = None,
     goals: str | None = None,
@@ -908,6 +931,18 @@ def update_teammate(
         mate.persona_version = persona_version
     if clear_provider:
         mate.provider_id = None
+    if model is not None:
+        mate.model = model
+    if temperature is not None:
+        mate.temperature = temperature
+    if max_tokens is not None:
+        mate.max_tokens = max_tokens
+    if context_limit is not None:
+        mate.context_limit = context_limit
+    if fallback_provider_id is not None:
+        mate.fallback_provider_id = fallback_provider_id
+    if fallback_model is not None:
+        mate.fallback_model = fallback_model
     elif provider_id is not None:
         provider = get_provider(conn, provider_id)
         if provider is None or provider.project_id != mate.project_id:
@@ -917,8 +952,9 @@ def update_teammate(
         mate.provider_id = provider_id
     conn.execute(
         "UPDATE teammates SET persona = ?, instructions = ?, capabilities = ?,"
-        " memory_scope = ?, permissions = ?, tool_policy = ?, provider_id = ?, face = ?,"
-        " soul = ?, goals = ?, wisdom = ?, persona_version = ?"
+        " memory_scope = ?, permissions = ?, tool_policy = ?, provider_id = ?, model = ?,"
+        " temperature = ?, max_tokens = ?, context_limit = ?, fallback_provider_id = ?,"
+        " fallback_model = ?, face = ?, soul = ?, goals = ?, wisdom = ?, persona_version = ?"
         " WHERE id = ?",
         (
             mate.persona,
@@ -928,6 +964,12 @@ def update_teammate(
             json.dumps(mate.permissions),
             json.dumps(mate.tool_policy),
             mate.provider_id,
+            mate.model,
+            mate.temperature,
+            mate.max_tokens,
+            mate.context_limit,
+            mate.fallback_provider_id,
+            mate.fallback_model,
             json.dumps(mate.face.model_dump(mode="json")),
             mate.soul,
             mate.goals,

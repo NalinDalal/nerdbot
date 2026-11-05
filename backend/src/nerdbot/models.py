@@ -108,6 +108,12 @@ class Teammate(BaseModel):
     status: TeammateStatus = TeammateStatus.ACTIVE
     tool_policy: dict[str, Any] = Field(default_factory=dict)
     provider_id: str | None = None
+    model: str = ""
+    temperature: float | None = None
+    max_tokens: int | None = None
+    context_limit: int | None = None
+    fallback_provider_id: str | None = None
+    fallback_model: str = ""
     face: BotFace = Field(default_factory=BotFace)
     # ai-teammates persona files: the durable parts of a bot's identity.
     # soul is who the bot is; goals is what it is working toward; wisdom is
