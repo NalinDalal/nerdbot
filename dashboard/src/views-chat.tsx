@@ -700,6 +700,7 @@ function ThreadPane({
   const [draft, setDraft] = useState("");
   const [streaming, setStreaming] = useState("");
   const [streamStatus, setStreamStatus] = useState("");
+  const [streamParts, setStreamParts] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
   const [useStream, setUseStream] = useState(true);
   const [retryFrom, setRetryFrom] = useState<string | null>(null);
@@ -767,9 +768,10 @@ function ThreadPane({
       }
       if (useStream) {
         setStreamStatus("");
+        setStreamParts([]);
         await api.sendChatStream(threadId, fullContent, (chunk) => {
           setStreaming((prev) => prev + chunk);
-        }, (status) => setStreamStatus(status), { signal: controller.signal });
+        }, (status) => setStreamStatus(status), (parts) => setStreamParts(parts), { signal: controller.signal });
       } else {
         await api.sendChat(threadId, fullContent);
       }
@@ -786,7 +788,7 @@ function ThreadPane({
     } finally {
       abortRef.current = null;
       setBusy(false);
-      if (!stopped) { setStreaming(""); setStreamStatus(""); }
+      if (!stopped) { setStreaming(""); setStreamStatus(""); setStreamParts([]); }
     }
   };
 
@@ -808,9 +810,10 @@ function ThreadPane({
         view.data.messages.find((m) => m.id === target)?.content ?? "";
       if (useStream) {
         setStreamStatus("");
+        setStreamParts([]);
         await api.sendChatStream(threadId, content, (chunk) => {
           setStreaming((prev) => prev + chunk);
-        }, (status) => setStreamStatus(status), { signal: controller.signal });
+        }, (status) => setStreamStatus(status), (parts) => setStreamParts(parts), { signal: controller.signal });
       } else {
         await api.sendChat(threadId, content);
       }
@@ -827,7 +830,7 @@ function ThreadPane({
     } finally {
       abortRef.current = null;
       setBusy(false);
-      if (!stopped) { setStreaming(""); setStreamStatus(""); }
+      if (!stopped) { setStreaming(""); setStreamStatus(""); setStreamParts([]); }
     }
   };
 
@@ -1022,7 +1025,23 @@ function ThreadPane({
                 <EmptyState title="Empty conversation" hint="Say hello to begin." />
               )}
               {view.data.messages.map((message) => (
-                <Message key={message.id} message={message} />
+                <Message
+                  key={message.id}
+                  message={message}
+                  parts={message.parts}
+                  onCreateTask={async (proposal) => {
+                    try {
+                      await api.createTask(projectId, {
+                        description: proposal.title,
+                        command: "",
+                      });
+                      toast.success("Task created");
+                      await view.reload();
+                    } catch (err) {
+                      notifyError(err);
+                    }
+                  }}
+                />
               ))}
               {streamStatus && (
                 <div className="mb-2 text-step--1 text-[var(--muted)]">
@@ -1040,6 +1059,7 @@ function ThreadPane({
                     created_at: "",
                   }}
                   streaming
+                  parts={streamParts}
                 />
               )}
             </>
@@ -1184,7 +1204,7 @@ function ThreadPane({
   );
 }
 
-function Message({ message, streaming = false }: { message: ChatMessage; streaming?: boolean }) {
+function Message({ message, streaming = false, parts, onCreateTask }: { message: ChatMessage; streaming?: boolean; parts?: any[]; onCreateTask?: (proposal: any) => void }) {
   const isUser = message.role === "user";
   const [expanded, setExpanded] = useState(false);
   // Long assistant replies (e.g. a model dumping a whole file) flood the
@@ -1224,6 +1244,49 @@ function Message({ message, streaming = false }: { message: ChatMessage; streami
           <div className="mt-2 inline-block h-4 w-2 animate-pulse rounded-[1px] bg-[var(--accent)]" aria-hidden />
         ) : null}
       </div>
+      {parts && parts.length > 0 ? (
+        <div className="mt-3 flex flex-col gap-2">
+          {parts.map((p, i) => (
+            <div key={i} className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3 text-step--1">
+              {p.type === "report" ? (
+                <>
+                  <div className="font-semibold text-[var(--text)]">{p.title || "Report"}</div>
+                  <pre className="mt-2 max-h-60 overflow-auto whitespace-pre-wrap text-step--1 text-[var(--text-soft)]">
+                    {p.content}
+                  </pre>
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      type="button"
+                      className="text-step--2 text-[var(--accent)] hover:underline"
+                      onClick={() => navigator.clipboard?.writeText(p.content || "")}
+                    >
+                      Copy
+                    </button>
+                  </div>
+                </>
+              ) : p.type === "task" && p.proposal ? (
+                <>
+                  <div className="font-semibold text-[var(--text)]">{p.proposal.title}</div>
+                  {p.proposal.body ? (
+                    <div className="mt-1 whitespace-pre-wrap text-[var(--text-soft)]">{p.proposal.body}</div>
+                  ) : null}
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      className="rounded-md bg-[var(--accent)] px-2.5 py-1 text-step--2 font-medium text-white"
+                      onClick={() => onCreateTask?.(p.proposal)}
+                    >
+                      Create task
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <pre className="whitespace-pre-wrap text-[var(--text-soft)]">{JSON.stringify(p)}</pre>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : null}
       <div className={`mono mt-1 text-step--2 text-[var(--faint)] ${isUser ? "mr-1" : "ml-1"}`}>
         {isUser ? "you" : "nerdbot"}
         {streaming ? " · streaming…" : ""}
@@ -1875,7 +1938,7 @@ function CommandCenter({
       try {
         await api.sendChatStream(thread.id, content, (chunk) => {
           setStreaming((prev) => prev + chunk);
-        }, undefined, { signal: controller.signal });
+        }, undefined, undefined, { signal: controller.signal });
       } catch (err) {
         if (err instanceof ApiError && err.detail === "Stream stopped") {
           stopped = true;

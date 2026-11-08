@@ -3369,13 +3369,13 @@ def create_app() -> FastAPI:
         thread, provider, messages, provenance = _prepare_chat(conn, thread_id)
         _ = thread
         try:
-            text = chat_mod.chat_complete_with_tools(
+            text, parts = chat_mod.chat_complete_with_tools(
                 provider, messages, conn=conn, project_id=thread.project_id,
                 thread_id=thread.id,
             )
         except Exception as exc:
             raise _chat_error_to_http(exc) from exc
-        message = store.append_message(conn, thread_id, "assistant", text)
+        message = store.append_message(conn, thread_id, "assistant", text, parts=parts)
         provider_id = provider.id if provider else None
         return {
             "message": message.model_dump(mode="json"),
@@ -3406,6 +3406,7 @@ def create_app() -> FastAPI:
             import json as _json
 
             text_parts: list[str] = []
+            parts: list[dict[str, Any]] = []
             # The mock provider answers with canned text and executes nothing;
             # the interface is told, so it can label the reply.
             if provider and provider.kind == ProviderKind.MOCK:
@@ -3416,15 +3417,20 @@ def create_app() -> FastAPI:
                     thread_id=thread.id,
                 ):
                     yield f"data: {_json.dumps(event)}\n\n"
-                    if isinstance(event, dict) and event.get("kind") == "text":
-                        text_parts.append(str(event.get("text") or ""))
+                    if isinstance(event, dict):
+                        if event.get("kind") == "text":
+                            text_parts.append(str(event.get("text") or ""))
+                        elif event.get("kind") == "parts":
+                            for pp in event.get("parts") or []:
+                                if isinstance(pp, dict):
+                                    parts.append(pp)
             except Exception as exc:
                 http_exc = _chat_error_to_http(exc)
                 yield f"data: {_json.dumps({'error': http_exc.detail})}\n\n"
                 yield "data: [DONE]\n\n"
                 return
             full = "".join(text_parts)
-            store.append_message(conn, thread_id, "assistant", full or "(empty reply)")
+            store.append_message(conn, thread_id, "assistant", full or "(empty reply)", parts=parts)
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(generate(), media_type="text/event-stream")

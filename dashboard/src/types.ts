@@ -412,6 +412,7 @@ export interface ChatMessage {
   thread_id: string;
   role: string;
   content: string;
+  parts?: Array<{ type: string; [key: string]: any }>;
   created_at: string;
 }
 

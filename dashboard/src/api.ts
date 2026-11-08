@@ -588,9 +588,10 @@ export const api = {
     content: string,
     onChunk: (text: string) => void,
     onStatus?: (text: string) => void,
+    onParts?: (parts: any[]) => void,
     opts?: { signal?: AbortSignal },
   ): Promise<string> =>
-    streamChat(threadId, content, onChunk, onStatus, opts),
+    streamChat(threadId, content, onChunk, onStatus, onParts, opts),
   /** Live run execution: SSE that replays from ``after`` and closes on the
    *  terminal state. Resolves true when the stream completed; any throw
    *  means the caller should fall back to polling. */
@@ -775,6 +776,7 @@ async function streamChat(
   content: string,
   onChunk: (text: string) => void,
   onStatus?: (text: string) => void,
+  onParts?: (parts: any[]) => void,
   opts?: { signal?: AbortSignal },
 ): Promise<string> {
   const current = getSession();
@@ -844,7 +846,7 @@ async function streamChat(
         if (!text.startsWith("data:")) continue;
         const payload = text.slice(5).trim();
         if (payload === "[DONE]") continue;
-        let data: { kind?: unknown; text?: unknown; error?: unknown; mock?: unknown };
+        let data: { kind?: unknown; text?: unknown; error?: unknown; mock?: unknown; parts?: unknown };
         try {
           data = JSON.parse(payload) as { kind?: unknown; text?: unknown; error?: unknown; mock?: unknown };
         } catch {
@@ -855,6 +857,8 @@ async function streamChat(
         }
         if (data.kind === "status" && typeof data.text === "string" && data.text) {
           onStatus?.(data.text);
+        } else if (data.kind === "parts" && Array.isArray(data.parts)) {
+          onParts?.(data.parts);
         } else if (typeof data.text === "string" && data.text) {
           // Backwards-compat: events without a kind are answer text.
           if (data.kind === "text" || data.kind === undefined) {

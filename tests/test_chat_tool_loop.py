@@ -48,9 +48,10 @@ def test_mock_provider_path_is_untouched(tmp_path):
     pid = _project(conn)
     provider = Provider(id="prv", project_id=pid, kind=ProviderKind.MOCK, name="m")
     msgs = [{"role": "user", "content": "hi"}]
-    assert chat_mod.chat_complete_with_tools(
+    text, _parts = chat_mod.chat_complete_with_tools(
         provider, msgs, conn=conn, project_id=pid
-    ) == chat_mod.chat_complete(provider, msgs)
+    )
+    assert text == chat_mod.chat_complete(provider, msgs)
 
 
 def test_cap_enforced(tmp_path):
@@ -71,7 +72,7 @@ def test_cap_enforced(tmp_path):
     responses = [tool_resp] * 5 + [final_resp]
     transport, calls = _transport(responses)
     msgs = [{"role": "user", "content": "research"}]
-    text = chat_mod.chat_complete_with_tools(
+    text, _parts = chat_mod.chat_complete_with_tools(
         provider, msgs, conn=conn, project_id=pid, transport=transport
     )
     # 5 tool turns + 1 final = 6 requests max
@@ -92,7 +93,7 @@ def test_tool_output_framed_untrusted(tmp_path):
     final_resp = {"choices": [{"message": {"content": "ok", "tool_calls": []}}]}
     transport, _ = _transport([tool_resp, final_resp])
     msgs = [{"role": "user", "content": "research"}]
-    text = chat_mod.chat_complete_with_tools(
+    text, _parts = chat_mod.chat_complete_with_tools(
         provider, msgs, conn=conn, project_id=pid, transport=transport
     )
     assert text == "ok"
@@ -110,7 +111,7 @@ def test_failing_tool_does_not_crash_stream(tmp_path):
     final_resp = {"choices": [{"message": {"content": "recovered", "tool_calls": []}}]}
     transport, _ = _transport([tool_resp, final_resp])
     msgs = [{"role": "user", "content": "fetch"}]
-    text = chat_mod.chat_complete_with_tools(
+    text, _parts = chat_mod.chat_complete_with_tools(
         provider, msgs, conn=conn, project_id=pid, transport=transport
     )
     assert text == "recovered"
@@ -134,7 +135,7 @@ def test_create_task_blocked_after_untrusted(tmp_path):
     final_resp = {"choices": [{"message": {"content": "done", "tool_calls": []}}]}
     transport, _ = _transport([search_resp, create_resp, final_resp])
     msgs = [{"role": "user", "content": "do"}]
-    text = chat_mod.chat_complete_with_tools(
+    text, _parts = chat_mod.chat_complete_with_tools(
         provider, msgs, conn=conn, project_id=pid, transport=transport
     )
     assert text == "done"

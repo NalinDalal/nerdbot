@@ -497,6 +497,36 @@ CHAT_TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {"type": "object", "properties": {}},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "propose_task",
+            "description": "Propose a task for the user to create (does not create it).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "body": {"type": "string"},
+                },
+                "required": ["title"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_report",
+            "description": "Save a finished report so it can be opened, copied or exported.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "content": {"type": "string"},
+                },
+                "required": ["title", "content"],
+            },
+        },
+    },
 ]
 
 
@@ -529,6 +559,16 @@ def _execute_chat_tool(
             return json.dumps(
                 [{"id": m.id, "persona": m.persona, "status": m.status.value} for m in mates]
             )
+        if name == "propose_task":
+            title = str(args.get("title", "")).strip() or "Proposed task"
+            body = str(args.get("body", "")).strip()
+            part = {"type": "task", "proposal": {"title": title, "body": body}}
+            return json.dumps({"ok": True, "title": title, "_part": part})
+        if name == "save_report":
+            title = str(args.get("title", "")).strip() or "Report"
+            content = str(args.get("content", "")).strip()
+            part = {"type": "report", "title": title, "content": content}
+            return json.dumps({"ok": True, "title": title, "_part": part})
     except Exception as exc:  # noqa: BLE001 - tool errors are data, not crashes
         return f"error: {exc}"
     return f"unknown tool: {name}"
@@ -606,14 +646,14 @@ def chat_complete_with_tools(
     transport: httpx.BaseTransport | None = None,
     timeout_s: float = CHAT_TIMEOUT_S,
     max_turns: int = 5,
-) -> str:
+) -> tuple[str, list[dict[str, Any]]]:
     """Non-streaming completion with a bounded tool loop."""
     if provider is None:
         raise ProviderConfigurationError(
             "no chat provider available: configure an openai-compatible or mock provider"
         )
     if provider.kind == ProviderKind.MOCK:
-        return _mock_reply(messages)[:RESPONSE_MAX_CHARS]
+        return _mock_reply(messages)[:RESPONSE_MAX_CHARS], []
     if provider.kind != ProviderKind.OPENAI_COMPATIBLE:
         raise ProviderConfigurationError(f"provider kind {provider.kind.value} cannot chat")
     msgs = [dict(m) for m in messages]
@@ -626,6 +666,7 @@ def chat_complete_with_tools(
             thread_tainted = False
     saw_untrusted = thread_tainted
     searched_queries: set[str] = set()
+    parts: list[dict[str, Any]] = []
     for _ in range(max_turns):
         tools = (
             CHAT_TOOL_SCHEMAS
@@ -641,7 +682,7 @@ def chat_complete_with_tools(
             raise ProviderProtocolError("chat response has no message") from exc
         tool_calls = choice.get("tool_calls") or []
         if not tool_calls:
-            return str(choice.get("content") or "")[:RESPONSE_MAX_CHARS]
+            return str(choice.get("content") or "")[:RESPONSE_MAX_CHARS], parts
         msgs.append(
             {"role": "assistant", "content": choice.get("content"), "tool_calls": tool_calls}
         )
@@ -667,6 +708,14 @@ def chat_complete_with_tools(
                 )
             else:
                 result = _execute_chat_tool(name, args, conn, project_id, transport)
+            # Extract any UI part embedded in the tool result.
+            try:
+                parsed = json.loads(result) if isinstance(result, str) else None
+            except (ValueError, TypeError):
+                parsed = None
+            if isinstance(parsed, dict) and "_part" in parsed:
+                parts.append(parsed["_part"])
+                result = json.dumps({k: v for k, v in parsed.items() if k != "_part"})
             if name in ("web_search", "fetch_url"):
                 saw_untrusted = True
             msgs.append(
@@ -679,9 +728,9 @@ def chat_complete_with_tools(
     # Final pass without tools to force a text answer.
     data = _openai_post(provider, msgs, tools=None, transport=transport, timeout_s=timeout_s)
     try:
-        return str(data["choices"][0]["message"].get("content") or "")[:RESPONSE_MAX_CHARS]
+        return str(data["choices"][0]["message"].get("content") or "")[:RESPONSE_MAX_CHARS], parts
     except (KeyError, IndexError, TypeError, AttributeError):
-        return ""
+        return "", parts
 
 
 def chat_stream_with_tools(
@@ -722,6 +771,7 @@ def chat_stream_with_tools(
             thread_tainted = False
     saw_untrusted = thread_tainted
     searched_queries: set[str] = set()
+    parts: list[dict[str, Any]] = []
     for _ in range(5):
         tools = (
             CHAT_TOOL_SCHEMAS
@@ -770,12 +820,21 @@ def chat_stream_with_tools(
                 )
             else:
                 result = _execute_chat_tool(name, args, conn, project_id, transport)
+            try:
+                parsed = json.loads(result) if isinstance(result, str) else None
+            except (ValueError, TypeError):
+                parsed = None
+            if isinstance(parsed, dict) and "_part" in parsed:
+                parts.append(parsed["_part"])
+                result = json.dumps({k: v for k, v in parsed.items() if k != "_part"})
             if name in ("web_search", "fetch_url"):
                 saw_untrusted = True
             msgs.append(
                 {"role": "tool", "tool_call_id": tc.get("id"), "content": str(result)[:4000]}
             )
 
+    if parts:
+        yield {"kind": "parts", "parts": parts}
     if thread_id is not None and (saw_untrusted or thread_tainted):
         with contextlib.suppress(Exception):
             store.set_thread_tainted(conn, thread_id, True)
