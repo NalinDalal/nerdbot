@@ -296,6 +296,7 @@ class ChatThread(BaseModel):
     title: str = ""
     provider_id: str | None = None
     summary: str = ""
+    tainted: bool = False
     created_at: datetime = Field(default_factory=_utcnow)
 
 
@@ -304,6 +305,7 @@ class ChatMessage(BaseModel):
     thread_id: str
     role: str = "user"
     content: str = ""
+    parts: list[dict[str, Any]] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=_utcnow)
 
 

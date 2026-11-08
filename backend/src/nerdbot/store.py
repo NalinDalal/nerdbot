@@ -179,12 +179,12 @@ CREATE TABLE IF NOT EXISTS meta (
 CREATE TABLE IF NOT EXISTS chat_threads (
   id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
   title TEXT NOT NULL DEFAULT '', provider_id TEXT, summary TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL
+  tainted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS chat_messages (
   id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES chat_threads(id),
   role TEXT NOT NULL DEFAULT 'user', content TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL
+  parts TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages(thread_id);
 CREATE TABLE IF NOT EXISTS teams (
@@ -566,6 +566,11 @@ _PHASE24_COLUMNS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
+_PHASE25_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "chat_threads": [("tainted", "INTEGER NOT NULL DEFAULT 0")],
+    "chat_messages": [("parts", "TEXT NOT NULL DEFAULT '[]'")],
+}
+
 
 _PHASE20_COLUMNS: dict[str, list[tuple[str, str]]] = {
     # Bot persona files (ai-teammates model): a bot's identity, its active
@@ -597,7 +602,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
                   _PHASE10_COLUMNS, _PHASE11_COLUMNS, _PHASE12_COLUMNS, _PHASE13_COLUMNS,
                   _PHASE14_COLUMNS, _PHASE15_COLUMNS, _PHASE16_COLUMNS, _PHASE17_COLUMNS,
                   _PHASE18_COLUMNS, _PHASE19_COLUMNS, _PHASE20_COLUMNS,
-                  _PHASE21_COLUMNS, _PHASE22_COLUMNS, _PHASE23_COLUMNS, _PHASE24_COLUMNS):
+                  _PHASE21_COLUMNS, _PHASE22_COLUMNS, _PHASE23_COLUMNS, _PHASE24_COLUMNS,
+                  _PHASE25_COLUMNS):
         for table, columns in phase.items():
             phases.setdefault(table, []).extend(columns)
     for table, columns in phases.items():
@@ -4385,16 +4391,26 @@ def _thread_from_row(row: sqlite3.Row) -> ChatThread:
         title=row["title"] or "",
         provider_id=row["provider_id"],
         summary=row["summary"] if "summary" in keys and row["summary"] else "",
+        tainted=bool(row["tainted"]) if "tainted" in keys else False,
         created_at=datetime.fromisoformat(row["created_at"]),
     )
 
 
 def _message_from_row(row: sqlite3.Row) -> ChatMessage:
+    keys = row.keys()
+    parts_raw = row["parts"] if "parts" in keys else "[]"
+    try:
+        parts = json.loads(parts_raw or "[]")
+    except (ValueError, TypeError):
+        parts = []
+    if not isinstance(parts, list):
+        parts = []
     return ChatMessage(
         id=row["id"],
         thread_id=row["thread_id"],
         role=row["role"] or "user",
         content=row["content"] or "",
+        parts=parts,
         created_at=datetime.fromisoformat(row["created_at"]),
     )
 
@@ -4487,6 +4503,16 @@ def set_thread_summary(conn: sqlite3.Connection, thread_id: str, summary: str) -
     return thread
 
 
+def set_thread_tainted(conn: sqlite3.Connection, thread_id: str, tainted: bool = True) -> ChatThread:
+    thread = get_thread(conn, thread_id)
+    if thread is None:
+        raise KeyError(f"unknown thread {thread_id}")
+    conn.execute("UPDATE chat_threads SET tainted = ? WHERE id = ?", (1 if tainted else 0, thread_id))
+    conn.commit()
+    thread.tainted = tainted
+    return thread
+
+
 def list_thread_summaries(
     conn: sqlite3.Connection, project_id: str, exclude_id: str = "", limit: int = 3
 ) -> list[ChatThread]:
@@ -4498,20 +4524,26 @@ def list_thread_summaries(
     return [_thread_from_row(r) for r in rows]
 
 
-def append_message(conn: sqlite3.Connection, thread_id: str, role: str, content: str) -> ChatMessage:
+def append_message(
+    conn: sqlite3.Connection, thread_id: str, role: str, content: str,
+    parts: list[dict[str, Any]] | None = None,
+) -> ChatMessage:
     thread = get_thread(conn, thread_id)
     if thread is None:
         raise KeyError(f"unknown thread {thread_id}")
     if role not in CHAT_ROLES:
         raise ValueError(f"invalid role {role!r}")
-    if not content.strip():
+    if not content.strip() and not parts:
         raise ValueError("message content is required")
-    message = ChatMessage(id=new_id("msg"), thread_id=thread_id, role=role, content=content)
+    message = ChatMessage(
+        id=new_id("msg"), thread_id=thread_id, role=role, content=content,
+        parts=parts or [],
+    )
     conn.execute(
-        "INSERT INTO chat_messages (id, thread_id, role, content, created_at)"
-        " VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO chat_messages (id, thread_id, role, content, parts, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
         (message.id, message.thread_id, message.role, message.content,
-         message.created_at.isoformat()),
+         json.dumps(message.parts), message.created_at.isoformat()),
     )
     conn.commit()
     return message

@@ -7,6 +7,7 @@ with provenance. No tools here — the agent loop is a separate path.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 from collections.abc import Iterator
@@ -601,6 +602,7 @@ def chat_complete_with_tools(
     *,
     conn: sqlite3.Connection,
     project_id: str,
+    thread_id: str | None = None,
     transport: httpx.BaseTransport | None = None,
     timeout_s: float = CHAT_TIMEOUT_S,
     max_turns: int = 5,
@@ -615,11 +617,19 @@ def chat_complete_with_tools(
     if provider.kind != ProviderKind.OPENAI_COMPATIBLE:
         raise ProviderConfigurationError(f"provider kind {provider.kind.value} cannot chat")
     msgs = [dict(m) for m in messages]
-    saw_untrusted = False
+    thread_tainted = False
+    if thread_id is not None:
+        try:
+            t = store.get_thread(conn, thread_id)
+            thread_tainted = bool(t.tainted) if t is not None else False
+        except Exception:
+            thread_tainted = False
+    saw_untrusted = thread_tainted
+    searched_queries: set[str] = set()
     for _ in range(max_turns):
         tools = (
             CHAT_TOOL_SCHEMAS
-            if not saw_untrusted
+            if not (saw_untrusted or thread_tainted)
             else [t for t in CHAT_TOOL_SCHEMAS if t["function"]["name"] != "create_task"]
         )
         data = _openai_post(
@@ -642,7 +652,15 @@ def chat_complete_with_tools(
                 args = json.loads(fn.get("arguments") or "{}")
             except (ValueError, TypeError):
                 args = {}
-            if name == "create_task" and saw_untrusted:
+            if name == "web_search":
+                q = str(args.get("query", "")).strip().lower()
+                if q and q in searched_queries:
+                    result = "already searched: " + q
+                else:
+                    if q:
+                        searched_queries.add(q)
+                    result = _execute_chat_tool(name, args, conn, project_id, transport)
+            elif name == "create_task" and (saw_untrusted or thread_tainted):
                 result = (
                     "error: task creation is blocked in this turn because web "
                     "content was read; confirm with the user before creating tasks"
@@ -654,6 +672,10 @@ def chat_complete_with_tools(
             msgs.append(
                 {"role": "tool", "tool_call_id": tc.get("id"), "content": str(result)[:4000]}
             )
+
+    if thread_id is not None and (saw_untrusted or thread_tainted):
+        with contextlib.suppress(Exception):
+            store.set_thread_tainted(conn, thread_id, True)
     # Final pass without tools to force a text answer.
     data = _openai_post(provider, msgs, tools=None, transport=transport, timeout_s=timeout_s)
     try:
@@ -668,6 +690,7 @@ def chat_stream_with_tools(
     *,
     conn: sqlite3.Connection,
     project_id: str,
+    thread_id: str | None = None,
     transport: httpx.BaseTransport | None = None,
     timeout_s: float = CHAT_TIMEOUT_S,
     chunk_size: int = 64,
@@ -690,11 +713,19 @@ def chat_stream_with_tools(
         raise ProviderConfigurationError(f"provider kind {provider.kind.value} cannot chat")
 
     msgs = [dict(m) for m in messages]
-    saw_untrusted = False
+    thread_tainted = False
+    if thread_id is not None:
+        try:
+            t = store.get_thread(conn, thread_id)
+            thread_tainted = bool(t.tainted) if t is not None else False
+        except Exception:
+            thread_tainted = False
+    saw_untrusted = thread_tainted
+    searched_queries: set[str] = set()
     for _ in range(5):
         tools = (
             CHAT_TOOL_SCHEMAS
-            if not saw_untrusted
+            if not (saw_untrusted or thread_tainted)
             else [t for t in CHAT_TOOL_SCHEMAS if t["function"]["name"] != "create_task"]
         )
         data = _openai_post(provider, msgs, tools=tools, transport=transport, timeout_s=timeout_s)
@@ -724,7 +755,15 @@ def chat_stream_with_tools(
                 yield {"kind": "status", "text": "Creating task…"}
             else:
                 yield {"kind": "status", "text": f"Running {name}…"}
-            if name == "create_task" and saw_untrusted:
+            if name == "web_search":
+                q = str(args.get("query", "")).strip().lower()
+                if q and q in searched_queries:
+                    result = "already searched: " + q
+                else:
+                    if q:
+                        searched_queries.add(q)
+                    result = _execute_chat_tool(name, args, conn, project_id, transport)
+            elif name == "create_task" and (saw_untrusted or thread_tainted):
                 result = (
                     "error: task creation is blocked in this turn because web "
                     "content was read; confirm with the user before creating tasks"
@@ -737,6 +776,9 @@ def chat_stream_with_tools(
                 {"role": "tool", "tool_call_id": tc.get("id"), "content": str(result)[:4000]}
             )
 
+    if thread_id is not None and (saw_untrusted or thread_tainted):
+        with contextlib.suppress(Exception):
+            store.set_thread_tainted(conn, thread_id, True)
     yield {"kind": "status", "text": "Writing…"}
     data = _openai_post(provider, msgs, tools=None, transport=transport, timeout_s=timeout_s)
     try:
