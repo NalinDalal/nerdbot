@@ -35,6 +35,8 @@ EXPORT_TABLES = (
     "schedules",
     "notifications",
     "events",
+    "chat_threads",
+    "chat_messages",
 )
 
 
@@ -61,6 +63,7 @@ def build_manifest(conn: sqlite3.Connection, project_id: str) -> dict[str, Any]:
             "notifications",
             "knowledge_sources",
             "events",
+            "chat_threads",
         ):
             if table == "runs":
                 rows = conn.execute(
@@ -80,6 +83,12 @@ def build_manifest(conn: sqlite3.Connection, project_id: str) -> dict[str, Any]:
         elif table == "knowledge_chunks":
             rows = conn.execute(
                 "SELECT * FROM knowledge_chunks WHERE project_id = ?", (project_id,)
+            ).fetchall()
+        elif table == "chat_messages":
+            rows = conn.execute(
+                "SELECT chat_messages.* FROM chat_messages JOIN chat_threads "
+                "ON chat_messages.thread_id = chat_threads.id "
+                "WHERE chat_threads.project_id = ?", (project_id,)
             ).fetchall()
         elif table == "approvals":
             rows = conn.execute(
