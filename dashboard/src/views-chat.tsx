@@ -699,6 +699,7 @@ function ThreadPane({
   const view = useAsync(() => api.threadView(threadId, 50), [threadId]);
   const [draft, setDraft] = useState("");
   const [streaming, setStreaming] = useState("");
+  const [streamStatus, setStreamStatus] = useState("");
   const [busy, setBusy] = useState(false);
   const [useStream, setUseStream] = useState(true);
   const [retryFrom, setRetryFrom] = useState<string | null>(null);
@@ -765,9 +766,10 @@ function ThreadPane({
         setAttachedFiles([]);
       }
       if (useStream) {
+        setStreamStatus("");
         await api.sendChatStream(threadId, fullContent, (chunk) => {
           setStreaming((prev) => prev + chunk);
-        }, { signal: controller.signal });
+        }, (status) => setStreamStatus(status), { signal: controller.signal });
       } else {
         await api.sendChat(threadId, fullContent);
       }
@@ -784,7 +786,7 @@ function ThreadPane({
     } finally {
       abortRef.current = null;
       setBusy(false);
-      if (!stopped) setStreaming("");
+      if (!stopped) { setStreaming(""); setStreamStatus(""); }
     }
   };
 
@@ -805,9 +807,10 @@ function ThreadPane({
       const content =
         view.data.messages.find((m) => m.id === target)?.content ?? "";
       if (useStream) {
+        setStreamStatus("");
         await api.sendChatStream(threadId, content, (chunk) => {
           setStreaming((prev) => prev + chunk);
-        }, { signal: controller.signal });
+        }, (status) => setStreamStatus(status), { signal: controller.signal });
       } else {
         await api.sendChat(threadId, content);
       }
@@ -824,7 +827,7 @@ function ThreadPane({
     } finally {
       abortRef.current = null;
       setBusy(false);
-      if (!stopped) setStreaming("");
+      if (!stopped) { setStreaming(""); setStreamStatus(""); }
     }
   };
 
@@ -1021,6 +1024,11 @@ function ThreadPane({
               {view.data.messages.map((message) => (
                 <Message key={message.id} message={message} />
               ))}
+              {streamStatus && (
+                <div className="mb-2 text-step--1 text-[var(--muted)]">
+                  {streamStatus}
+                </div>
+              )}
               {streaming && (
                 <Message
                   key="streaming"
@@ -1867,7 +1875,7 @@ function CommandCenter({
       try {
         await api.sendChatStream(thread.id, content, (chunk) => {
           setStreaming((prev) => prev + chunk);
-        }, { signal: controller.signal });
+        }, undefined, { signal: controller.signal });
       } catch (err) {
         if (err instanceof ApiError && err.detail === "Stream stopped") {
           stopped = true;

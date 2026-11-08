@@ -3404,23 +3404,24 @@ def create_app() -> FastAPI:
         def generate() -> Any:
             import json as _json
 
-            chunks: list[str] = []
+            text_parts: list[str] = []
             # The mock provider answers with canned text and executes nothing;
             # the interface is told, so it can label the reply.
             if provider and provider.kind == ProviderKind.MOCK:
                 yield f"data: {_json.dumps({'mock': True})}\n\n"
             try:
-                for chunk in chat_mod.chat_stream_with_tools(
+                for event in chat_mod.chat_stream_with_tools(
                     provider, messages, conn=conn, project_id=thread.project_id
                 ):
-                    chunks.append(chunk)
-                    yield f"data: {_json.dumps({'text': chunk})}\n\n"
+                    yield f"data: {_json.dumps(event)}\n\n"
+                    if isinstance(event, dict) and event.get("kind") == "text":
+                        text_parts.append(str(event.get("text") or ""))
             except Exception as exc:
                 http_exc = _chat_error_to_http(exc)
                 yield f"data: {_json.dumps({'error': http_exc.detail})}\n\n"
                 yield "data: [DONE]\n\n"
                 return
-            full = "".join(chunks)
+            full = "".join(text_parts)
             store.append_message(conn, thread_id, "assistant", full or "(empty reply)")
             yield "data: [DONE]\n\n"
 

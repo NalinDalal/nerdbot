@@ -85,7 +85,8 @@ function startsBlock(line: string): boolean {
     RULE.test(line) ||
     BULLET.test(line) ||
     ORDERED.test(line) ||
-    QUOTE.test(line)
+    QUOTE.test(line) ||
+    TABLE_ROW.test(line)
   );
 }
 

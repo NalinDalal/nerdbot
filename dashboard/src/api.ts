@@ -587,9 +587,10 @@ export const api = {
     threadId: string,
     content: string,
     onChunk: (text: string) => void,
+    onStatus?: (text: string) => void,
     opts?: { signal?: AbortSignal },
   ): Promise<string> =>
-    streamChat(threadId, content, onChunk, opts),
+    streamChat(threadId, content, onChunk, onStatus, opts),
   /** Live run execution: SSE that replays from ``after`` and closes on the
    *  terminal state. Resolves true when the stream completed; any throw
    *  means the caller should fall back to polling. */
@@ -773,6 +774,7 @@ async function streamChat(
   threadId: string,
   content: string,
   onChunk: (text: string) => void,
+  onStatus?: (text: string) => void,
   opts?: { signal?: AbortSignal },
 ): Promise<string> {
   const current = getSession();
@@ -842,18 +844,23 @@ async function streamChat(
         if (!text.startsWith("data:")) continue;
         const payload = text.slice(5).trim();
         if (payload === "[DONE]") continue;
-        let data: { text?: unknown; error?: unknown };
+        let data: { kind?: unknown; text?: unknown; error?: unknown; mock?: unknown };
         try {
-          data = JSON.parse(payload) as { text?: unknown; error?: unknown };
+          data = JSON.parse(payload) as { kind?: unknown; text?: unknown; error?: unknown; mock?: unknown };
         } catch {
           throw new ApiError(502, "Unreadable stream payload");
         }
         if (typeof data.error === "string" && data.error) {
           throw new ApiError(res.status, data.error);
         }
-        if (typeof data.text === "string" && data.text) {
-          full += data.text;
-          onChunk(data.text);
+        if (data.kind === "status" && typeof data.text === "string" && data.text) {
+          onStatus?.(data.text);
+        } else if (typeof data.text === "string" && data.text) {
+          // Backwards-compat: events without a kind are answer text.
+          if (data.kind === "text" || data.kind === undefined) {
+            full += data.text;
+            onChunk(data.text);
+          }
         }
       }
     }

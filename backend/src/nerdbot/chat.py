@@ -615,9 +615,15 @@ def chat_complete_with_tools(
     if provider.kind != ProviderKind.OPENAI_COMPATIBLE:
         raise ProviderConfigurationError(f"provider kind {provider.kind.value} cannot chat")
     msgs = [dict(m) for m in messages]
+    saw_untrusted = False
     for _ in range(max_turns):
+        tools = (
+            CHAT_TOOL_SCHEMAS
+            if not saw_untrusted
+            else [t for t in CHAT_TOOL_SCHEMAS if t["function"]["name"] != "create_task"]
+        )
         data = _openai_post(
-            provider, msgs, tools=CHAT_TOOL_SCHEMAS, transport=transport, timeout_s=timeout_s
+            provider, msgs, tools=tools, transport=transport, timeout_s=timeout_s
         )
         try:
             choice = data["choices"][0]["message"]
@@ -636,7 +642,15 @@ def chat_complete_with_tools(
                 args = json.loads(fn.get("arguments") or "{}")
             except (ValueError, TypeError):
                 args = {}
-            result = _execute_chat_tool(name, args, conn, project_id, transport)
+            if name == "create_task" and saw_untrusted:
+                result = (
+                    "error: task creation is blocked in this turn because web "
+                    "content was read; confirm with the user before creating tasks"
+                )
+            else:
+                result = _execute_chat_tool(name, args, conn, project_id, transport)
+            if name in ("web_search", "fetch_url"):
+                saw_untrusted = True
             msgs.append(
                 {"role": "tool", "tool_call_id": tc.get("id"), "content": str(result)[:4000]}
             )
@@ -657,15 +671,77 @@ def chat_stream_with_tools(
     transport: httpx.BaseTransport | None = None,
     timeout_s: float = CHAT_TIMEOUT_S,
     chunk_size: int = 64,
-) -> Iterator[str]:
-    """Streaming wrapper: runs the tool loop, then yields the answer in chunks."""
-    text = chat_complete_with_tools(
-        provider,
-        messages,
-        conn=conn,
-        project_id=project_id,
-        transport=transport,
-        timeout_s=timeout_s,
-    )
+) -> Iterator[dict[str, Any]]:
+    """Streaming wrapper: runs the tool loop, yielding progress + answer events.
+
+    Events are dicts with a ``kind`` of ``status`` (progress text) or ``text``
+    (answer chunk). The final answer is delivered as ``text`` events.
+    """
+    if provider is None:
+        raise ProviderConfigurationError(
+            "no chat provider available: configure an openai-compatible or mock provider"
+        )
+    if provider.kind == ProviderKind.MOCK:
+        text = _mock_reply(messages)[:RESPONSE_MAX_CHARS]
+        for index in range(0, len(text), chunk_size):
+            yield {"kind": "text", "text": text[index:index + chunk_size]}
+        return
+    if provider.kind != ProviderKind.OPENAI_COMPATIBLE:
+        raise ProviderConfigurationError(f"provider kind {provider.kind.value} cannot chat")
+
+    msgs = [dict(m) for m in messages]
+    saw_untrusted = False
+    for _ in range(5):
+        tools = (
+            CHAT_TOOL_SCHEMAS
+            if not saw_untrusted
+            else [t for t in CHAT_TOOL_SCHEMAS if t["function"]["name"] != "create_task"]
+        )
+        data = _openai_post(provider, msgs, tools=tools, transport=transport, timeout_s=timeout_s)
+        try:
+            choice = data["choices"][0]["message"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ProviderProtocolError("chat response has no message") from exc
+        tool_calls = choice.get("tool_calls") or []
+        if not tool_calls:
+            text = str(choice.get("content") or "")[:RESPONSE_MAX_CHARS]
+            for index in range(0, len(text), chunk_size):
+                yield {"kind": "text", "text": text[index:index + chunk_size]}
+            return
+        msgs.append({"role": "assistant", "content": choice.get("content"), "tool_calls": tool_calls})
+        for tc in tool_calls:
+            fn = tc.get("function") or {}
+            name = fn.get("name", "")
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except (ValueError, TypeError):
+                args = {}
+            if name == "web_search":
+                yield {"kind": "status", "text": f"Searching: {str(args.get('query', ''))[:80]}"}
+            elif name == "fetch_url":
+                yield {"kind": "status", "text": f"Reading: {str(args.get('url', ''))[:80]}"}
+            elif name == "create_task":
+                yield {"kind": "status", "text": "Creating task…"}
+            else:
+                yield {"kind": "status", "text": f"Running {name}…"}
+            if name == "create_task" and saw_untrusted:
+                result = (
+                    "error: task creation is blocked in this turn because web "
+                    "content was read; confirm with the user before creating tasks"
+                )
+            else:
+                result = _execute_chat_tool(name, args, conn, project_id, transport)
+            if name in ("web_search", "fetch_url"):
+                saw_untrusted = True
+            msgs.append(
+                {"role": "tool", "tool_call_id": tc.get("id"), "content": str(result)[:4000]}
+            )
+
+    yield {"kind": "status", "text": "Writing…"}
+    data = _openai_post(provider, msgs, tools=None, transport=transport, timeout_s=timeout_s)
+    try:
+        text = str(data["choices"][0]["message"].get("content") or "")[:RESPONSE_MAX_CHARS]
+    except (KeyError, IndexError, TypeError, AttributeError):
+        text = ""
     for index in range(0, len(text), chunk_size):
-        yield text[index : index + chunk_size]
+        yield {"kind": "text", "text": text[index:index + chunk_size]}
