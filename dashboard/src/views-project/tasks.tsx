@@ -268,7 +268,14 @@ export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenT
             hint={
               allTasks.length > 0
                 ? "Nothing with that status right now."
-                : "Create a task above, or let a bot decompose an objective into one."
+                : "Create a task, or let a bot decompose an objective into one."
+            }
+            action={
+              allTasks.length === 0 ? (
+                <Button variant="primary" onClick={() => setShowCreate(true)}>
+                  New task
+                </Button>
+              ) : undefined
             }
           />
         )}

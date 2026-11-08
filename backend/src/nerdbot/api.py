@@ -3369,7 +3369,9 @@ def create_app() -> FastAPI:
         thread, provider, messages, provenance = _prepare_chat(conn, thread_id)
         _ = thread
         try:
-            text = chat_mod.chat_complete(provider, messages)
+            text = chat_mod.chat_complete_with_tools(
+                provider, messages, conn=conn, project_id=thread.project_id
+            )
         except Exception as exc:
             raise _chat_error_to_http(exc) from exc
         message = store.append_message(conn, thread_id, "assistant", text)
@@ -3408,7 +3410,9 @@ def create_app() -> FastAPI:
             if provider and provider.kind == ProviderKind.MOCK:
                 yield f"data: {_json.dumps({'mock': True})}\n\n"
             try:
-                for chunk in chat_mod.chat_stream(provider, messages):
+                for chunk in chat_mod.chat_stream_with_tools(
+                    provider, messages, conn=conn, project_id=thread.project_id
+                ):
                     chunks.append(chunk)
                     yield f"data: {_json.dumps({'text': chunk})}\n\n"
             except Exception as exc:

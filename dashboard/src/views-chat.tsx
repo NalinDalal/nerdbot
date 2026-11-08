@@ -3,7 +3,9 @@ import { toast } from "sonner";
 import { api, ApiError } from "./api";
 import { notifyError, navigate } from "./app";
 import type { ChatMessage, ChatThread, Plan, Provider, Project, ProjectCounts, Teammate } from "./types";
-import { AttentionBanner, useWorkspaceSummary } from "./views-home";
+import { useWorkspaceSummary } from "./views-home";
+import { Markdown } from "./markdown";
+import { explainRunError } from "./explainRunError";
 import { providerIsUsable, usableProviders } from "./readiness";
 import {
   EmptyState,
@@ -24,6 +26,134 @@ import {
 
 function openTask(projectId: string, taskId: string): void {
   navigate(`/p/${projectId}/t/${taskId}`);
+}
+
+function ActivityRailContent({
+  summary,
+  onOpenTask,
+  onReload,
+}: {
+  summary: ReturnType<typeof useWorkspaceSummary>;
+  onOpenTask: (projectId: string, taskId: string) => void;
+  onReload: () => void;
+}) {
+  if (summary.loading && !summary.data) return <LoadingState lines={2} />;
+  if (summary.loadFailed) {
+    return (
+      <div className="flex flex-col gap-2">
+        <ErrorState error={new Error("Couldn't load activity")} onRetry={onReload} />
+      </div>
+    );
+  }
+  const s = summary.summary;
+  const { activeRuns, failedRuns, pendingApprovals, queuedTasks } = s;
+  const hasAnything =
+    activeRuns.length > 0 ||
+    failedRuns.length > 0 ||
+    pendingApprovals.length > 0 ||
+    queuedTasks > 0;
+  if (!hasAnything) {
+    return (
+      <p className="text-step--1 text-[var(--muted)]">
+        No work running. Delegate a task from chat to see progress here.
+      </p>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-4">
+      {pendingApprovals.length > 0 ? (
+        <section>
+          <div className="mb-1 text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--warn)]">
+            Needs approval ({pendingApprovals.length})
+          </div>
+          <ul className="flex flex-col gap-1.5">
+            {pendingApprovals.slice(0, 5).map(({ approval, projectName }) => (
+              <li
+                key={approval.id}
+                className="rounded-md border border-[var(--warn)] bg-[var(--warn-dim)] px-2.5 py-2 text-step--1"
+              >
+                <div className="truncate font-medium text-[var(--text)]">
+                  {approval.action || "approval requested"}
+                </div>
+                <div className="truncate text-step--2 text-[var(--muted)]">{projectName}</div>
+                {approval.task_id && approval.project_id ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenTask(approval.project_id!, approval.task_id!)}
+                    className="mt-1 text-step--2 text-[var(--accent)] hover:underline"
+                  >
+                    Open task →
+                  </button>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {activeRuns.length > 0 ? (
+        <section>
+          <div className="mb-1 text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--faint)]">
+            Running ({activeRuns.length})
+          </div>
+          <ul className="flex flex-col gap-1.5">
+            {activeRuns.slice(0, 6).map(({ run, task, projectName, projectId }) => (
+              <li key={run.id} className="rounded-md bg-[var(--surface-2)] px-2.5 py-2 text-step--1">
+                <div className="truncate text-[var(--text)]">
+                  {task?.description || run.task_id}
+                </div>
+                <div className="truncate text-step--2 text-[var(--muted)]">
+                  {projectName} · {run.status}
+                </div>
+                {task ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenTask(projectId, task.id)}
+                    className="mt-1 text-step--2 text-[var(--accent)] hover:underline"
+                  >
+                    Open task →
+                  </button>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {queuedTasks > 0 ? (
+        <div className="text-step--1 text-[var(--muted)]">
+          {queuedTasks} task{queuedTasks === 1 ? "" : "s"} queued
+        </div>
+      ) : null}
+
+      {failedRuns.length > 0 ? (
+        <section>
+          <div className="mb-1 text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--danger)]">
+            Recent failures ({failedRuns.length})
+          </div>
+          <ul className="flex flex-col gap-1.5">
+            {failedRuns.slice(0, 4).map(({ run, task, projectName, projectId }) => (
+              <li key={run.id} className="rounded-md bg-[var(--danger-dim)] px-2.5 py-2 text-step--1 text-[var(--danger)]">
+                <div className="truncate">
+                  {task?.description || run.task_id}
+                </div>
+                <div className="truncate text-step--2 opacity-80">{projectName}</div>
+                {task ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenTask(projectId, task.id)}
+                    className="mt-1 text-step--2 text-[var(--accent)] hover:underline"
+                  >
+                    Open task →
+                  </button>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+    </div>
+  );
 }
 
 export function ConversationView({
@@ -80,33 +210,14 @@ export function ConversationView({
   const [activeId, setActiveId] = useState<string | null>(initialThreadId ?? null);
   const [search, setSearch] = useState("");
   const [showNew, setShowNew] = useState(false);
-  const [decideBusy, setDecideBusy] = useState(false);
+  const [railOpen, setRailOpen] = useState(true);
+  const [mobileRailOpen, setMobileRailOpen] = useState(false);
 
   useEffect(() => {
     if (activeId) {
       onSetActiveThread?.(activeId);
     }
   }, [activeId, onSetActiveThread]);
-
-  const decideApproval = async (
-    approvalId: string,
-    decision: "approved" | "approved_forever" | "denied",
-  ) => {
-    setDecideBusy(true);
-    try {
-      await api.decideApproval(approvalId, decision);
-      toast.success(
-        decision === "denied" ? "Rejected" : decision === "approved_forever" ? "Approved forever" : "Approved once",
-      );
-    } catch (err) {
-      notifyError(err);
-    } finally {
-      setDecideBusy(false);
-      // Refresh either way: a decision that failed (the approval may have
-      // expired) must not leave a dead row on the banner.
-      summary.reload();
-    }
-  };
 
   if (!resolvedProjectId) {
     return <LoadingState lines={2} />;
@@ -126,7 +237,7 @@ export function ConversationView({
       <header className="flex flex-wrap items-end justify-between gap-3 border-b border-[var(--border-dim)] py-3 pl-14 pr-4 md:px-6">
         <div className="min-w-0">
           <h1 className="text-step-1 font-semibold tracking-tight">
-            {isHome ? "Home" : workspaceName || "Conversation"}
+            {isHome ? "Chat" : workspaceName || "Conversation"}
           </h1>
           <p className="mt-0.5 text-step-0 text-[var(--muted)]">
             {isHome
@@ -149,12 +260,27 @@ export function ConversationView({
             <Button onClick={summary.reload}>Retry</Button>
           </div>
         ) : null}
-        <AttentionBanner
-          summary={summary.data?.summary ?? null}
-          busy={decideBusy}
-          onDecide={decideApproval}
-          onOpenTask={openTask}
-        />
+        {(() => {
+          const s = summary.data?.summary;
+          if (!s) return null;
+          const parts: string[] = [];
+          if (s.pendingApprovals.length) parts.push(`${s.pendingApprovals.length} need${s.pendingApprovals.length === 1 ? "s" : ""} approval`);
+          if (s.failedRuns.length) parts.push(`${s.failedRuns.length} failed`);
+          if (s.activeRuns.length) parts.push(`${s.activeRuns.length} running`);
+          if (parts.length === 0) return null;
+          return (
+            <div className="mb-2 text-step--1 text-[var(--muted)]">
+              {parts.join(" · ")}{" "}
+              <button
+                type="button"
+                onClick={() => navigate("/approvals")}
+                className="text-[var(--accent)] hover:underline"
+              >
+                Open activity →
+              </button>
+            </div>
+          );
+        })()}
         </div>
       </div>
 
@@ -296,7 +422,90 @@ export function ConversationView({
             </div>
           )}
         </section>
+
+        {/* Contextual activity rail (desktop). */}
+        {railOpen ? (
+          <aside
+            aria-label="Activity"
+            className="hidden w-72 shrink-0 flex-col border-l border-[var(--border-dim)] bg-[var(--bg)] lg:flex"
+          >
+            <div className="flex items-center justify-between px-3 py-2.5">
+              <span className="text-step--2 font-medium uppercase tracking-[0.16em] text-[var(--faint)]">
+                Activity
+              </span>
+              <button
+                type="button"
+                aria-label="Collapse activity rail"
+                onClick={() => setRailOpen(false)}
+                className="rounded-sm p-1 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
+              >
+                ›
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-3 pb-4">
+              <ActivityRailContent
+                summary={summary}
+                onOpenTask={openTask}
+                onReload={() => summary.reload()}
+              />
+            </div>
+          </aside>
+        ) : (
+          <button
+            type="button"
+            aria-label="Expand activity rail"
+            onClick={() => setRailOpen(true)}
+            className="hidden w-8 shrink-0 items-center justify-center border-l border-[var(--border-dim)] bg-[var(--bg)] text-[var(--muted)] transition-colors hover:text-[var(--text)] lg:flex"
+          >
+            ‹
+          </button>
+        )}
       </div>
+
+      {/* Mobile activity drawer. */}
+      <button
+        type="button"
+        aria-label="Open activity"
+        onClick={() => setMobileRailOpen(true)}
+        className="fixed bottom-20 right-4 z-40 rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step--1 text-[var(--text-soft)] shadow-lg transition-colors hover:text-[var(--text)] lg:hidden"
+      >
+        Activity
+      </button>
+      {mobileRailOpen ? (
+        <div
+          className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px] lg:hidden"
+          onClick={() => setMobileRailOpen(false)}
+        >
+          <aside
+            className="absolute right-0 top-0 flex h-full w-full max-w-sm flex-col border-l border-[var(--border)] bg-[var(--surface)] shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Activity"
+          >
+            <div className="flex items-center justify-between border-b border-[var(--border-dim)] px-4 py-3">
+              <span className="text-step-0 font-semibold">Activity</span>
+              <button
+                onClick={() => setMobileRailOpen(false)}
+                aria-label="Close"
+                className="rounded-sm p-1 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
+              >
+                ×
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-4 py-3">
+              <ActivityRailContent
+                summary={summary}
+                onOpenTask={(pid, tid) => {
+                  setMobileRailOpen(false);
+                  openTask(pid, tid);
+                }}
+                onReload={() => summary.reload()}
+              />
+            </div>
+          </aside>
+        </div>
+      ) : null}
 
       {showNew ? (
         <NewThreadModal
@@ -514,7 +723,18 @@ function ThreadPane({
     const content = draft.trim();
     if (!content || busy) return;
     // Objective-like requests get a reviewable plan instead of a plain reply.
-    const objectiveLike = /\b(build|create|research|launch|implement|design|compare|analyze|write|generate|develop|plan)\b/i.test(content) && content.split(/\s+/).length >= 4;
+    const lower = content.toLowerCase();
+    const adminVerb = /\b(create|configure|change|manage|rename|set|attach|update|edit|disable|archive|delete|remove)\b/;
+    const managedNoun = /\b(bots?|teammates?|agents?|workspace|project|teams?)\b/;
+    const adminLike = adminVerb.test(lower) && managedNoun.test(lower);
+    const questionLike = /^(what|how|why|when|where|who|is|are|does|do|can|could|should|which)\b/.test(lower);
+    const objectiveLike =
+      /\b(build|create|research|launch|implement|design|compare|analyze|write|generate|develop|plan|delegate|investigate|review|evaluate|prepare|assign)\b/i.test(
+        content,
+      ) &&
+      content.split(/\s+/).length >= 4 &&
+      !adminLike &&
+      !questionLike;
     if (objectiveLike && projectId) {
       setPlanBusy(true);
       try {
@@ -552,6 +772,7 @@ function ThreadPane({
         await api.sendChat(threadId, fullContent);
       }
       setDraft("");
+      await view.reload();
       await onReload();
     } catch (err) {
       if (controller.signal.aborted && err instanceof ApiError && err.detail === "Stream stopped") {
@@ -591,6 +812,7 @@ function ThreadPane({
         await api.sendChat(threadId, content);
       }
       setRetryFrom(null);
+      await view.reload();
       await onReload();
     } catch (err) {
       if (controller.signal.aborted && err instanceof ApiError && err.detail === "Stream stopped") {
@@ -728,14 +950,14 @@ function ThreadPane({
       </div>
 
       {view.data?.thread.summary ? (
-        <div className="mx-4 mt-3 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 md:mx-6">
-          <div className="text-step--2 uppercase tracking-wider text-[var(--faint)]">
+        <details className="mx-4 mt-3 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 md:mx-6">
+          <summary className="cursor-pointer text-step--2 uppercase tracking-wider text-[var(--faint)]">
             Summary · recalled by other threads
-          </div>
+          </summary>
           <div className="mt-1 whitespace-pre-wrap text-step--1 text-[var(--text-soft)]">
             {view.data.thread.summary}
           </div>
-        </div>
+        </details>
       ) : null}
 
       {execView && <ExecutionView state={execView} onClose={() => setExecView(null)} />}
@@ -956,6 +1178,15 @@ function ThreadPane({
 
 function Message({ message, streaming = false }: { message: ChatMessage; streaming?: boolean }) {
   const isUser = message.role === "user";
+  const [expanded, setExpanded] = useState(false);
+  // Long assistant replies (e.g. a model dumping a whole file) flood the
+  // conversation the way a raw tool log would. Collapse them behind a toggle
+  // so the chat stays scannable, like Grok/ChatGPT collapsing tool output.
+  const COLLAPSE_AT = 6000;
+  const isLong = !isUser && !streaming && message.content.length > COLLAPSE_AT;
+  const displayContent = isLong && !expanded
+    ? `${message.content.slice(0, COLLAPSE_AT)}\n\n…`
+    : message.content;
   return (
     <div className={`flex flex-col ${isUser ? "items-end" : "items-start"}`}>
       <div
@@ -965,7 +1196,22 @@ function Message({ message, streaming = false }: { message: ChatMessage; streami
             : "border border-[var(--border)] bg-[var(--surface)] text-[var(--text-soft)]"
         } ${streaming ? "animate-pulse" : ""}`}
       >
-        <div className="whitespace-pre-wrap break-words">{message.content}</div>
+        {isUser ? (
+          <div className="whitespace-pre-wrap break-words">{message.content}</div>
+        ) : (
+          <>
+            <Markdown text={displayContent} />
+            {isLong ? (
+              <button
+                type="button"
+                onClick={() => setExpanded((v) => !v)}
+                className="mt-2 text-step--1 font-medium text-[var(--accent)] hover:underline"
+              >
+                {expanded ? "Show less" : `Show more (${Math.round(message.content.length / 1000 * 10) / 10}k chars)`}
+              </button>
+            ) : null}
+          </>
+        )}
         {streaming ? (
           <div className="mt-2 inline-block h-4 w-2 animate-pulse rounded-[1px] bg-[var(--accent)]" aria-hidden />
         ) : null}
@@ -990,6 +1236,8 @@ function ExecutionView({
   const view = useAsync(() => api.taskView(state.taskId), [state.taskId]);
   const [poll, setPoll] = useState(0);
   const [mates, setMates] = useState<Teammate[] | null>(null);
+  const [retryBusy, setRetryBusy] = useState(false);
+  const [showOutput, setShowOutput] = useState(false);
 
   useEffect(() => {
     if (view.error) return;
@@ -1019,7 +1267,6 @@ function ExecutionView({
   const owner = task?.owner_teammate_id
     ? mates?.find((m) => m.id === task.owner_teammate_id)
     : null;
-  const terminal = task?.status === "done" || task?.status === "failed" || task?.status === "cancelled";
   const awaitingDecision =
     task?.status === "blocked" || task?.status === "awaiting_approval";
 
@@ -1091,17 +1338,59 @@ function ExecutionView({
             This run needs your decision. It appears in the banner above.
           </div>
         )}
-        {!terminal && !awaitingDecision && latestRun && latestRun.status === "failed" && (
+        {latestRun && latestRun.status === "failed" && (
           <div className="rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-[var(--danger)]">
-            The last run failed. Retry it from the task page.
+            <div className="font-medium">
+              {explainRunError(
+                { command: task?.command || "", project_id: task?.project_id || state.projectId },
+                { stderr: latestRun.stderr || "", output_excerpt: latestRun.output_excerpt || "" },
+              ).message || "Run failed."}
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Button
+                variant="primary"
+                disabled={retryBusy}
+                onClick={async () => {
+                  if (!task) return;
+                  setRetryBusy(true);
+                  try {
+                    await api.retryTask(task.id);
+                    toast.message("Retry started.");
+                  } catch (err) {
+                    notifyError(err);
+                  } finally {
+                    setRetryBusy(false);
+                  }
+                }}
+              >
+                {retryBusy ? "Retrying…" : "Retry"}
+              </Button>
+              <button
+                onClick={() => openTask(task!.project_id, task!.id)}
+                className="text-step--1 text-[var(--accent)] hover:underline"
+              >
+                Open task →
+              </button>
+            </div>
           </div>
         )}
         {latestRun && (
           <div className="rounded-lg bg-[var(--surface-2)] px-3 py-2">
             <div className="mono truncate text-[var(--text-soft)]">{latestRun.command || "(no command)"}</div>
-            <div className="mono mt-1 line-clamp-3 text-step--2 text-[var(--faint)]">
-              {latestRun.output_excerpt?.slice(0, 240) || "(no output)"}
-            </div>
+            {latestRun.status === "failed" ? (
+              <button
+                type="button"
+                onClick={() => setShowOutput((v) => !v)}
+                className="mt-1 text-step--2 text-[var(--accent)] hover:underline"
+              >
+                {showOutput ? "Hide output" : "Show output"}
+              </button>
+            ) : null}
+            {(latestRun.status !== "failed" || showOutput) && (
+              <div className="mono mt-1 line-clamp-3 text-step--2 text-[var(--faint)]">
+                {latestRun.output_excerpt?.slice(0, 240) || "(no output)"}
+              </div>
+            )}
           </div>
         )}
         {artifacts.length > 0 && (
@@ -1575,19 +1864,23 @@ function CommandCenter({
         title: content.slice(0, 60),
         provider_id: selected?.id,
       });
-      onThreadCreated(thread.id, targetProjectId);
-      await api.sendChatStream(thread.id, content, (chunk) => {
-        setStreaming((prev) => prev + chunk);
-      }, { signal: controller.signal });
+      try {
+        await api.sendChatStream(thread.id, content, (chunk) => {
+          setStreaming((prev) => prev + chunk);
+        }, { signal: controller.signal });
+      } catch (err) {
+        if (err instanceof ApiError && err.detail === "Stream stopped") {
+          stopped = true;
+          setStreaming((prev) => (prev ? `${prev}\n[stopped]` : ""));
+        } else {
+          throw err;
+        }
+      }
       setDraft("");
       refreshThreads?.();
+      onThreadCreated(thread.id, targetProjectId);
     } catch (err) {
-      if (err instanceof ApiError && err.detail === "Stream stopped") {
-        stopped = true;
-        setStreaming((prev) => (prev ? `${prev}\n[stopped]` : ""));
-      } else {
-        notifyError(err);
-      }
+      notifyError(err);
     } finally {
       abortRef.current = null;
       setBusy(false);
@@ -1778,8 +2071,8 @@ function CommandCenter({
               </div>
             </div>
             {streaming && (
-              <div className="mono mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step--1 text-[var(--text-soft)]">
-                {streaming}
+              <div className="mt-2 max-h-60 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step--1 text-[var(--text-soft)]">
+                <Markdown text={streaming} />
                 <span className="ml-0.5 inline-block h-4 w-2 animate-pulse rounded-[1px] bg-[var(--accent)] align-middle" aria-hidden />
               </div>
             )}

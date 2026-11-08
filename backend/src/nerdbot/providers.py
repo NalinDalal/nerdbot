@@ -39,6 +39,9 @@ from .runtime import (
 DEFAULT_MAX_TURNS = 5
 HARD_MAX_TURNS = 10
 DEFAULT_REQUEST_TIMEOUT_S = 30.0
+# Provider-level retries per HTTP call. Combined with task-level
+# MAX_TASK_RETRIES (store.py) the worst case is
+# MAX_TASK_RETRIES * (MAX_RETRIES + 1) HTTP attempts per task.
 MAX_RETRIES = 2
 CONSECUTIVE_TOOL_FAILURE_LIMIT = 3
 MAX_TOOL_CALL_CORRECTIONS = 2
@@ -495,7 +498,10 @@ class OpenAICompatibleAdapter:
     ) -> dict[str, Any]:
         # Key is attached to single request objects only, never client state.
         last_error: Exception | None = None
-        for _ in range(MAX_RETRIES + 1):
+        import random as _random
+        import time as _time
+
+        for attempt in range(MAX_RETRIES + 1):
             request = client.build_request(
                 "POST",
                 "/chat/completions",
@@ -511,9 +517,13 @@ class OpenAICompatibleAdapter:
                 response = client.send(request)
             except httpx.TimeoutException as exc:
                 last_error = ProviderTimeoutError(f"provider timed out: {exc}")
+                if attempt < MAX_RETRIES:
+                    _time.sleep(min(2 ** attempt + _random.uniform(0, 1), 8.0))
                 continue
             except httpx.TransportError as exc:
                 last_error = ProviderNetworkError(f"provider unreachable: {exc}")
+                if attempt < MAX_RETRIES:
+                    _time.sleep(min(2 ** attempt + _random.uniform(0, 1), 8.0))
                 continue
             if response.status_code in (401, 403):
                 raise ProviderAuthenticationError(
@@ -521,9 +531,20 @@ class OpenAICompatibleAdapter:
                 )
             if response.status_code == 429:
                 last_error = ProviderRateLimitError("provider rate-limited (HTTP 429)")
+                if attempt < MAX_RETRIES:
+                    retry_after = response.headers.get("Retry-After")
+                    delay = 2 ** attempt + _random.uniform(0, 1)
+                    if retry_after:
+                        try:
+                            delay = max(delay, float(retry_after))
+                        except ValueError:
+                            pass
+                    _time.sleep(min(delay, 30.0))
                 continue
             if response.status_code >= 500:
                 last_error = ProviderProtocolError(f"provider error (HTTP {response.status_code})")
+                if attempt < MAX_RETRIES:
+                    _time.sleep(min(2 ** attempt + _random.uniform(0, 1), 8.0))
                 continue
             if response.status_code == 400:
                 rejected = _rejected_tool_name(response)
@@ -680,12 +701,20 @@ def provider_block_reason(provider: Provider | None) -> str | None:
         return f"provider is {provider.status.value}"
     if provider.kind == ProviderKind.OPENAI_COMPATIBLE:
         base_url = provider.config.get("base_url", "")
-        if (
-            not isinstance(base_url, str)
-            or not base_url.strip()
-            or not resolve_api_key(provider.config)
-        ):
-            return "openai-compatible provider not configured"
+        if not isinstance(base_url, str) or not base_url.strip():
+            return "openai-compatible provider missing base_url"
+        model = provider.config.get("model", "")
+        if not isinstance(model, str) or not model.strip():
+            return "openai-compatible provider missing model"
+        try:
+            if not resolve_api_key(provider.config):
+                return "openai-compatible provider missing credentials (api_key or api_key_env)"
+        except ProviderConfigurationError as exc:
+            return f"openai-compatible provider credentials invalid: {exc}"
+    if provider.kind == ProviderKind.OLLAMA:
+        base_url = provider.config.get("base_url", "")
+        if not isinstance(base_url, str) or not base_url.strip():
+            return "ollama provider missing base_url"
     return None
 
 

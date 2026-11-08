@@ -8,6 +8,7 @@ import { EntityForm } from "./forms";
 export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
   const list = useAsync(() => api.listProjects(), []);
   const [showCreate, setShowCreate] = useState("");
+  const [query, setQuery] = useState("");
 
   const create = async (values: Record<string, string>) => {
     const project = await api.createProject(values.repository || "repo");
@@ -15,8 +16,14 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
     onOpen(project.id);
   };
 
-  const projects = list.data?.projects ?? [];
+  const allProjects = list.data?.projects ?? [];
   const counts = list.data?.counts ?? {};
+  const needle = query.trim().toLowerCase();
+  const projects = needle
+    ? allProjects.filter((p) =>
+        (p.repository || "").toLowerCase().includes(needle),
+      )
+    : allProjects;
 
   return (
     <Page>
@@ -34,6 +41,15 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
         }
       />
 
+      <div className="mb-3">
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search projects"
+          aria-label="Search projects"
+          className="h-9 w-full max-w-sm rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-step--1 outline-none transition-colors placeholder:text-[var(--faint)] focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
+        />
+      </div>
       {list.loading ? (
         <LoadingState />
       ) : list.error ? (

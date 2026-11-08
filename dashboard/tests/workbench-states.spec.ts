@@ -71,7 +71,7 @@ test("empty workspace gives every panel a next action", async ({ page }) => {
     return { status: 500, body: { detail: "no shell in this test" } };
   });
 
-  await page.goto("/#workbench");
+  await page.goto("/workbench");
   await expect(page.getByRole("heading", { name: "Workbench", exact: true })).toBeVisible();
 
   await expect(page.getByText("This workspace is empty")).toBeVisible();
@@ -95,7 +95,7 @@ test("every panel shows a skeleton while its data is in flight", async ({ page }
     return { status: 500, body: { detail: "no shell in this test" } };
   });
 
-  await page.goto("/#workbench");
+  await page.goto("/workbench");
   await expect(page.getByRole("heading", { name: "Workbench", exact: true })).toBeVisible();
 
   // Files, Bots, and Changes each own a skeleton until their request settles.
@@ -124,7 +124,7 @@ test("panel errors explain what failed and offer a retry", async ({ page }) => {
     return { status: 404, body: { detail: "not mocked" } };
   });
 
-  await page.goto("/#workbench");
+  await page.goto("/workbench");
   await expect(page.getByRole("heading", { name: "Workbench", exact: true })).toBeVisible();
 
   // Files, Bots, and Changes all state the failure; each offers Retry.

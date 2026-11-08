@@ -94,7 +94,7 @@ test("workbench fits every breakpoint and every mobile pane", async ({ page }) =
     leaks: Overflow[];
   }> = [];
 
-  await page.goto("/#workbench");
+  await page.goto("/workbench");
   await expect(page.getByRole("heading", { name: "Workbench", exact: true })).toBeVisible({
     timeout: 20_000,
   });

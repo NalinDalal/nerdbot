@@ -122,7 +122,9 @@ def test_unconfigured_and_disabled_providers_block(app_client: TestClient) -> No
     ).json()["id"]
     body = app_client.post(f"/tasks/{tid}/runs", headers=AUTH).json()
     assert body["run"]["status"] == "blocked"
-    assert "not configured" in (body["run"]["output_excerpt"] or "")
+    assert ("not configured" in (body["run"]["output_excerpt"] or "")
+            or "missing base_url" in (body["run"]["output_excerpt"] or "")
+            or "missing credentials" in (body["run"]["output_excerpt"] or ""))
 
     mock = app_client.post(
         f"/projects/{pid}/providers", json={"kind": "mock"}, headers=AUTH

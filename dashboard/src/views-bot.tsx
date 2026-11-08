@@ -78,6 +78,7 @@ export function BotDetailView({
   const [editBusy, setEditBusy] = useState(false);
   const [confirmStatus, setConfirmStatus] = useState<"disable" | "archive" | null>(null);
   const [statusBusy, setStatusBusy] = useState(false);
+  const [section, setSection] = useState<"overview" | "configuration" | "capabilities" | "memory" | "work" | "activity">("overview");
 
   const openEditor = () => {
     if (!mate) return;
@@ -320,7 +321,40 @@ export function BotDetailView({
         </div>
       </section>
 
-      {mate.instructions ? (
+      {/* Section tabs */}
+      <div
+        role="tablist"
+        aria-label="Agent sections"
+        className="mb-6 flex flex-wrap gap-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1"
+      >
+        {(
+          [
+            ["overview", "Overview"],
+            ["configuration", "Configuration"],
+            ["capabilities", "Capabilities"],
+            ["memory", "Memory"],
+            ["work", "Work"],
+            ["activity", "Activity"],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={section === id}
+            onClick={() => setSection(id)}
+            className={`rounded-md px-3 py-1.5 text-step--1 font-medium transition-colors ${
+              section === id
+                ? "bg-[var(--surface-3)] text-[var(--text)] shadow-sm"
+                : "text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text-soft)]"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {(section === "overview" || section === "configuration") && mate.instructions ? (
         <details className="mb-6 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
           <summary className="cursor-pointer text-step--1 font-medium text-[var(--text-soft)]">
             Instructions
@@ -331,6 +365,7 @@ export function BotDetailView({
         </details>
       ) : null}
 
+      {(section === "overview" || section === "configuration") && (
       <details className="mb-6 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
         <summary className="cursor-pointer text-step--1 font-medium text-[var(--text-soft)]">
           Persona (soul · goals · wisdom)
@@ -355,15 +390,19 @@ export function BotDetailView({
           <p className="mt-3 text-step--1 text-[var(--muted)]">No persona loaded.</p>
         )}
       </details>
+      )}
 
+      {(section === "capabilities") && (
       <details className="mb-6">
         <summary className="mb-2 cursor-pointer text-step--2 uppercase tracking-[0.14em] text-[var(--faint)]">
           Access and permissions
         </summary>
         <BotAccess mate={mate} boards={(boards.data as { boards: Board[] }).boards} />
       </details>
+      )}
 
       {/* Tasks */}
+      {(section === "work" || section === "overview") && (
       <section className="mb-6">
         <div className="mb-2 flex items-center justify-between">
           <SectionLabel>Tasks</SectionLabel>
@@ -468,11 +507,21 @@ export function BotDetailView({
             ))}
           </div>
         ) : (
-          <EmptyState title="No tasks" hint="This teammate owns no tasks yet. Create one above." />
+          <EmptyState
+            title="No tasks yet"
+            hint="Give this teammate something to do. It will run using its connected model."
+            action={
+              <Button variant="primary" onClick={() => setShowCreateTask(true)}>
+                Give work
+              </Button>
+            }
+          />
         )}
       </section>
+      )}
 
       {/* Runs */}
+      {(section === "activity" || section === "overview") && (
       <section className="mb-6">
         <SectionLabel className="mb-2">Runs</SectionLabel>
         {runList.length > 0 ? (
@@ -504,8 +553,10 @@ export function BotDetailView({
           <EmptyState title="No runs" hint="Runs appear here when this bot executes a task." />
         )}
       </section>
+      )}
 
       {/* Private memory */}
+      {(section === "memory" || section === "overview") && (
       <section>
         <div className="mb-2 flex items-center justify-between">
           <SectionLabel>Private memory</SectionLabel>
@@ -547,6 +598,7 @@ export function BotDetailView({
           <EmptyState title="No memories" hint="Save a note this bot will recall in future runs." />
         )}
       </section>
+      )}
 
       {showFace ? (
         <Modal title="Change face" onClose={() => setShowFace(false)}>
@@ -927,6 +979,15 @@ function BotAccess({ mate, boards }: { mate: Teammate; boards: Board[] }) {
   );
 }
 
+const ROLE_TEMPLATES = [
+  { id: "researcher", label: "Research Analyst", persona: "researcher", instructions: "Find public evidence, sources and leads. Output structured records with links. Never invent facts." },
+  { id: "engineer", label: "Software Engineer", persona: "engineer", instructions: "Implement, test and review code. Show real command output. Ask before destructive steps." },
+  { id: "strategist", label: "Product Strategist", persona: "strategist", instructions: "Synthesize research into positioning and recommendations. Cite evidence. Draft only." },
+  { id: "pm", label: "Project Manager", persona: "project-manager", instructions: "Break objectives into tasks, assign, track progress, report status." },
+  { id: "data", label: "Data Analyst", persona: "data-analyst", instructions: "Analyze data, produce charts and summaries with evidence." },
+  { id: "marketing", label: "Marketing Specialist", persona: "marketing", instructions: "Draft positioning, copy and campaigns. Draft only; publishing needs approval." },
+];
+
 /**
  * Global fleet directory: every bot across all projects, with creation.
  * This is the CEO's cockpit: see every bot, its project, status, current task,
@@ -1189,6 +1250,28 @@ export function BotsView() {
           <div className="flex flex-col gap-3">
             {step === "identity" && (
               <>
+                <Field label="Role template (optional)">
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      const t = ROLE_TEMPLATES.find((x) => x.id === e.target.value);
+                      if (!t) return;
+                      setPersona(t.persona);
+                      setInstructions(t.instructions);
+                    }}
+                    className={FORM_INPUT}
+                  >
+                    <option value="">(none — start blank)</option>
+                    {ROLE_TEMPLATES.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-step--1 text-[var(--faint)]">
+                    Prefills name and instructions. You can edit everything after.
+                  </p>
+                </Field>
                 <Field label="Project (workspace)">
                   <select
                     value={pid}

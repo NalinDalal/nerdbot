@@ -8,12 +8,13 @@
  *  It is read-mostly on purpose. A row opens the task workbench, where the
  *  output and the actions live. The only write here is starting new work.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "./api";
 import { navigate, notifyError } from "./app";
 import type { ApprovalInboxItem, Project, ProjectCounts, Task, Teammate } from "./types";
 import {
   Button,
+  ApprovalDecisionButtons,
   EmptyState,
   ErrorState,
   FORM_INPUT,
@@ -91,14 +92,57 @@ export function WorkView() {
     };
   }, []);
 
-  const [filter, setFilter] = useState<"all" | Bucket>("all");
+  const [filter, setFilter] = useState<"all" | "running" | "queued" | "completed" | "failed" | "needs">("all");
   const [search, setSearch] = useState("");
   const [workspace, setWorkspace] = useState("all");
+  const [agent, setAgent] = useState("all");
   const [showNew, setShowNew] = useState(false);
+  const [decideBusy, setDecideBusy] = useState(false);
+
+  const decideApproval = async (
+    approvalId: string,
+    decision: "approved" | "approved_forever" | "denied",
+  ) => {
+    setDecideBusy(true);
+    try {
+      await api.decideApproval(approvalId, decision);
+    } catch (err) {
+      notifyError(err);
+    } finally {
+      setDecideBusy(false);
+      reload();
+    }
+  };
 
   const reload = () => {
     data.reload();
   };
+
+  // Live refresh: poll while visible, pause when hidden. (Phase 5)
+  useEffect(() => {
+    let timer: ReturnType<typeof setInterval> | null = setInterval(() => {
+      if (document.visibilityState === "visible") reload();
+    }, 5000);
+    const onVis = () => {
+      if (document.visibilityState === "visible") {
+        reload();
+        if (!timer) {
+          timer = setInterval(() => {
+            if (document.visibilityState === "visible") reload();
+          }, 5000);
+        }
+      } else if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      if (timer) clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (data.loading) {
     return (
@@ -120,16 +164,25 @@ export function WorkView() {
     projects.map((project) => [project.id, project.repository || "Workspace"]),
   );
   const botById = new Map(bots.map((bot) => [bot.id, bot]));
-  const counts = {
-    needs: tasks.filter((task) => bucketOf(task.status) === "needs").length,
-    running: tasks.filter((task) => bucketOf(task.status) === "running").length,
-    queued: tasks.filter((task) => bucketOf(task.status) === "queued").length,
-    done: tasks.filter((task) => bucketOf(task.status) === "done").length,
-  };
+  // counts computed inline in filter tabs
   const query = search.trim().toLowerCase();
+  const queuedSorted = tasks
+    .filter((t) => t.status === "pending" || t.status === "ready")
+    .sort((a, b) => a.id.localeCompare(b.id));
+  const queuePos = new Map(queuedSorted.map((t, i) => [t.id, i + 1]));
+  const matchesFilter = (task: Task): boolean => {
+    if (filter === "all") return true;
+    if (filter === "running") return task.status === "running";
+    if (filter === "queued") return bucketOf(task.status) === "queued";
+    if (filter === "completed") return task.status === "done";
+    if (filter === "failed") return task.status === "failed";
+    if (filter === "needs") return task.status === "blocked" || task.status === "awaiting_approval";
+    return true;
+  };
   const visible = tasks.filter((task) => {
     if (workspace !== "all" && task.project_id !== workspace) return false;
-    if (filter !== "all" && bucketOf(task.status) !== filter) return false;
+    if (agent !== "all" && task.owner_teammate_id !== agent) return false;
+    if (filter !== "all" && !matchesFilter(task)) return false;
     if (!query) return true;
     const owner = task.owner_teammate_id ? botById.get(task.owner_teammate_id)?.persona : "";
     return [titleOf(task), projectName.get(task.project_id), owner, task.blocked_reason]
@@ -138,16 +191,33 @@ export function WorkView() {
       .toLowerCase()
       .includes(query);
   });
-  const groups = BUCKETS.map((bucket) => ({
-    ...bucket,
-    rows: visible.filter((task) => bucketOf(task.status) === bucket.id),
-  })).filter((group) => group.rows.length > 0);
+  const FILTER_LABEL: Record<string, string> = {
+    running: "Running",
+    queued: "Queued",
+    completed: "Completed",
+    failed: "Failed",
+    needs: "Needs attention",
+  };
+  const groups =
+    filter === "all"
+      ? BUCKETS.map((bucket) => ({
+          ...bucket,
+          rows: visible.filter((task) => bucketOf(task.status) === bucket.id),
+        })).filter((group) => group.rows.length > 0)
+      : [
+          {
+            id: filter,
+            label: FILTER_LABEL[filter] ?? filter,
+            hint: "",
+            rows: visible,
+          },
+        ].filter((group) => group.rows.length > 0);
 
   return (
     <Page>
       <PageHeader
-        title="Work"
-        description="Every task your teammates own, in one place."
+        title="Activity"
+        description="Everything your team is doing, in one place."
         actions={
           <>
             <Button onClick={reload}>Refresh</Button>
@@ -180,23 +250,87 @@ export function WorkView() {
         </div>
       ) : null}
 
+      {decisions.length > 0 ? (
+        <section className="mb-6">
+          <div className="mb-2 flex items-center justify-between">
+            <h2 className="text-step-0 font-semibold tracking-tight text-[var(--text)]">
+              Needs your decision
+            </h2>
+            <span className="text-step--2 text-[var(--faint)]">{decisions.length}</span>
+          </div>
+          <div className="flex flex-col gap-3">
+            {decisions.slice(0, 10).map((approval) => (
+              <div
+                key={approval.id}
+                className="rounded-xl border border-[var(--warn)] bg-[var(--warn-dim)] px-4 py-3"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-step--1 font-medium text-[var(--text)]">
+                      {approval.action || "approval requested"}
+                    </div>
+                    <div className="mt-0.5 text-step--2 text-[var(--muted)]">
+                      {approval.task_description ? `${approval.task_description} · ` : ""}
+                      {approval.project_id ? "project" : ""}
+                    </div>
+                  </div>
+                  <ApprovalDecisionButtons
+                    busy={decideBusy}
+                    onDecide={(decision) => void decideApproval(approval.id, decision)}
+                  />
+                </div>
+              </div>
+            ))}
+            {decisions.length > 10 ? (
+              <button
+                onClick={() => navigate("/approvals")}
+                className="text-step--1 text-[var(--accent)] hover:underline"
+              >
+                View all {decisions.length} approvals →
+              </button>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-1" role="tablist" aria-label="Work state">
+        <div className="flex flex-wrap items-center gap-1" role="tablist" aria-label="Activity state">
           <FilterTab
             label="All"
             count={tasks.length}
             active={filter === "all"}
             onClick={() => setFilter("all")}
           />
-          {BUCKETS.map((bucket) => (
-            <FilterTab
-              key={bucket.id}
-              label={bucket.label}
-              count={counts[bucket.id]}
-              active={filter === bucket.id}
-              onClick={() => setFilter(bucket.id)}
-            />
-          ))}
+          <FilterTab
+            label="Running"
+            count={tasks.filter((t) => t.status === "running").length}
+            active={filter === "running"}
+            onClick={() => setFilter("running")}
+          />
+          <FilterTab
+            label="Queued"
+            count={tasks.filter((t) => bucketOf(t.status) === "queued").length}
+            active={filter === "queued"}
+            onClick={() => setFilter("queued")}
+          />
+          <FilterTab
+            label="Completed"
+            count={tasks.filter((t) => t.status === "done").length}
+            active={filter === "completed"}
+            onClick={() => setFilter("completed")}
+          />
+          <FilterTab
+            label="Failed"
+            count={tasks.filter((t) => t.status === "failed").length}
+            active={filter === "failed"}
+            onClick={() => setFilter("failed")}
+          />
+          <FilterTab
+            label="Needs attention"
+            count={tasks.filter((t) => t.status === "blocked" || t.status === "awaiting_approval").length}
+            active={filter === "needs"}
+            onClick={() => setFilter("needs")}
+          />
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <div className="w-56 shrink-0">
@@ -221,6 +355,19 @@ export function WorkView() {
               </option>
             ))}
           </select>
+          <select
+            value={agent}
+            onChange={(event) => setAgent(event.target.value)}
+            aria-label="Filter by agent"
+            className={`${FORM_SELECT} h-9`}
+          >
+            <option value="all">All agents</option>
+            {bots.map((bot) => (
+              <option key={bot.id} value={bot.id}>
+                {bot.persona || bot.id}
+              </option>
+            ))}
+          </select>
         </div>
       </div>
 
@@ -241,7 +388,7 @@ export function WorkView() {
         />
       ) : (
         <div className="flex flex-col gap-6">
-          {(filter === "all" ? groups : groups.slice(0, 1)).map((group) => (
+          {groups.map((group) => (
             <section key={group.id}>
               <div className="mb-2 flex flex-wrap items-baseline gap-2">
                 <h2 className="text-step-0 font-semibold tracking-tight text-[var(--text)]">
@@ -275,6 +422,14 @@ export function WorkView() {
                           </span>
                           <span aria-hidden>·</span>
                           <span className="min-w-0 truncate">{owner?.persona || "Unassigned"}</span>
+                          {queuePos.has(task.id) ? (
+                            <>
+                              <span aria-hidden>·</span>
+                              <span className="min-w-0 truncate text-[var(--info)]">
+                                queue #{queuePos.get(task.id)}
+                              </span>
+                            </>
+                          ) : null}
                           {task.blocked_reason ? (
                             <>
                               {/* On a phone the reason takes its own line rather

@@ -327,7 +327,7 @@ TERMINAL_TASK_STATUSES = frozenset(
 
 # A task may be retried a bounded number of times. Without a cap a task that
 # keeps failing can be retried forever, burning provider budget in a loop.
-MAX_TASK_RETRIES = 10
+MAX_TASK_RETRIES = 3
 
 
 class InvalidTransitionError(ValueError):

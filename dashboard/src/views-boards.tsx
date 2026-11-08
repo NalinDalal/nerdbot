@@ -5,6 +5,7 @@ import type { Plan } from "./types";
 import { EmptyState, ErrorState, LoadingState, Modal, StatusBadge, TABLE_SHELL, TABLE_TD as TD, TABLE_TH as TH, FORM_INPUT, Button, SectionLabel, Page, PageHeader, useAsync } from "./components";
 import { navigate } from "./app";
 import { EntityForm } from "./forms";
+import { Markdown } from "./markdown";
 
 export function BoardsView() {
   const list = useAsync(() => api.listBoards(), []);
@@ -448,7 +449,7 @@ export function BoardDetailView({
                 <div className="mono text-step--2 text-[var(--faint)]">
                   {m.kind} · {m.created_at.slice(0, 16)}
                 </div>
-                <div className="mt-1 text-step--1 text-[var(--text-soft)]">{m.content}</div>
+                <div className="mt-1 text-step--1 text-[var(--text-soft)]"><Markdown text={m.content} /></div>
                 {m.to_board_id ? (
                   <div className="mono mt-1 text-step--2 text-[var(--faint)]">
                     To board: {m.to_board_id.slice(0, 14)}…
@@ -475,7 +476,7 @@ export function BoardDetailView({
                   {m.kind} · from {m.from_teammate_id ? m.from_teammate_id.slice(0, 14) : "system"} ·{" "}
                   {m.created_at.slice(0, 16)}
                 </div>
-                <div className="mt-1 text-step--1 text-[var(--text-soft)]">{m.content}</div>
+                <div className="mt-1 text-step--1 text-[var(--text-soft)]"><Markdown text={m.content} /></div>
               </div>
             ))}
           </div>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { Button, EmptyState, ErrorState, FORM_SELECT, LoadingState, PILL_SHELL, TABLE_TD, TABLE_TH, useAsync } from "../components";
+import { Markdown } from "../markdown";
 export function MessagesTab({ projectId }: { projectId: string }) {
   const [scope, setScope] = useState("");
   const msgs = useAsync(() => api.projectMessages(projectId, scope || undefined), [projectId, scope]);
@@ -56,7 +57,7 @@ export function MessagesTab({ projectId }: { projectId: string }) {
                   <td className={TABLE_TD}>{nameOf(m.from_teammate_id)}</td>
                   <td className={TABLE_TD}>{m.to_teammate_id ? nameOf(m.to_teammate_id) : "everyone"}</td>
                   <td className={TABLE_TD}>{m.board_name || "—"}</td>
-                  <td style={{ maxWidth: 420, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{m.content}</td>
+                  <td style={{ maxWidth: 420, wordBreak: "break-word" }}><Markdown text={m.content} /></td>
                   <td className="text-[var(--muted)]">{new Date(m.created_at).toLocaleString()}</td>
                 </tr>
               ))}

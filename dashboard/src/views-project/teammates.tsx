@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { api, describeError } from "../api";
-import { notifyError } from "../app";
+import { notifyError, navigate } from "../app";
 import { FacePicker } from "../bot/FacePicker";
 import { DEFAULT_FACE, normalizeFace, type BotFace as FaceChoice } from "../bot/face";
 import { faceStateFor } from "../bot/status";
 import { Provider, Teammate as TeammateT } from "../types";
-import { BotFace, Button, CARD_SHELL, ERROR_BOX, EmptyState, ErrorState, Field, LoadingState, Modal, PILL_SHELL, StatusBadge, useAsync, usePermissionCatalogue } from "../components";
+import { BotFace, Button, CARD_SHELL, ERROR_BOX, EmptyState, ErrorState, Field, FORM_INPUT, LoadingState, Modal, PILL_SHELL, StatusBadge, useAsync, usePermissionCatalogue } from "../components";
 export function TeammatesTab({ projectId }: { projectId: string }) {
   const list = useAsync(() => api.listTeammates(projectId), [projectId]);
   const providers = useAsync(() => api.listProviders(projectId), [projectId]);
@@ -95,6 +95,15 @@ function BotCard({
           <div>
             <strong>{mate.persona || "Unnamed bot"}</strong>{" "}
             <span className="mono text-[var(--muted)]">{mate.id}</span> <StatusBadge status={mate.status} />
+            <div className="mt-1">
+              <button
+                type="button"
+                onClick={() => navigate(`/bot/${mate.id}`)}
+                className="text-step--2 text-[var(--accent)] hover:underline"
+              >
+                Open agent →
+              </button>
+            </div>
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -451,6 +460,11 @@ function BotForm({
   const [persona, setPersona] = useState("");
   const [instructions, setInstructions] = useState("");
   const [capabilities, setCapabilities] = useState("");
+  const ROLE_TEMPLATES = [
+    { id: "researcher", label: "Research Analyst", persona: "researcher", instructions: "Find public evidence, sources and leads. Output structured records with links. Never invent facts." },
+    { id: "engineer", label: "Software Engineer", persona: "engineer", instructions: "Implement, test and review code. Show real command output. Ask before destructive steps." },
+    { id: "strategist", label: "Product Strategist", persona: "strategist", instructions: "Synthesize research into positioning and recommendations. Cite evidence. Draft only." },
+  ];
   const [providerId, setProviderId] = useState<string>(providers[0]?.id ?? "");
   const [face, setFace] = useState<FaceChoice>(DEFAULT_FACE);
   const [error, setError] = useState<string | null>(null);
@@ -483,6 +497,25 @@ function BotForm({
         }
       }}
     >
+      <Field label="Role template (optional)">
+        <select
+          value=""
+          onChange={(e) => {
+            const t = ROLE_TEMPLATES.find((x) => x.id === e.target.value);
+            if (!t) return;
+            setPersona(t.persona);
+            setInstructions(t.instructions);
+          }}
+          className={FORM_INPUT}
+        >
+          <option value="">(none — start blank)</option>
+          {ROLE_TEMPLATES.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.label}
+            </option>
+          ))}
+        </select>
+      </Field>
       <Field label="Name (its job)">
         <input
           required

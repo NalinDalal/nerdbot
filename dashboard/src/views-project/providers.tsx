@@ -44,8 +44,13 @@ export function ProvidersTab({ projectId }: { projectId: string }) {
         ))
       ) : (
         <EmptyState
-          title="No model connections"
-          hint="Bots need a brain: connect one openai-compatible provider (Groq, OpenRouter, OpenAI, Kimi…) above. Keys are stored Fernet-encrypted, or referenced via an env var name."
+          title="No model connected"
+          hint="Bots need a brain. Connect one openai-compatible provider (Groq, OpenRouter, OpenAI, Kimi…) to start chatting and running tasks."
+          action={
+            <Button variant="primary" onClick={() => setShowCreate(true)}>
+              Connect a model
+            </Button>
+          }
         />
       )}
     </div>

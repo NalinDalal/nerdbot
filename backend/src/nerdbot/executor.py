@@ -17,7 +17,7 @@ from typing import Any
 
 from . import approval_flow, orchestrator, store
 from . import providers as providers_mod
-from .models import TaskStatus, Teammate, TeammateStatus
+from .models import RunStatus, TaskStatus, Teammate, TeammateStatus
 
 DEFAULT_INTERVAL_S = 10.0
 DEFAULT_TIMEOUT_S = 60.0
@@ -105,6 +105,38 @@ def _run_timeout_s(override: float | None = None) -> float:
     return value
 
 
+def _auto_retry_enabled() -> bool:
+    return os.environ.get("NERDBOT_EXECUTOR_AUTO_RETRY", "0") == "1"
+
+
+def _is_transient_error(text: str) -> bool:
+    low = (text or "").lower()
+    permanent_markers = (
+        "credentials",
+        "permission",
+        "not configured",
+        "empty command",
+        "invalid",
+        "unauthorized",
+        "forbidden",
+    )
+    if any(m in low for m in permanent_markers):
+        return False
+    transient_markers = (
+        "rate-limited",
+        "rate limited",
+        "timed out",
+        "unreachable",
+        "provider error (http 5",
+        "provider error (http 429",
+        "timeout",
+        "connection",
+        "temporarily",
+        "transport",
+    )
+    return any(m in low for m in transient_markers)
+
+
 def sweep(
     conn: sqlite3.Connection,
     data_dir: str = ".nerdbot-data",
@@ -141,6 +173,36 @@ def sweep(
     recovered = approval_flow.recover(conn, data_dir=data_dir)
     results: list[dict[str, Any]] = []
     pending = store.list_pending_unowned_tasks(conn)
+    # Auto-retry pass (off by default). Retries failed tasks whose last run
+    # failed with a transient error, up to MAX_TASK_RETRIES total attempts.
+    if _auto_retry_enabled():
+        try:
+            projects = store.list_projects(conn)
+        except Exception:
+            projects = []
+        for project in projects:
+            try:
+                tasks = store.project_tasks(conn, project.id).tasks
+            except Exception:
+                continue
+            for task in tasks:
+                if task.status != TaskStatus.FAILED:
+                    continue
+                runs = store.list_runs_for_task(conn, task.id)
+                if not runs:
+                    continue
+                last = max(runs, key=lambda r: r.started_at or "")
+                err_text = (getattr(last, "stderr", "") or "") + " " + (getattr(last, "output_excerpt", "") or "")
+                if not _is_transient_error(err_text):
+                    continue
+                attempted = [r for r in runs if r.status != RunStatus.BLOCKED]
+                if len(attempted) >= store.MAX_TASK_RETRIES:
+                    continue
+                try:
+                    orchestrator.retry_task(conn, task.id, data_dir=data_dir, timeout_s=timeout_s or 60.0)
+                except Exception:
+                    pass
+
     busy = _busy_bot_ids(conn)
     claimed_this_sweep: set[str] = set()
     done_ids = {

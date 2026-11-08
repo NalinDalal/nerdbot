@@ -51,6 +51,15 @@ export function SettingsView() {
   const [connectTo, setConnectTo] = useState<string | null>(null);
   const [creatingWorkspace, setCreatingWorkspace] = useState(false);
   const [testing, setTesting] = useState<string | null>(null);
+  const [section, setSection] = useState<
+    | "general"
+    | "providers"
+    | "credentials"
+    | "permissions"
+    | "integrations"
+    | "autonomy"
+    | "advanced"
+  >("providers");
 
   const test = async (provider: Provider) => {
     setTesting(provider.id);
@@ -76,11 +85,21 @@ export function SettingsView() {
     }
   };
 
+  const sections = [
+    { id: "general", label: "General" },
+    { id: "providers", label: "Providers & models" },
+    { id: "credentials", label: "Credentials" },
+    { id: "permissions", label: "Permissions" },
+    { id: "integrations", label: "Integrations" },
+    { id: "autonomy", label: "Autonomy" },
+    { id: "advanced", label: "Advanced" },
+  ] as const;
+
   return (
-    <Page width="reading">
+    <Page width="fill">
       <PageHeader
         title="Settings"
-        description="Projects, model connections, and the machine underneath."
+        description="Configure how Nerdbot operates."
         actions={
           <Button
             onClick={() => {
@@ -93,22 +112,80 @@ export function SettingsView() {
         }
       />
 
-      <PageSection
-        title="Projects & models"
-        description="Each project keeps its own teammates, tasks, files, and model connection."
-        actions={
-          <>
-            <Button onClick={() => setCreatingWorkspace(true)}>New project</Button>
-            <Button
-              variant="primary"
-              onClick={() => setConnectTo(workspaces.data?.[0]?.project.id ?? null)}
-              disabled={!workspaces.data || workspaces.data.length === 0}
+      <div className="flex flex-col gap-4 md:flex-row">
+        <nav
+          aria-label="Settings sections"
+          className="flex shrink-0 flex-row gap-1 overflow-x-auto md:w-48 md:flex-col md:overflow-visible"
+        >
+          {sections.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => setSection(s.id)}
+              className={`rounded-md px-3 py-2 text-left text-step--1 transition-colors ${
+                section === s.id
+                  ? "bg-[var(--surface-3)] text-[var(--text)]"
+                  : "text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text-soft)]"
+              }`}
             >
-              Connect a model
-            </Button>
-          </>
-        }
-      >
+              {s.label}
+            </button>
+          ))}
+        </nav>
+
+        <div className="min-w-0 flex-1">
+          {section === "general" ? (
+            <PageSection title="General" description="Server health and system status.">
+              {health.loading ? (
+                <LoadingState lines={2} />
+              ) : health.error ? (
+                <ErrorState error={health.error} onRetry={health.reload} />
+              ) : health.data ? (
+                <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
+                  <div className="mb-2 flex flex-wrap items-center gap-2">
+                    <span className="font-medium text-[var(--text)]">NerdBot server</span>
+                    <Badge variant={health.data.status === "ok" ? "ok" : "bad"}>
+                      {health.data.status}
+                    </Badge>
+                    <span className="text-step--2 text-[var(--faint)]">
+                      version {health.data.version}
+                    </span>
+                  </div>
+                  <dl className="divide-y divide-[var(--border-dim)]">
+                    <KeyValue label="Database">
+                      <Badge variant={health.data.db === "ok" ? "ok" : "bad"}>{health.data.db}</Badge>
+                    </KeyValue>
+                    <KeyValue label="Restarts">{health.data.restarts}</KeyValue>
+                    <KeyValue label="Key storage">
+                      <Badge variant={health.data.secret_key === "absent" ? "warn" : "ok"}>
+                        {health.data.secret_key === "absent" ? "not configured" : "configured"}
+                      </Badge>
+                    </KeyValue>
+                  </dl>
+                </div>
+              ) : (
+                <EmptyState title="Server unreachable" hint="Start it with nerdbot run, then Refresh." />
+              )}
+            </PageSection>
+          ) : null}
+
+          {section === "providers" ? (
+            <PageSection
+              title="Projects & models"
+              description="Each project keeps its own teammates, tasks, files, and model connection."
+              actions={
+                <>
+                  <Button onClick={() => setCreatingWorkspace(true)}>New project</Button>
+                  <Button
+                    variant="primary"
+                    onClick={() => setConnectTo(workspaces.data?.[0]?.project.id ?? null)}
+                    disabled={!workspaces.data || workspaces.data.length === 0}
+                  >
+                    Connect a model
+                  </Button>
+                </>
+              }
+            >
         {workspaces.loading ? (
           <LoadingState lines={3} />
         ) : workspaces.error ? (
@@ -187,17 +264,21 @@ export function SettingsView() {
           </div>
         )}
       </PageSection>
+      ) : null}
 
-      <PageSection title="Advanced" description="Cross-project surfaces and build internals.">
-        <div className="grid gap-2 sm:grid-cols-2">
-          <AdvancedLink href="/boards" title="Boards" hint="Message channels teammates can read and write." />
-          <AdvancedLink href="/teams" title="Teams" hint="Group projects for a shared roll-up." />
-          <AdvancedLink href="/projects" title="All projects" hint="The full project table." />
-          <AdvancedLink href="/capabilities" title="Capabilities" hint="What this build can and cannot do." />
-        </div>
-      </PageSection>
+      {section === "integrations" || section === "advanced" ? (
+        <PageSection title="Integrations & advanced" description="Cross-project surfaces and build internals.">
+          <div className="grid gap-2 sm:grid-cols-2">
+            <AdvancedLink href="/boards" title="Boards" hint="Message channels teammates can read and write." />
+            <AdvancedLink href="/teams" title="Teams" hint="Group projects for a shared roll-up." />
+            <AdvancedLink href="/projects" title="All projects" hint="The full project table." />
+            <AdvancedLink href="/capabilities" title="Capabilities" hint="What this build can and cannot do." />
+          </div>
+        </PageSection>
+      ) : null}
 
-      <PageSection title="Server" description="The machine this workspace runs on.">
+      {section === "general" || section === "credentials" || section === "permissions" || section === "autonomy" || section === "advanced" ? (
+        <PageSection title="Server" description="The machine this workspace runs on.">
         {health.loading ? (
           <LoadingState lines={2} />
         ) : health.error ? (
@@ -259,6 +340,7 @@ export function SettingsView() {
           <EmptyState title="Server unreachable" hint="Start it with nerdbot run, then Refresh." />
         )}
       </PageSection>
+      ) : null}
 
       {connectTo ? (
         <ConnectModelModal
@@ -281,6 +363,8 @@ export function SettingsView() {
           }}
         />
       ) : null}
+        </div>
+      </div>
     </Page>
   );
 }

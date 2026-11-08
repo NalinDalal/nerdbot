@@ -252,7 +252,17 @@ export function AttentionBanner({
         {activeRuns.length > 0 && (
           <span className="text-step--1 text-[var(--text-soft)]">
             <strong className="text-[var(--text)]">{count(activeRuns.length, "run")}</strong> in flight ·{" "}
-            {summary.queuedTasks > 0 && count(summary.queuedTasks, "task queued")}
+            {summary.queuedTasks > 0 && count(summary.queuedTasks, "task queued")} ·{" "}
+            {activeRuns.slice(0, 2).map((run, idx) => (
+              <button
+                key={run.run.id}
+                className="text-[var(--accent)] hover:underline"
+                onClick={() => onOpenTask(run.projectId, run.run.task_id)}
+              >
+                {idx > 0 ? " · " : ""}
+                {run.task?.description?.trim().slice(0, 40) || "Open task"}
+              </button>
+            ))}
           </span>
         )}
         {pendingApprovals.length > 0 && (

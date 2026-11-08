@@ -172,17 +172,37 @@ function RunTimeline({ run, live }: { run: Run; live: boolean }) {
         if (!live || finished) return;
         try {
           setTransport("stream");
-          await api.streamRunEvents(run.id, next, {
-            onEvent: (event) => {
-              if (!cancelled) append([event]);
-            },
-            onEnd: () => {
-              if (!cancelled) setTransport(null);
-            },
-          });
+          let attempt = 0;
+          // Reconnect with bounded exponential backoff + jitter before
+          // falling back to polling. Track `next` so replays don't duplicate.
+          while (!cancelled) {
+            try {
+              await api.streamRunEvents(run.id, next, {
+                onEvent: (event) => {
+                  if (!cancelled) {
+                    append([event]);
+                    if (typeof event.seq === "number") {
+                      next = Math.max(next, event.seq + 1);
+                    }
+                  }
+                },
+                onEnd: () => {
+                  if (!cancelled) setTransport(null);
+                },
+              });
+              break;
+            } catch (err) {
+              if (cancelled) return;
+              attempt += 1;
+              if (attempt > 3) throw err;
+              const delay = Math.min(1000 * 2 ** (attempt - 1), 8000) + Math.random() * 500;
+              await new Promise((resolve) => setTimeout(resolve, delay));
+            }
+          }
           /* The stream resolved; its end frame already reset the transport. */
         } catch {
           if (cancelled) return;
+          setTransport("poll");
           poll();
         }
       } catch (err) {

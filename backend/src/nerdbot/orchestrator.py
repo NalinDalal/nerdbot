@@ -663,7 +663,34 @@ def recover_incomplete_runs(conn: sqlite3.Connection) -> list[str]:
                 if r.status not in store.TERMINAL_RUN_STATUSES
             ]
             if not active:
-                store.set_task_status(conn, task.id, TaskStatus.PENDING)
+                terminal_runs = [
+                    r for r in store.list_runs_for_task(conn, task.id)
+                    if r.status in store.TERMINAL_RUN_STATUSES
+                ]
+                if terminal_runs:
+                    last = max(terminal_runs, key=lambda r: r.started_at or "")
+                    if last.status == RunStatus.SUCCEEDED:
+                        store.set_task_status(conn, task.id, TaskStatus.DONE)
+                    elif last.status == RunStatus.FAILED:
+                        store.set_task_status(conn, task.id, TaskStatus.FAILED)
+                    elif last.status == RunStatus.BLOCKED:
+                        store.set_task_status(conn, task.id, TaskStatus.BLOCKED)
+                    else:
+                        # STOPPED (crash recovery) -> pending, recoverable
+                        store.set_task_status(conn, task.id, TaskStatus.PENDING)
+                else:
+                    store.set_task_status(conn, task.id, TaskStatus.PENDING)
+    # Reconcile tasks stuck in RUNNING with no non-terminal run.
+    for row in conn.execute(
+        "SELECT id FROM tasks WHERE status = ?", (TaskStatus.RUNNING.value,)
+    ).fetchall():
+        tid = row["id"]
+        active = [
+            r for r in store.list_runs_for_task(conn, tid)
+            if r.status not in store.TERMINAL_RUN_STATUSES
+        ]
+        if not active:
+            store.set_task_status(conn, tid, TaskStatus.PENDING)
     return recovered
 
 

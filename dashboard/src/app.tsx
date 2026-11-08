@@ -28,6 +28,7 @@ import { onRouteChange, navigate } from "./router";
 export type Route =
   | { name: "home" }
   | { name: "work" }
+  | { name: "activity" }
   | { name: "workbench"; projectId?: string }
   | { name: "chat"; projectId?: string; threadId?: string }
   | { name: "teams" }
@@ -49,7 +50,14 @@ export function parseRoute(): Route {
   const params = new URLSearchParams(window.location.search);
   const parts = window.location.pathname.split("/").filter(Boolean);
   if (parts.length === 0) return { name: "home" };
-  if (parts[0] === "work") return { name: "work" };
+  if (parts[0] === "work") {
+    // Compatibility redirect: /work -> /activity (Phase 1).
+    if (typeof window !== "undefined") {
+      window.history.replaceState(null, "", "/activity" + window.location.search + window.location.hash);
+    }
+    return { name: "activity" };
+  }
+  if (parts[0] === "activity") return { name: "activity" };
   if (parts[0] === "workbench") {
     return {
       name: "workbench",
@@ -222,6 +230,7 @@ function Sidebar({
   onClose: () => void;
 }) {
   const nav = useNavData(route);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const projectName = (id: string) =>
     nav.projects.find((project) => project.id === id)?.repository || "Project";
 
@@ -232,47 +241,31 @@ function Sidebar({
     href: string;
     badge?: number;
   }> = [
-    { label: "Command Center", icon: "home", routes: ["home", "chat"], href: "/" },
-    { label: "Work", icon: "work", routes: ["work", "task"], href: "/work" },
+    { label: "Chat", icon: "home", routes: ["home", "chat"], href: "/" },
     {
-      label: "Workforce",
-      icon: "teammates",
-      routes: ["bots", "bot"],
-      href: "/bots",
-    },
-    {
-      label: "Projects",
+      label: "Workspace",
       icon: "projects",
       routes: ["projects", "project"],
       href: "/projects",
     },
     {
-      label: "Approvals",
-      icon: "approvals",
-      routes: ["approvals"],
-      href: "/approvals",
+      label: "Agents",
+      icon: "teammates",
+      routes: ["bots", "bot"],
+      href: "/bots",
+    },
+    {
+      label: "Activity",
+      icon: "work",
+      routes: ["activity", "work", "task", "approvals"],
+      href: "/activity",
       badge: nav.pendingApprovals,
     },
-  ];
-
-  const workspace: Array<{
-    label: string;
-    icon: string;
-    routes: Array<Route["name"]>;
-    href: string;
-  }> = [
     {
-      label: "Workbench",
-      icon: "workbench",
-      routes: ["workbench"],
-      href: "/workbench",
-    },
-    { label: "Teams", icon: "teams", routes: ["teams", "team"], href: "/teams" },
-    {
-      label: "Boards",
-      icon: "boards",
-      routes: ["boards", "board"],
-      href: "/boards",
+      label: "Settings",
+      icon: "settings",
+      routes: ["settings", "capabilities"],
+      href: "/settings",
     },
   ];
 
@@ -317,22 +310,52 @@ function Sidebar({
           ))}
         </nav>
 
-        <div className="mt-5 px-3">
-          <span className="text-step--2 font-medium uppercase tracking-[0.16em] text-[var(--faint)]">
-            Workspace
-          </span>
+        {/* Advanced surfaces: preserved but demoted from primary nav. */}
+        <div className="mt-2">
+          <button
+            type="button"
+            aria-expanded={advancedOpen}
+            onClick={() => setAdvancedOpen((v) => !v)}
+            className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left text-step--2 font-medium uppercase tracking-[0.16em] text-[var(--faint)] transition-colors hover:text-[var(--text-soft)]"
+          >
+            <span aria-hidden>{advancedOpen ? "▾" : "▸"}</span>
+            Advanced
+          </button>
+          {advancedOpen ? (
+            <div className="mt-0.5 flex flex-col gap-0.5">
+              <NavItem
+                label="Boards"
+                icon="boards"
+                active={route.name === "boards" || route.name === "board"}
+                onClick={() => onNavigate("/boards")}
+              />
+              <NavItem
+                label="Teams"
+                icon="teams"
+                active={route.name === "teams" || route.name === "team"}
+                onClick={() => onNavigate("/teams")}
+              />
+              <NavItem
+                label="Workbench"
+                icon="workbench"
+                active={route.name === "workbench"}
+                onClick={() => onNavigate("/workbench")}
+              />
+              <NavItem
+                label="Approvals"
+                icon="approvals"
+                active={route.name === "approvals"}
+                onClick={() => onNavigate("/approvals")}
+              />
+              <NavItem
+                label="Capabilities"
+                icon="settings"
+                active={route.name === "capabilities"}
+                onClick={() => onNavigate("/capabilities")}
+              />
+            </div>
+          ) : null}
         </div>
-        <nav aria-label="Workspace" className="mt-1 flex flex-col gap-0.5">
-          {workspace.map((item) => (
-            <NavItem
-              key={item.label}
-              label={item.label}
-              icon={item.icon}
-              active={item.routes.includes(route.name)}
-              onClick={() => onNavigate(item.href)}
-            />
-          ))}
-        </nav>
 
         {nav.threads.length > 0 ? (
           <section className="mt-5" aria-label="Recent conversations">
@@ -380,12 +403,6 @@ function Sidebar({
         ) : null}
 
         <div className="mt-auto flex flex-col gap-1 border-t border-[var(--border-dim)] pt-3">
-          <NavItem
-            label="Control Room"
-            icon="settings"
-            active={route.name === "settings" || route.name === "capabilities"}
-            onClick={() => onNavigate("/settings")}
-          />
           <button
             onClick={onDisconnect}
             className="flex w-full items-center rounded-md px-3 py-1.5 text-left text-[var(--muted)] text-step--1 transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text-soft)]"
@@ -480,6 +497,7 @@ export default function App() {
       );
       break;
     case "work":
+    case "activity":
       content = <WorkView />;
       break;
     case "workbench":
@@ -582,7 +600,7 @@ export default function App() {
         onClose={() => setDrawerOpen(false)}
       />
 
-      <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+      <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden pb-14 md:pb-0">
         <button
           className="fixed top-3 left-3 z-40 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] transition-colors hover:border-[var(--faint)] focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-1 focus-visible:outline-none md:hidden"
           aria-label="Open navigation"
@@ -593,6 +611,39 @@ export default function App() {
         {content}
         <Toaster position="bottom-right" richColors closeButton />
       </main>
+
+      {/* Mobile bottom navigation for the five primary destinations. */}
+      <nav
+        aria-label="Primary"
+        className="fixed inset-x-0 bottom-0 z-40 flex items-stretch border-t border-[var(--border-dim)] bg-[var(--bg)]/95 backdrop-blur md:hidden"
+      >
+        {[
+          { label: "Chat", icon: "home", href: "/", routes: ["home", "chat"] },
+          { label: "Workspace", icon: "projects", href: "/projects", routes: ["projects", "project"] },
+          { label: "Agents", icon: "teammates", href: "/bots", routes: ["bots", "bot"] },
+          { label: "Activity", icon: "work", href: "/activity", routes: ["activity", "work", "task", "approvals"] },
+          { label: "Settings", icon: "settings", href: "/settings", routes: ["settings", "capabilities"] },
+        ].map((item) => {
+          const active = item.routes.includes(route.name);
+          return (
+            <button
+              key={item.label}
+              type="button"
+              onClick={() => {
+                setDrawerOpen(false);
+                navigate(item.href);
+              }}
+              aria-current={active ? "page" : undefined}
+              className={`flex flex-1 flex-col items-center justify-center gap-0.5 py-2 text-step--2 transition-colors ${
+                active ? "text-[var(--accent)]" : "text-[var(--muted)]"
+              }`}
+            >
+              <NavIcon name={item.icon} />
+              <span className="truncate">{item.label}</span>
+            </button>
+          );
+        })}
+      </nav>
     </div>
   );
 }
