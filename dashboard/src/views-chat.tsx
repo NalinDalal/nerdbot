@@ -1031,14 +1031,16 @@ function ThreadPane({
                   parts={message.parts}
                   onCreateTask={async (proposal) => {
                     try {
-                      await api.createTask(projectId, {
+                      const task = await api.createTask(projectId, {
                         description: proposal.title,
                         command: "",
                       });
                       toast.success("Task created");
                       await view.reload();
+                      return task;
                     } catch (err) {
                       notifyError(err);
+                      return null;
                     }
                   }}
                 />
@@ -1204,6 +1206,105 @@ function ThreadPane({
   );
 }
 
+function TaskProposalCard({ proposal, onCreateTask }: { proposal: any; onCreateTask?: (proposal: any) => void | Promise<any> }) {
+  const [createdId, setCreatedId] = useState<string | null>(null);
+  const [task, setTask] = useState<any>(null);
+  const [retryBusy, setRetryBusy] = useState(false);
+
+  const loadTask = async (id: string) => {
+    try {
+      const t = await api.taskView(id);
+      setTask(t.task);
+    } catch (err) {
+      notifyError(err);
+    }
+  };
+
+  useEffect(() => {
+    if (createdId) loadTask(createdId);
+  }, [createdId]);
+
+  if (!createdId) {
+    return (
+      <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3 text-step--1">
+        <div className="font-semibold text-[var(--text)]">{proposal.title}</div>
+        {proposal.body ? <div className="mt-1 whitespace-pre-wrap text-[var(--text-soft)]">{proposal.body}</div> : null}
+        <div className="mt-2">
+          <button
+            type="button"
+            className="rounded-md bg-[var(--accent)] px-2.5 py-1 text-step--2 font-medium text-white"
+            onClick={async () => {
+              const t = await onCreateTask?.(proposal);
+              if (t?.id) setCreatedId(t.id);
+            }}
+          >
+            Create task
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const status = task?.status || "queued";
+  const failedRun = task?.latest_run?.status === "failed" ? task.latest_run : null;
+  return (
+    <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3 text-step--1">
+      <div className="flex items-center justify-between gap-2">
+        <div className="font-semibold text-[var(--text)]">{proposal.title}</div>
+        <span className="text-step--2 text-[var(--muted)]">{status}</span>
+      </div>
+      {failedRun ? (
+        <div className="mt-2 rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-2.5 py-2 text-[var(--danger)]">
+          <div className="font-medium">
+            {explainRunError(
+              { command: task?.command || "", project_id: task?.project_id || "" },
+              { stderr: failedRun.stderr || "", output_excerpt: failedRun.output_excerpt || "" },
+            ).message || "Run failed."}
+          </div>
+          <div className="mt-2 flex gap-2">
+            <button
+              type="button"
+              disabled={retryBusy}
+              className="rounded-md bg-[var(--accent)] px-2.5 py-1 text-step--2 font-medium text-white disabled:opacity-50"
+              onClick={async () => {
+                if (!createdId) return;
+                setRetryBusy(true);
+                try {
+                  await api.retryTask(createdId);
+                  await loadTask(createdId);
+                } catch (err) {
+                  notifyError(err);
+                } finally {
+                  setRetryBusy(false);
+                }
+              }}
+            >
+              {retryBusy ? "Retrying…" : "Retry"}
+            </button>
+            <button
+              type="button"
+              className="text-step--2 text-[var(--accent)] hover:underline"
+              onClick={() => task?.project_id && task?.id && openTask(task.project_id, task.id)}
+            >
+              Open task →
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-2">
+          <button
+            type="button"
+            className="text-step--2 text-[var(--accent)] hover:underline"
+            onClick={() => task?.project_id && task?.id && openTask(task.project_id, task.id)}
+          >
+            Open task →
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Message({ message, streaming = false, parts, onCreateTask }: { message: ChatMessage; streaming?: boolean; parts?: any[]; onCreateTask?: (proposal: any) => void }) {
   const isUser = message.role === "user";
   const [expanded, setExpanded] = useState(false);
@@ -1265,21 +1366,7 @@ function Message({ message, streaming = false, parts, onCreateTask }: { message:
                   </div>
                 </>
               ) : p.type === "task" && p.proposal ? (
-                <>
-                  <div className="font-semibold text-[var(--text)]">{p.proposal.title}</div>
-                  {p.proposal.body ? (
-                    <div className="mt-1 whitespace-pre-wrap text-[var(--text-soft)]">{p.proposal.body}</div>
-                  ) : null}
-                  <div className="mt-2">
-                    <button
-                      type="button"
-                      className="rounded-md bg-[var(--accent)] px-2.5 py-1 text-step--2 font-medium text-white"
-                      onClick={() => onCreateTask?.(p.proposal)}
-                    >
-                      Create task
-                    </button>
-                  </div>
-                </>
+                <TaskProposalCard proposal={p.proposal} onCreateTask={onCreateTask} />
               ) : (
                 <pre className="whitespace-pre-wrap text-[var(--text-soft)]">{JSON.stringify(p)}</pre>
               )}
