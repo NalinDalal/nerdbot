@@ -453,7 +453,7 @@ describe("views", () => {
     );
     const chunks: string[] = [];
     const controller = new AbortController();
-    const pending = api.sendChatStream("thr_1", "hi", (text) => chunks.push(text), undefined, undefined, {
+    const pending = api.sendChatStream("thr_1", "hi", (text) => chunks.push(text), undefined, undefined, undefined, {
       signal: controller.signal,
     });
     // Let the reader attach and absorb the first chunk before aborting.

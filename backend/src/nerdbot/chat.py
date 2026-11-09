@@ -654,6 +654,7 @@ def chat_complete_with_tools(
     conn: sqlite3.Connection,
     project_id: str,
     thread_id: str | None = None,
+    mode: str = "chat",
     transport: httpx.BaseTransport | None = None,
     timeout_s: float = CHAT_TIMEOUT_S,
     max_turns: int = 5,
@@ -679,12 +680,18 @@ def chat_complete_with_tools(
     searched_queries: set[str] = set()
     searched_urls: set[str] = set()
     parts: list[dict[str, Any]] = []
+    mode_tools = {
+        "chat": [],
+        "research": ["web_search", "fetch_url", "save_report"],
+        "delegate": ["propose_task", "list_teammates", "create_task"],
+    }.get(mode, [])
+    allowed = set(mode_tools)
     for _ in range(max_turns):
-        tools = (
-            CHAT_TOOL_SCHEMAS
-            if not (saw_untrusted or thread_tainted)
-            else [t for t in CHAT_TOOL_SCHEMAS if t["function"]["name"] != "create_task"]
-        )
+        tools = [
+            t for t in CHAT_TOOL_SCHEMAS
+            if t["function"]["name"] in allowed
+            and (not (saw_untrusted or thread_tainted) or t["function"]["name"] != "create_task")
+        ]
         data = _openai_post(
             provider, msgs, tools=tools, transport=transport, timeout_s=timeout_s
         )
@@ -760,6 +767,7 @@ def chat_stream_with_tools(
     conn: sqlite3.Connection,
     project_id: str,
     thread_id: str | None = None,
+    mode: str = "chat",
     transport: httpx.BaseTransport | None = None,
     timeout_s: float = CHAT_TIMEOUT_S,
     chunk_size: int = 64,
@@ -793,12 +801,18 @@ def chat_stream_with_tools(
     searched_queries: set[str] = set()
     searched_urls: set[str] = set()
     parts: list[dict[str, Any]] = []
+    mode_tools = {
+        "chat": [],
+        "research": ["web_search", "fetch_url", "save_report"],
+        "delegate": ["propose_task", "list_teammates", "create_task"],
+    }.get(mode, [])
+    allowed = set(mode_tools)
     for _ in range(5):
-        tools = (
-            CHAT_TOOL_SCHEMAS
-            if not (saw_untrusted or thread_tainted)
-            else [t for t in CHAT_TOOL_SCHEMAS if t["function"]["name"] != "create_task"]
-        )
+        tools = [
+            t for t in CHAT_TOOL_SCHEMAS
+            if t["function"]["name"] in allowed
+            and (not (saw_untrusted or thread_tainted) or t["function"]["name"] != "create_task")
+        ]
         data = _openai_post(provider, msgs, tools=tools, transport=transport, timeout_s=timeout_s)
         try:
             choice = data["choices"][0]["message"]

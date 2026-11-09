@@ -574,14 +574,14 @@ export const api = {
     ),
   appendMessage: (threadId: string, role: string, content: string) =>
     post<ChatMessage>(`/threads/${threadId}/messages`, { role, content }),
-  sendChat: (threadId: string, content: string) =>
+  sendChat: (threadId: string, content: string, mode?: string) =>
     post<{
       message: ChatMessage;
       provider_id: string | null;
       memory_used: MemoryProvenance[];
       /** True when the reply came from the mock provider: canned text, no work done. */
       mock?: boolean;
-    }>(`/threads/${threadId}/chat`, { content }),
+    }>(`/threads/${threadId}/chat`, { content, mode }),
   summarizeThread: (threadId: string) => post<ChatThread>(`/threads/${threadId}/summarize`),
   sendChatStream: (
     threadId: string,
@@ -589,9 +589,10 @@ export const api = {
     onChunk: (text: string) => void,
     onStatus?: (text: string) => void,
     onParts?: (parts: any[]) => void,
+    mode?: string,
     opts?: { signal?: AbortSignal },
   ): Promise<string> =>
-    streamChat(threadId, content, onChunk, onStatus, onParts, opts),
+    streamChat(threadId, content, onChunk, onStatus, onParts, mode, opts),
   /** Live run execution: SSE that replays from ``after`` and closes on the
    *  terminal state. Resolves true when the stream completed; any throw
    *  means the caller should fall back to polling. */
@@ -777,6 +778,7 @@ async function streamChat(
   onChunk: (text: string) => void,
   onStatus?: (text: string) => void,
   onParts?: (parts: any[]) => void,
+  mode?: string,
   opts?: { signal?: AbortSignal },
 ): Promise<string> {
   const current = getSession();
@@ -789,7 +791,7 @@ async function streamChat(
         Authorization: `Bearer ${current.token}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, mode }),
       signal: opts?.signal,
     });
   } catch (err) {

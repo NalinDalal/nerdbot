@@ -135,7 +135,7 @@ describe("first-run: starting a conversation", () => {
   it("sendChatStream aborts on stop", async () => {
     const controller = new AbortController();
     queue.push({ status: 200, body: new ReadableStream({ start() { /* hold */ } }) });
-    const promise = api.sendChatStream("thr_1", "hi", () => {}, undefined, undefined, {
+    const promise = api.sendChatStream("thr_1", "hi", () => {}, undefined, undefined, undefined, {
       signal: controller.signal,
     });
     // abort before the fetch promise settles — the stop path must surface a

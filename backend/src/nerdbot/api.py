@@ -3428,9 +3428,10 @@ def create_app() -> FastAPI:
         thread, provider, messages, provenance = _prepare_chat(conn, thread_id)
         _ = thread
         try:
+            mode = str(body.get("mode", "chat") or "chat")
             text, parts = chat_mod.chat_complete_with_tools(
                 provider, messages, conn=conn, project_id=thread.project_id,
-                thread_id=thread.id,
+                thread_id=thread.id, mode=mode,
             )
         except Exception as exc:
             raise _chat_error_to_http(exc) from exc
@@ -3479,7 +3480,7 @@ def create_app() -> FastAPI:
             try:
                 for event in chat_mod.chat_stream_with_tools(
                     provider, messages, conn=conn, project_id=thread.project_id,
-                    thread_id=thread.id,
+                    thread_id=thread.id, mode=str(body.get("mode", "chat") or "chat"),
                 ):
                     yield f"data: {_json.dumps(event)}\n\n"
                     if isinstance(event, dict):

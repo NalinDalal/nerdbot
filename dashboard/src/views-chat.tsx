@@ -703,6 +703,7 @@ function ThreadPane({
   const [streamParts, setStreamParts] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
   const [useStream, setUseStream] = useState(true);
+  const [mode, setMode] = useState<"chat" | "research" | "delegate">("chat");
   const [retryFrom, setRetryFrom] = useState<string | null>(null);
   const [execView, setExecView] = useState<{ kind: "task"; taskId: string; projectId: string } | null>(null);
   const [planPreview, setPlanPreview] = useState<{ objective: string; plan: Plan } | null>(null);
@@ -771,9 +772,9 @@ function ThreadPane({
         setStreamParts([]);
         await api.sendChatStream(threadId, fullContent, (chunk) => {
           setStreaming((prev) => prev + chunk);
-        }, (status) => setStreamStatus(status), (parts) => setStreamParts(parts), { signal: controller.signal });
+        }, (status) => setStreamStatus(status), (parts) => setStreamParts(parts), mode, { signal: controller.signal });
       } else {
-        await api.sendChat(threadId, fullContent);
+        await api.sendChat(threadId, fullContent, mode);
       }
       setDraft("");
       await view.reload();
@@ -813,9 +814,9 @@ function ThreadPane({
         setStreamParts([]);
         await api.sendChatStream(threadId, content, (chunk) => {
           setStreaming((prev) => prev + chunk);
-        }, (status) => setStreamStatus(status), (parts) => setStreamParts(parts), { signal: controller.signal });
+        }, (status) => setStreamStatus(status), (parts) => setStreamParts(parts), mode, { signal: controller.signal });
       } else {
-        await api.sendChat(threadId, content);
+        await api.sendChat(threadId, content, mode);
       }
       setRetryFrom(null);
       await view.reload();
@@ -1177,6 +1178,16 @@ function ThreadPane({
             <span className="text-step--2 text-[var(--faint)]">
               Enter to send · Shift+Enter for a new line
             </span>
+            <select
+              value={mode}
+              onChange={(e) => setMode(e.target.value as any)}
+              className="h-6 rounded-md border border-[var(--border)] bg-[var(--surface)] px-1.5 text-step--2 text-[var(--text-soft)]"
+              aria-label="Chat mode"
+            >
+              <option value="chat">Chat</option>
+              <option value="research">Research</option>
+              <option value="delegate">Delegate</option>
+            </select>
             <label className="flex cursor-pointer items-center gap-1.5 text-step--2 text-[var(--faint)]">
               <input
                 type="checkbox"
@@ -2051,7 +2062,7 @@ function CommandCenter({
       try {
         await api.sendChatStream(thread.id, content, (chunk) => {
           setStreaming((prev) => prev + chunk);
-        }, undefined, undefined, { signal: controller.signal });
+        }, undefined, undefined, "chat", { signal: controller.signal });
       } catch (err) {
         if (err instanceof ApiError && err.detail === "Stream stopped") {
           stopped = true;
