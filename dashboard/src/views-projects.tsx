@@ -9,6 +9,7 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
   const list = useAsync(() => api.listProjects(), []);
   const [showCreate, setShowCreate] = useState("");
   const [query, setQuery] = useState("");
+  const [showEmpty, setShowEmpty] = useState(false);
 
   const create = async (values: Record<string, string>) => {
     const project = await api.createProject(values.repository || "repo");
@@ -19,11 +20,18 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
   const allProjects = list.data?.projects ?? [];
   const counts = list.data?.counts ?? {};
   const needle = query.trim().toLowerCase();
-  const projects = needle
+  const filteredByQuery = needle
     ? allProjects.filter((p) =>
         (p.repository || "").toLowerCase().includes(needle),
       )
     : allProjects;
+  const projects = showEmpty
+    ? filteredByQuery
+    : filteredByQuery.filter((p) => {
+        const c = counts[p.id];
+        if (!c) return true;
+        return (c.bots || 0) + (c.tasks || 0) + (c.objectives || 0) + (c.approvals || 0) + (c.blocked || 0) > 0;
+      });
 
   return (
     <Page>
@@ -41,7 +49,7 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
         }
       />
 
-      <div className="mb-3">
+      <div className="mb-3 flex items-center gap-4">
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -49,12 +57,22 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
           aria-label="Search projects"
           className="h-9 w-full max-w-sm rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-step--1 outline-none transition-colors placeholder:text-[var(--faint)] focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
         />
+        <label className="flex items-center gap-1.5 text-step--2 text-[var(--faint)]">
+          <input type="checkbox" checked={showEmpty} onChange={(e) => setShowEmpty(e.target.checked)} className="h-3 w-3" />
+          Show empty
+        </label>
       </div>
       {list.loading ? (
         <LoadingState />
       ) : list.error ? (
         <ErrorState error={list.error} onRetry={list.reload} />
-      ) : projects.length > 0 ? (
+      ) : projects.length === 0 ? (
+        <EmptyState
+          title="No projects yet"
+          hint="Create a project to scope sustained work."
+          action={<Button variant="primary" onClick={() => setShowCreate("create")}>New project</Button>}
+        />
+      ) : (
         <div className={TABLE_SHELL}>
           <table className="w-full min-w-[720px] table-fixed">
             <thead>
@@ -62,7 +80,7 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
                 <th className={`${TABLE_TH} w-[24%]`}>Project</th>
                 <th className={`${TABLE_TH} w-[5rem]`}>Bots</th>
                 <th className={`${TABLE_TH} w-[6rem]`}>Tasks</th>
-                <th className={`${TABLE_TH} w-[5rem]`}>Boards</th>
+                <th className={`${TABLE_TH} w-[6rem]`}>Objectives</th>
                 <th className={`${TABLE_TH} w-[10rem]`}>Needs you</th>
                 <th className={`${TABLE_TH} w-[7rem]`}><span className="sr-only">Open</span></th>
               </tr>
@@ -72,31 +90,19 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
                 const count = counts[project.id];
                 const needsYou = (count?.approvals ?? 0) + (count?.blocked ?? 0);
                 return (
-                  <tr
-                    key={project.id}
-                    className="transition-colors hover:bg-[var(--surface-2)]"
-                  >
+                  <tr key={project.id} className="transition-colors hover:bg-[var(--surface-2)]">
                     <td className={TABLE_TD}>
-                      <button
-                        onClick={() => onOpen(project.id)}
-                        className="text-left font-medium text-[var(--text)] hover:underline"
-                      >
+                      <button className="text-left text-[var(--text)] hover:underline" onClick={() => onOpen(project.id)}>
                         {project.repository || "Untitled project"}
+                        {project.repository === "Home" ? <span className="ml-2 text-step--2 text-[var(--faint)]">(default)</span> : null}
                       </button>
                     </td>
                     <td className={TABLE_TD}>{count?.bots ?? 0}</td>
+                    <td className={TABLE_TD}>{count?.tasks ?? 0}</td>
+                    <td className={TABLE_TD}>{count?.objectives ?? 0}</td>
                     <td className={TABLE_TD}>
-                      {count?.tasks ?? 0}
-                      {count?.running ? (
-                        <span className="ml-1.5 text-step--2 text-[var(--info)]">
-                          {count.running} running
-                        </span>
-                      ) : null}
-                    </td>
-                    <td className={TABLE_TD}>{count?.boards ?? 0}</td>
-                    <td className={TABLE_TD}>
-                      {needsYou > 0 ? (
-                        <span className="text-[var(--warn)]">
+                      {needsYou ? (
+                        <span className="text-step--1 text-[var(--warn)]">
                           {count?.approvals ? `${count.approvals} approval` : ""}
                           {count?.approvals && count?.blocked ? " and " : ""}
                           {count?.blocked ? `${count?.blocked} blocked` : ""}
@@ -106,9 +112,15 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
                       )}
                     </td>
                     <td className={`${TABLE_TD} whitespace-nowrap`}>
-                      <Button variant="ghost" onClick={() => onOpen(project.id)}>
-                        Open →
-                      </Button>
+                      <div className="flex items-center gap-2">
+                        <Button variant="ghost" onClick={() => onOpen(project.id)}>Open →</Button>
+                        {project.repository !== "Home" ? (
+                          <Button variant="ghost" onClick={async () => {
+                            if (!confirm(`Delete project ${project.repository || project.id}?`)) return;
+                            try { await api.deleteProject(project.id); list.reload(); } catch (err) { notifyError(err); }
+                          }}>Delete</Button>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -116,16 +128,6 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
             </tbody>
           </table>
         </div>
-      ) : (
-        <EmptyState
-          title="No projects yet"
-          hint="Create one to start: a project owns its teammates, tasks, boards, memory and approvals."
-          action={
-            <Button variant="primary" onClick={() => setShowCreate("create")}>
-              Create your first project
-            </Button>
-          }
-        />
       )}
 
       {showCreate ? (

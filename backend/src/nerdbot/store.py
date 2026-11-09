@@ -742,6 +742,24 @@ def _project_from_row(row: sqlite3.Row) -> Project:
     )
 
 
+def delete_project(conn: sqlite3.Connection, project_id: str) -> None:
+    # Hard delete: remove all rows attributable to this project.
+    task_ids = [r[0] for r in conn.execute("SELECT id FROM tasks WHERE project_id=?", (project_id,)).fetchall()]
+    for tid in task_ids:
+        conn.execute("DELETE FROM runs WHERE task_id=?", (tid,))
+        conn.execute("DELETE FROM artifacts WHERE task_id=?", (tid,))
+        conn.execute("DELETE FROM approvals WHERE run_id IN (SELECT id FROM runs WHERE task_id=?)", (tid,))
+    conn.execute("DELETE FROM tasks WHERE project_id=?", (project_id,))
+    conn.execute("DELETE FROM chat_messages WHERE thread_id IN (SELECT id FROM chat_threads WHERE project_id=?)", (project_id,))
+    conn.execute("DELETE FROM chat_threads WHERE project_id=?", (project_id,))
+    conn.execute("DELETE FROM teammates WHERE project_id=?", (project_id,))
+    conn.execute("DELETE FROM boards WHERE project_id=?", (project_id,))
+    conn.execute("DELETE FROM providers WHERE project_id=?", (project_id,))
+    conn.execute("DELETE FROM objectives WHERE thread_id IN (SELECT id FROM chat_threads WHERE project_id=?)", (project_id,))
+    conn.execute("DELETE FROM projects WHERE id=?", (project_id,))
+    conn.commit()
+
+
 def get_project(conn: sqlite3.Connection, project_id: str) -> Project | None:
     row = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
     if row is None:
@@ -4673,6 +4691,28 @@ def get_objective(conn, objective_id) -> "Objective | None":
         plan=_j.loads(row["plan"] or "{}"),
         created_at=datetime.fromisoformat(row["created_at"]),
     )
+
+
+def list_objectives_for_project(conn, project_id) -> list:
+    threads = [t.id for t in list_threads_for_project(conn, project_id) if True] if False else None
+    rows = conn.execute(
+        "SELECT objectives.* FROM objectives JOIN chat_threads ON objectives.thread_id = chat_threads.id WHERE chat_threads.project_id = ?",
+        (project_id,),
+    ).fetchall()
+    from .models import Objective, ObjectiveStatus
+    import json as _j
+    out = []
+    for row in rows:
+        out.append(Objective(
+            id=row["id"],
+            thread_id=row["thread_id"],
+            title=row["title"] or "",
+            owner_text=row["owner_text"] or "",
+            status=ObjectiveStatus(row["status"]),
+            plan=_j.loads(row["plan"] or "{}"),
+            created_at=datetime.fromisoformat(row["created_at"]),
+        ))
+    return out
 
 
 def list_tasks_for_objective(conn, objective_id) -> list:

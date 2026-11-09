@@ -608,6 +608,7 @@ export function TaskDetailView({
       <PageHeader
         eyebrow={`${projectName} · Task`}
         title={heading}
+        description="What was asked, who is doing it, what is happening now, and what came out."
         back={{ label: projectName, onClick: onBack }}
         actions={
           <>

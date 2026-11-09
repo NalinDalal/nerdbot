@@ -12,6 +12,7 @@ export function deriveMemberState(member: any): "idle" | "working" | "waiting_ap
 export function TeamView({ objectiveId, onOpenTask }: { objectiveId: string; onOpenTask?: (pid: string, tid: string) => void }) {
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+  const [providers, setProviders] = useState<any[]>([]);
 
   useEffect(() => {
     if (!objectiveId) return;
@@ -19,7 +20,15 @@ export function TeamView({ objectiveId, onOpenTask }: { objectiveId: string; onO
     const load = async () => {
       try {
         const d = await (api as any).teamActivity?.(objectiveId);
-        if (alive) setData(d);
+        if (alive) {
+          setData(d);
+          if (d?.project_id) {
+            try {
+              const pr = await api.listProviders(d.project_id);
+              setProviders(pr.providers?.flatMap((p: any) => p.models ? [{ id: p.id, name: p.name }] : [{ id: p.id, name: p.name }]) || []);
+            } catch {}
+          }
+        }
       } catch (e: any) {
         if (alive) setError(e?.message || "failed to load");
       }
@@ -44,7 +53,26 @@ export function TeamView({ objectiveId, onOpenTask }: { objectiveId: string; onO
       </div>
       {(data.members || []).some((m: any) => !m.teammate?.provider_id) ? (
         <div className="rounded-md border border-[var(--warn)] bg-[var(--warn-dim)] px-2.5 py-2 text-step--2 text-[var(--warn)]">
-          Some teammates have no model configured. Attach a provider in Settings.
+          Some teammates have no model configured.
+          {providers.length > 0 ? (
+            <button
+              type="button"
+              className="ml-2 underline"
+              onClick={async () => {
+                try {
+                  await (api as any).attachProviderAll?.(data.project_id, { provider_id: providers[0].id });
+                  const d = await (api as any).teamActivity?.(objectiveId);
+                  setData(d);
+                } catch (e: any) {
+                  alert(e?.message || "failed");
+                }
+              }}
+            >
+              Use {providers[0].name} for all
+            </button>
+          ) : (
+            <span className="ml-2">Configure in Settings.</span>
+          )}
         </div>
       ) : null}
       {(data.members || []).map((m: any, i: number) => {

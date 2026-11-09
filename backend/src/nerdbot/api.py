@@ -260,12 +260,15 @@ def _project_counts(conn: sqlite3.Connection, project_id: str) -> dict[str, int]
     approvals = store.list_approvals_for_project(conn, project_id)
     teammates = store.list_teammates(conn, project_id)
     boards = store.list_boards(conn, project_id)
+    objectives = store.list_objectives_for_project(conn, project_id)
+    active_obj = sum(1 for o in objectives if o.status.value not in ("done", "failed", "cancelled"))
     return {
         "bots": len(teammates),
         "tasks": len(tasks),
         "running": sum(1 for t in tasks if t.status == TaskStatus.RUNNING),
         "blocked": sum(1 for t in tasks if t.status == TaskStatus.BLOCKED),
         "done": sum(1 for t in tasks if t.status == TaskStatus.DONE),
+        "objectives": active_obj,
         "boards": len(boards),
         "runs": len(runs),
         "approvals": sum(1 for a in approvals if store.approval_is_pending(a)),
@@ -3634,6 +3637,16 @@ def create_app() -> FastAPI:
         }
         return {"projects": projects, "counts": counts}
 
+    @app.delete("/projects/{project_id}")
+    def delete_project_endpoint(
+        project_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        store.delete_project(conn, project_id)
+        return {"deleted": True}
+
     @app.get("/projects/{project_id}/workspace")
     def get_project_workspace(
         project_id: str,
@@ -4194,8 +4207,14 @@ def create_app() -> FastAPI:
                     rt = running[0]
                     current = {"task_id": rt.id, "title": rt.description, "status": rt.status, "last_event": "", "updated_at": ""}
                 members.append({"teammate": {"slug": m.slug, "name": m.persona or m.id, "face": m.face.model_dump(mode="json"), "provider_id": m.provider_id}, "current": current, "queued": queued, "failed": failed})
+            project_id = ""
+            if obj is not None:
+                t = store.get_thread(conn, obj.thread_id)
+                if t is not None:
+                    project_id = t.project_id
             return {
                 "objective": {"id": objective_id, "title": obj.title if obj else "", "status": status, "done": done, "total": total},
+                "project_id": project_id,
                 "members": members,
                 "failures": failures,
             }

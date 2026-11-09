@@ -219,6 +219,8 @@ export const api = {
   // -- Workspace (projects = workspaces) -------------------------------------
   listProjects: () =>
     req<{ projects: Project[]; counts: Record<string, ProjectCounts> }>("/projects"),
+  deleteProject: (projectId: string) =>
+    req<{ deleted: boolean }>(`/projects/${projectId}`, { method: "DELETE" }),
   projectTasks: (projectId: string) =>
     req<{ tasks: Task[] }>(`/projects/${projectId}/tasks`),
   projectMessages: (projectId: string, toTeammateId?: string) =>
@@ -587,6 +589,8 @@ export const api = {
     post<any>(`/threads/${threadId}/plans/${planId}/approve`, body || {}),
   teamActivity: (objectiveId: string) =>
     req<any>(`/team/activity?objective_id=${encodeURIComponent(objectiveId)}`),
+  attachProviderAll: (projectId: string, body: any) =>
+    post<any>(`/projects/${projectId}/teammates/attach-provider`, body),
   sendChatStream: (
     threadId: string,
     content: string,

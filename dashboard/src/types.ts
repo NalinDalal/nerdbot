@@ -13,6 +13,7 @@ export interface ProjectCounts {
   running: number;
   blocked: number;
   done: number;
+  objectives: number;
   boards: number;
   runs: number;
   approvals: number;
