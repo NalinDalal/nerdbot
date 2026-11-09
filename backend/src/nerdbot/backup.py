@@ -177,6 +177,7 @@ _JSON_COLUMNS: dict[str, frozenset[str]] = {
     "notifications": frozenset({"payload"}),
     "providers": frozenset({"config", "capabilities"}),
     "projects": frozenset({"config"}),
+    "chat_messages": frozenset({"parts"}),
 }
 
 
@@ -228,6 +229,7 @@ _IMPORT_COLUMNS: dict[str, frozenset[str]] = {
         {
             "id",
             "project_id",
+            "slug",
             "persona",
             "instructions",
             "capabilities",
@@ -288,7 +290,21 @@ _IMPORT_COLUMNS: dict[str, frozenset[str]] = {
         }
     ),
     "notifications": frozenset(
-        {"id", "project_id", "channel", "kind", "payload", "status", "created_at"}
+        {
+            "id",
+            "project_id",
+            "channel",
+            "kind",
+            "payload",
+            "status",
+            "target_url",
+            "attempts",
+            "next_attempt_at",
+            "locked",
+            "locked_at",
+            "last_error",
+            "created_at",
+        }
     ),
     "memories": frozenset(
         {"id", "scope", "content", "source", "confidence", "timestamp", "tier"}
@@ -313,12 +329,25 @@ _IMPORT_COLUMNS: dict[str, frozenset[str]] = {
             "parent_task_id",
             "blocked_reason",
             "title",
+            "assigned_by",
+            "objective_id",
         }
+    ),
+    "chat_threads": frozenset(
+        {"id", "project_id", "title", "provider_id", "summary", "tainted", "created_at"}
+    ),
+    "chat_messages": frozenset(
+        {"id", "thread_id", "role", "content", "parts", "created_at"}
+    ),
+    "reports": frozenset(
+        {"id", "thread_id", "message_id", "title", "markdown", "created_at"}
     ),
 }
 
 # Manifest-wide bounds: refuses oversized imports before any row is processed.
-MAX_MANIFEST_TABLES = len(_IMPORT_COLUMNS) + len(HISTORY_TABLES) + 1
+# Derived from EXPORT_TABLES so a table added to export can never silently
+# exceed the cap and break every export/import round trip.
+MAX_MANIFEST_TABLES = len(EXPORT_TABLES)
 MAX_MANIFEST_ROWS = 100_000
 MAX_MANIFEST_BYTES = 50_000_000
 
@@ -384,6 +413,7 @@ def import_manifest(
             "knowledge_sources": store.get_knowledge_source,
             "schedules": store.get_schedule,
             "providers": store.get_provider,
+            "chat_threads": store.get_thread,
         }
         getter = exists_map.get(table)
         return getter is not None and getter(conn, row_id) is not None
@@ -576,6 +606,64 @@ def import_manifest(
         if not dry_run:
             _insert("tasks", raw)
         _note("tasks", row_id)
+
+    # Chat data: threads first, then messages and reports that hang off them.
+    for raw in tables.get("chat_threads", []):
+        row_id = str(raw.get("id", "")) if isinstance(raw, dict) else ""
+        if not isinstance(raw, dict) or raw.get("project_id") != project_id:
+            rejected.append({"table": "chat_threads", "id": row_id, "reason": "wrong project"})
+            continue
+        bad_columns = _bad_columns("chat_threads", raw)
+        if bad_columns is not None:
+            rejected.append({"table": "chat_threads", "id": row_id, "reason": bad_columns})
+            continue
+        if _exists("chat_threads", row_id):
+            skipped.append({"table": "chat_threads", "id": row_id, "reason": "already exists"})
+            continue
+        if not dry_run:
+            _insert("chat_threads", raw)
+        _note("chat_threads", row_id)
+
+    for raw in tables.get("chat_messages", []):
+        row_id = str(raw.get("id", "")) if isinstance(raw, dict) else ""
+        if not isinstance(raw, dict):
+            rejected.append({"table": "chat_messages", "id": "", "reason": "row is not an object"})
+            continue
+        bad_columns = _bad_columns("chat_messages", raw)
+        if bad_columns is not None:
+            rejected.append({"table": "chat_messages", "id": row_id, "reason": bad_columns})
+            continue
+        if not _exists("chat_threads", str(raw.get("thread_id", ""))):
+            rejected.append({"table": "chat_messages", "id": row_id, "reason": "unknown thread"})
+            continue
+        if any(m.id == row_id for m in store.list_messages(conn, str(raw.get("thread_id", "")))):
+            skipped.append({"table": "chat_messages", "id": row_id, "reason": "already exists"})
+            continue
+        if not dry_run:
+            _insert("chat_messages", raw)
+        _note("chat_messages", row_id)
+
+    for raw in tables.get("reports", []):
+        row_id = str(raw.get("id", "")) if isinstance(raw, dict) else ""
+        if not isinstance(raw, dict):
+            rejected.append({"table": "reports", "id": "", "reason": "row is not an object"})
+            continue
+        bad_columns = _bad_columns("reports", raw)
+        if bad_columns is not None:
+            rejected.append({"table": "reports", "id": row_id, "reason": bad_columns})
+            continue
+        if not _exists("chat_threads", str(raw.get("thread_id", ""))):
+            rejected.append({"table": "reports", "id": row_id, "reason": "unknown thread"})
+            continue
+        if len(str(raw.get("markdown", ""))) > 65536:
+            rejected.append({"table": "reports", "id": row_id, "reason": "markdown exceeds 64KB"})
+            continue
+        if store.get_report(conn, row_id) is not None:
+            skipped.append({"table": "reports", "id": row_id, "reason": "already exists"})
+            continue
+        if not dry_run:
+            _insert("reports", raw)
+        _note("reports", row_id)
 
     for table in sorted(HISTORY_TABLES):
         for raw in tables.get(table, []):
