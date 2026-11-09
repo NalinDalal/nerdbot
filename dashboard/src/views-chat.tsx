@@ -1039,6 +1039,7 @@ function ThreadPane({
                   key={message.id}
                   message={message}
                   parts={message.parts}
+                  projectId={projectId}
                   onPlanApproved={(id) => onPlanApproved?.(id)}
                   onCreateTask={async (proposal) => {
                     try {
@@ -1366,10 +1367,15 @@ function ReportCard({ part }: { part: any }) {
   );
 }
 
-function PlanCard({ part, threadId, onApproved }: { part: any; threadId: string; onApproved?: (id: string) => void }) {
+function PlanCard({ part, threadId, projectId, onApproved }: { part: any; threadId: string; projectId?: string; onApproved?: (id: string) => void }) {
   const [approved, setApproved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [steps, setSteps] = useState<any[]>(part.steps || []);
+  const [mates, setMates] = useState<any[]>([]);
+  useEffect(() => {
+    if (!projectId) return;
+    api.listTeammates(projectId).then((r: any) => setMates(r.teammates || [])).catch(() => {});
+  }, [projectId]);
   return (
     <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3 text-step--1">
       <div className="font-semibold text-[var(--text)]">{part.objective || "Plan"}</div>
@@ -1385,16 +1391,20 @@ function PlanCard({ part, threadId, onApproved }: { part: any; threadId: string;
               }}
               className="w-full bg-transparent text-[var(--text)] outline-none"
             />
-            <input
+            <select
               value={st.assignee_slug || ""}
               onChange={(e) => {
                 const next = [...steps];
                 next[i] = { ...next[i], assignee_slug: e.target.value };
                 setSteps(next);
               }}
-              placeholder="assignee slug"
-              className="mt-1 w-full bg-transparent text-step--2 text-[var(--muted)] outline-none"
-            />
+              className="mt-1 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-1.5 text-step--2 text-[var(--muted)]"
+            >
+              <option value="">unassigned</option>
+              {mates.map((m: any) => (
+                <option key={m.id} value={m.slug}>{m.slug || m.id}</option>
+              ))}
+            </select>
             <button
               type="button"
               className="mt-1 text-step--2 text-[var(--danger)] hover:underline"
@@ -1435,7 +1445,7 @@ function PlanCard({ part, threadId, onApproved }: { part: any; threadId: string;
   );
 }
 
-function Message({ message, streaming = false, parts, onCreateTask, onPlanApproved }: { message: ChatMessage; streaming?: boolean; parts?: any[]; onCreateTask?: (proposal: any) => void; onPlanApproved?: (id: string) => void }) {
+function Message({ message, streaming = false, parts, projectId, onCreateTask, onPlanApproved }: { message: ChatMessage; streaming?: boolean; parts?: any[]; projectId?: string; onCreateTask?: (proposal: any) => void; onPlanApproved?: (id: string) => void }) {
   const isUser = message.role === "user";
   const [expanded, setExpanded] = useState(false);
   // Long assistant replies (e.g. a model dumping a whole file) flood the
@@ -1484,7 +1494,7 @@ function Message({ message, streaming = false, parts, onCreateTask, onPlanApprov
               ) : p.type === "task" && p.proposal ? (
                 <TaskProposalCard proposal={p.proposal} onCreateTask={onCreateTask} />
               ) : p.type === "plan" ? (
-                <PlanCard part={p} threadId={message.thread_id} onApproved={onPlanApproved} />
+                <PlanCard part={p} threadId={message.thread_id} projectId={projectId} onApproved={onPlanApproved} />
               ) : (
                 <pre className="whitespace-pre-wrap text-[var(--text-soft)]">{JSON.stringify(p)}</pre>
               )}

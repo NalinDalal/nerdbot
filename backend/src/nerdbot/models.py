@@ -156,6 +156,7 @@ class Task(BaseModel):
     board_id: str = ""
     parent_task_id: str = ""
     objective_id: str = ""
+    assigned_by: str = ""
     # Why the task is blocked, in plain words ("openai-compatible provider
     # not configured"). Set when the task enters the blocked state and
     # cleared when it leaves it, so a blocked task can always explain

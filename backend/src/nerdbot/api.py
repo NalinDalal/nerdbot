@@ -3396,12 +3396,44 @@ def create_app() -> FastAPI:
         mates = {m.slug: m for m in store.list_teammates(conn, project_id) if m.slug}
         from . import delegation as delegation_mod
 
+        if not isinstance(steps, list) or not steps:
+            raise HTTPException(status_code=422, detail="steps must be a non-empty array")
+        if len(steps) > 12:
+            raise HTTPException(status_code=422, detail="too many steps (max 12)")
         if len(steps) > delegation_mod.MAX_DELEGATIONS_PER_TASK:
             raise HTTPException(status_code=422, detail=f"too many steps (max {delegation_mod.MAX_DELEGATIONS_PER_TASK})")
-        for st in steps:
+        for i, st in enumerate(steps):
+            if not isinstance(st, dict):
+                raise HTTPException(status_code=422, detail=f"step {i} invalid")
+            title = str(st.get("title", "")).strip()
+            if not title:
+                raise HTTPException(status_code=422, detail=f"step {i} missing title")
+            if len(title) > 200:
+                raise HTTPException(status_code=422, detail=f"step {i} title too long")
             a = str(st.get("assignee_slug", "")).strip()
             if a and a not in mates:
                 raise HTTPException(status_code=422, detail=f"unknown assignee {a!r}")
+            deps = st.get("depends_on") or []
+            if not isinstance(deps, list):
+                raise HTTPException(status_code=422, detail=f"step {i} depends_on must be array")
+        # cycle check
+        n = len(steps)
+        adj = [list(s.get("depends_on") or []) for s in steps]
+        visited = [0] * n
+        def dfs(u):
+            if visited[u] == 1:
+                return True
+            if visited[u] == 2:
+                return False
+            visited[u] = 1
+            for v in adj[u]:
+                if isinstance(v, int) and 0 <= v < n and dfs(v):
+                    return True
+            visited[u] = 2
+            return False
+        for i in range(n):
+            if dfs(i):
+                raise HTTPException(status_code=422, detail="dependency cycle detected")
         # create objective + tasks in one transaction
         try:
             conn.execute("BEGIN IMMEDIATE")
@@ -3416,6 +3448,7 @@ def create_app() -> FastAPI:
                 task = store.create_task(
                     conn, project_id, description=str(st.get("title", "")), command="",
                     owner_teammate_id=owner, dependencies=dep_ids, objective_id=obj.id,
+                    assigned_by=principal,
                 )
                 index_to_id[idx] = task.id
             # update part
@@ -4139,7 +4172,7 @@ def create_app() -> FastAPI:
                 if running:
                     rt = running[0]
                     current = {"task_id": rt.id, "title": rt.description, "status": rt.status, "last_event": "", "updated_at": ""}
-                members.append({"teammate": {"slug": m.slug, "name": m.persona or m.id, "face": m.face.model_dump(mode="json")}, "current": current, "queued": queued, "failed": failed})
+                members.append({"teammate": {"slug": m.slug, "name": m.persona or m.id, "face": m.face.model_dump(mode="json"), "provider_id": m.provider_id}, "current": current, "queued": queued, "failed": failed})
             return {
                 "objective": {"id": objective_id, "title": obj.title if obj else "", "status": status, "done": done, "total": total},
                 "members": members,
@@ -4159,6 +4192,14 @@ def create_app() -> FastAPI:
             if thread is None:
                 raise HTTPException(status_code=404, detail="thread not found")
             require_project_owner(conn, thread.project_id, principal)
+            existing = conn.execute(
+                "SELECT id FROM reports WHERE thread_id = ? AND title = ?",
+                (obj.thread_id, f"Rollup {objective_id}"),
+            ).fetchone()
+            if existing:
+                rep = store.get_report(conn, existing["id"])
+                if rep is not None:
+                    return rep.model_dump(mode="json")
             report = store.rollup_objective(conn, objective_id, obj.thread_id)
             return report.model_dump(mode="json")
 

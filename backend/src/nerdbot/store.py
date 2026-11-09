@@ -591,7 +591,7 @@ _PHASE26_COLUMNS: dict[str, list[tuple[str, str]]] = {
 }
 
 _PHASE27_COLUMNS: dict[str, list[tuple[str, str]]] = {
-    "tasks": [("objective_id", "TEXT NOT NULL DEFAULT ''")],
+    "tasks": [("objective_id", "TEXT NOT NULL DEFAULT ''"), ("assigned_by", "TEXT NOT NULL DEFAULT ''")],
 }
 
 
@@ -1230,6 +1230,7 @@ def create_task(
     board_id: str = "",
     parent_task_id: str = "",
     objective_id: str = "",
+    assigned_by: str = "",
     workspace_mode: str = "checkout",
     title: str = "",
 ) -> Task:
@@ -1279,13 +1280,14 @@ def create_task(
         board_id=board_id,
         parent_task_id=parent_task_id,
         objective_id=objective_id,
+        assigned_by=assigned_by,
         workspace_mode=workspace_mode,
         title=title,
     )
     conn.execute(
         "INSERT INTO tasks (id, project_id, description, status, owner_teammate_id,"
         " dependencies, command, issue_id, branch, workspace_path, board_id, parent_task_id,"
-        " objective_id, workspace_mode, title) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " objective_id, assigned_by, workspace_mode, title) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             task.id,
             task.project_id,
@@ -1300,6 +1302,7 @@ def create_task(
             task.board_id,
             task.parent_task_id,
             task.objective_id,
+            task.assigned_by,
             task.workspace_mode,
             task.title,
         ),
@@ -1357,6 +1360,7 @@ def _task_from_row(row: sqlite3.Row) -> Task:
         board_id=row["board_id"] if "board_id" in keys else "",
         parent_task_id=row["parent_task_id"] if "parent_task_id" in keys and row["parent_task_id"] else "",
         objective_id=row["objective_id"] if "objective_id" in keys and row["objective_id"] else "",
+        assigned_by=row["assigned_by"] if "assigned_by" in keys and row["assigned_by"] else "",
         blocked_reason=row["blocked_reason"] if "blocked_reason" in keys and row["blocked_reason"] else "",
         title=row["title"] if "title" in keys and row["title"] else "",
     )

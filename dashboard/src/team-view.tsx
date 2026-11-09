@@ -42,6 +42,11 @@ export function TeamView({ objectiveId, onOpenTask }: { objectiveId: string; onO
           {obj.done ?? 0} of {obj.total ?? 0} done · {obj.status}
         </div>
       </div>
+      {(data.members || []).some((m: any) => !m.teammate?.provider_id) ? (
+        <div className="rounded-md border border-[var(--warn)] bg-[var(--warn-dim)] px-2.5 py-2 text-step--2 text-[var(--warn)]">
+          Some teammates have no model configured. Attach a provider in Settings.
+        </div>
+      ) : null}
       {(data.members || []).map((m: any, i: number) => {
         const state = deriveMemberState(m);
         return (
