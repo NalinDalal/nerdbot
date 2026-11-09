@@ -585,6 +585,8 @@ export const api = {
   summarizeThread: (threadId: string) => post<ChatThread>(`/threads/${threadId}/summarize`),
   approvePlan: (threadId: string, planId: string, body?: any) =>
     post<any>(`/threads/${threadId}/plans/${planId}/approve`, body || {}),
+  teamActivity: (objectiveId: string) =>
+    req<any>(`/team/activity?objective_id=${encodeURIComponent(objectiveId)}`),
   sendChatStream: (
     threadId: string,
     content: string,

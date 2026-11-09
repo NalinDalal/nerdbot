@@ -4111,6 +4111,18 @@ def create_app() -> FastAPI:
             for t in tasks:
                 if t.status in ("failed", "blocked", "cancelled"):
                     failures.append({"task_id": t.id, "title": t.description, "reason_text": t.blocked_reason or "failed"})
+            # Auto-rollup when all children terminal and none exists yet.
+            if tasks and all(t.status in ("done", "failed", "blocked", "cancelled") for t in tasks):
+                existing = [r for r in conn.execute(
+                    "SELECT id FROM reports WHERE thread_id = ? AND title LIKE 'Rollup %'", (obj.thread_id if obj else "",)
+                ).fetchall()]
+                if not existing and obj is not None:
+                    try:
+                        report = store.rollup_objective(conn, objective_id, obj.thread_id)
+                        store.append_message(conn, obj.thread_id, "assistant",
+                                            report.markdown, parts=[{"type": "report", "title": report.title, "content": report.markdown, "report_id": report.id}])
+                    except Exception:
+                        pass
             members = []
             for m in (store.list_teammates(conn, obj.thread_id and store.get_thread(conn, obj.thread_id).project_id if obj else "") if obj else []):
                 current = None

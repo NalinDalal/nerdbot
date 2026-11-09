@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import { toast } from "sonner";
 import { api, ApiError } from "./api";
 import { notifyError, navigate } from "./app";
+import { TeamView } from "./team-view";
 import type { ChatMessage, ChatThread, Plan, Provider, Project, ProjectCounts, Teammate } from "./types";
 import { useWorkspaceSummary } from "./views-home";
 import { Markdown } from "./markdown";
@@ -208,6 +209,7 @@ export function ConversationView({
   // conversation started in another workspace is still reachable from here.
   const recentThreads = useAsync(() => api.listRecentThreads(20), []);
   const [activeId, setActiveId] = useState<string | null>(initialThreadId ?? null);
+  const [objectiveId, setObjectiveId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [showNew, setShowNew] = useState(false);
   const [railOpen, setRailOpen] = useState(true);
@@ -346,6 +348,7 @@ export function ConversationView({
               threadId={activeId}
               projectId={resolvedProjectId}
               providers={providers.data?.providers ?? []}
+              onPlanApproved={(id) => setObjectiveId(id)}
               onReload={() => threads.reload()}
             />
           ) : isHome ? (
@@ -443,11 +446,15 @@ export function ConversationView({
               </button>
             </div>
             <div className="flex-1 overflow-y-auto px-3 pb-4">
-              <ActivityRailContent
-                summary={summary}
-                onOpenTask={openTask}
-                onReload={() => summary.reload()}
-              />
+              {objectiveId ? (
+                <TeamView objectiveId={objectiveId} onOpenTask={openTask} />
+              ) : (
+                <ActivityRailContent
+                  summary={summary}
+                  onOpenTask={openTask}
+                  onReload={() => summary.reload()}
+                />
+              )}
             </div>
           </aside>
         ) : (
@@ -690,11 +697,13 @@ function ThreadPane({
   projectId,
   providers,
   onReload,
+  onPlanApproved,
 }: {
   threadId: string;
   projectId: string;
   providers: { id: string; name: string; kind: string }[];
   onReload: () => void;
+  onPlanApproved?: (id: string) => void;
 }) {
   const view = useAsync(() => api.threadView(threadId, 50), [threadId]);
   const [draft, setDraft] = useState("");
@@ -1030,6 +1039,7 @@ function ThreadPane({
                   key={message.id}
                   message={message}
                   parts={message.parts}
+                  onPlanApproved={(id) => onPlanApproved?.(id)}
                   onCreateTask={async (proposal) => {
                     try {
                       const task = await api.createTask(projectId, {
@@ -1356,7 +1366,7 @@ function ReportCard({ part }: { part: any }) {
   );
 }
 
-function PlanCard({ part, threadId }: { part: any; threadId: string }) {
+function PlanCard({ part, threadId, onApproved }: { part: any; threadId: string; onApproved?: (id: string) => void }) {
   const [approved, setApproved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [steps, setSteps] = useState<any[]>(part.steps || []);
@@ -1404,8 +1414,9 @@ function PlanCard({ part, threadId }: { part: any; threadId: string }) {
             onClick={async () => {
               setBusy(true);
               try {
-                await api.approvePlan?.(threadId, part.plan_id, { steps });
+                const obj = await api.approvePlan?.(threadId, part.plan_id, { steps });
                 setApproved(true);
+                if (obj?.id) onApproved?.(obj.id);
                 toast.success("Plan approved");
               } catch (err) {
                 notifyError(err);
@@ -1424,7 +1435,7 @@ function PlanCard({ part, threadId }: { part: any; threadId: string }) {
   );
 }
 
-function Message({ message, streaming = false, parts, onCreateTask }: { message: ChatMessage; streaming?: boolean; parts?: any[]; onCreateTask?: (proposal: any) => void }) {
+function Message({ message, streaming = false, parts, onCreateTask, onPlanApproved }: { message: ChatMessage; streaming?: boolean; parts?: any[]; onCreateTask?: (proposal: any) => void; onPlanApproved?: (id: string) => void }) {
   const isUser = message.role === "user";
   const [expanded, setExpanded] = useState(false);
   // Long assistant replies (e.g. a model dumping a whole file) flood the
@@ -1473,7 +1484,7 @@ function Message({ message, streaming = false, parts, onCreateTask }: { message:
               ) : p.type === "task" && p.proposal ? (
                 <TaskProposalCard proposal={p.proposal} onCreateTask={onCreateTask} />
               ) : p.type === "plan" ? (
-                <PlanCard part={p} threadId={message.thread_id} />
+                <PlanCard part={p} threadId={message.thread_id} onApproved={onPlanApproved} />
               ) : (
                 <pre className="whitespace-pre-wrap text-[var(--text-soft)]">{JSON.stringify(p)}</pre>
               )}
