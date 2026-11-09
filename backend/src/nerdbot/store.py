@@ -191,6 +191,9 @@ CREATE TABLE IF NOT EXISTS reports (
   message_id TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '',
   markdown TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS proposal_acceptances (
+  proposal_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, accepted_at TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages(thread_id);
 CREATE TABLE IF NOT EXISTS teams (
   id TEXT PRIMARY KEY, owner TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
@@ -1338,6 +1341,11 @@ def _task_from_row(row: sqlite3.Row) -> Task:
         blocked_reason=row["blocked_reason"] if "blocked_reason" in keys and row["blocked_reason"] else "",
         title=row["title"] if "title" in keys and row["title"] else "",
     )
+
+
+def delete_task(conn: sqlite3.Connection, task_id: str) -> None:
+    conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+    conn.commit()
 
 
 def get_task(conn: sqlite3.Connection, task_id: str) -> Task | None:
@@ -4569,8 +4577,8 @@ def create_report(
 
     if get_thread(conn, thread_id) is None:
         raise KeyError(f"unknown thread {thread_id}")
-    if len(markdown) > 8000:
-        raise ValueError("report markdown exceeds size cap")
+    if len(markdown) > 65536:
+        raise ValueError("report markdown exceeds 64KB size cap")
     report = Report(id=new_id("rep"), thread_id=thread_id, message_id=message_id,
                     title=title, markdown=markdown)
     conn.execute(
@@ -4612,6 +4620,24 @@ def find_message_by_proposal(conn: sqlite3.Connection, proposal_id: str) -> "Cha
             if isinstance(part, dict) and part.get("proposal_id") == proposal_id:
                 return msg
     return None
+
+
+def get_proposal_acceptance(conn: sqlite3.Connection, proposal_id: str) -> str | None:
+    row = conn.execute("SELECT task_id FROM proposal_acceptances WHERE proposal_id = ?", (proposal_id,)).fetchone()
+    return row["task_id"] if row else None
+
+
+def record_proposal_acceptance(conn: sqlite3.Connection, proposal_id: str, task_id: str) -> bool:
+    """Returns True if this call recorded it; False if already accepted."""
+    try:
+        conn.execute(
+            "INSERT INTO proposal_acceptances (proposal_id, task_id, accepted_at) VALUES (?, ?, ?)",
+            (proposal_id, task_id, datetime.now(UTC).isoformat()),
+        )
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
 
 
 def update_message_parts(conn: sqlite3.Connection, message_id: str, parts: list[dict[str, Any]]) -> None:

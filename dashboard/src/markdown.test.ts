@@ -69,3 +69,16 @@ describe("tables", () => {
     ]);
   });
 });
+
+
+describe("safety", () => {
+  it("does not produce image blocks from image syntax", () => {
+    const blocks = parseMarkdown("![remote](https://example.com/x.png)");
+    // No image block type exists; nothing auto-loads.
+    expect(blocks.every((b) => b.kind !== ("image" as any))).toBe(true);
+  });
+  it("only http(s) links become link tokens", () => {
+    expect(parseInline("[x](ftp://example.com)")).toEqual([{ kind: "text", text: "[x](ftp://example.com)" }]);
+    expect(parseInline("[x](https://example.com)")).toEqual([{ kind: "link", text: "x", href: "https://example.com" }]);
+  });
+});

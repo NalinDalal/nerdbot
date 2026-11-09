@@ -3379,10 +3379,21 @@ def create_app() -> FastAPI:
         if target_idx is None:
             raise HTTPException(status_code=404, detail="proposal not found")
         part = parts[target_idx]
-        # Idempotent: already accepted.
+        # Idempotent: check acceptance table first.
+        existing_task_id = store.get_proposal_acceptance(conn, proposal_id)
+        if existing_task_id:
+            task = store.get_task(conn, existing_task_id)
+            if task is not None:
+                # backfill part if needed
+                if not part.get("task_id"):
+                    part["task_id"] = existing_task_id
+                    parts[target_idx] = part
+                    store.update_message_parts(conn, msg.id, parts)
+                return task.model_dump(mode="json")
         if part.get("task_id"):
             task = store.get_task(conn, part["task_id"])
             if task is not None:
+                store.record_proposal_acceptance(conn, proposal_id, part["task_id"])
                 return task.model_dump(mode="json")
         proposal = part.get("proposal") or {}
         task = store.create_task(
@@ -3390,6 +3401,13 @@ def create_app() -> FastAPI:
             description=str(proposal.get("title") or "Proposed task"),
             command="",
         )
+        recorded = store.record_proposal_acceptance(conn, proposal_id, task.id)
+        if not recorded:
+            # lost the race; fetch the winner's task
+            winner = store.get_proposal_acceptance(conn, proposal_id)
+            if winner and winner != task.id:
+                store.delete_task(conn, task.id)
+                task = store.get_task(conn, winner) or task
         part["task_id"] = task.id
         parts[target_idx] = part
         store.update_message_parts(conn, msg.id, parts)

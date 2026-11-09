@@ -205,7 +205,7 @@ function inlineNodes(text: string): ReactNode[] {
             key={index}
             href={part.href}
             target="_blank"
-            rel="noreferrer"
+            rel="noopener noreferrer"
             className="text-[var(--accent)] underline underline-offset-2"
           >
             {part.text}

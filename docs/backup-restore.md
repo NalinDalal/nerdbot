@@ -46,3 +46,9 @@ There is **no blind row import**. Restore procedure:
   teammate/task scopes are not project-attributable in storage).
 - Provider secrets are never in the manifest — re-enter credentials on the
   target before enabling non-local providers.
+
+## Privacy note
+
+Backups include the full text of chat threads and messages (including any
+content the user pasted into chat) as well as report markdown. Treat backup
+files as sensitive: they are not scrubbed for secrets a user may have typed.
