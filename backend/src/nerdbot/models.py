@@ -309,6 +309,15 @@ class ChatMessage(BaseModel):
     created_at: datetime = Field(default_factory=_utcnow)
 
 
+class Report(BaseModel):
+    id: str
+    thread_id: str
+    message_id: str = ""
+    title: str = ""
+    markdown: str = ""
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
 CHAT_ROLES = frozenset({"user", "assistant", "tool", "system"})
 
 

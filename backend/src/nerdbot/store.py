@@ -186,6 +186,11 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   role TEXT NOT NULL DEFAULT 'user', content TEXT NOT NULL DEFAULT '',
   parts TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS reports (
+  id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES chat_threads(id),
+  message_id TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '',
+  markdown TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages(thread_id);
 CREATE TABLE IF NOT EXISTS teams (
   id TEXT PRIMARY KEY, owner TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
@@ -571,6 +576,10 @@ _PHASE25_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "chat_messages": [("parts", "TEXT NOT NULL DEFAULT '[]'")],
 }
 
+_PHASE26_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "reports": [],
+}
+
 
 _PHASE20_COLUMNS: dict[str, list[tuple[str, str]]] = {
     # Bot persona files (ai-teammates model): a bot's identity, its active
@@ -603,7 +612,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
                   _PHASE14_COLUMNS, _PHASE15_COLUMNS, _PHASE16_COLUMNS, _PHASE17_COLUMNS,
                   _PHASE18_COLUMNS, _PHASE19_COLUMNS, _PHASE20_COLUMNS,
                   _PHASE21_COLUMNS, _PHASE22_COLUMNS, _PHASE23_COLUMNS, _PHASE24_COLUMNS,
-                  _PHASE25_COLUMNS):
+                  _PHASE25_COLUMNS, _PHASE26_COLUMNS):
         for table, columns in phase.items():
             phases.setdefault(table, []).extend(columns)
     for table, columns in phases.items():
@@ -4547,6 +4556,68 @@ def append_message(
     )
     conn.commit()
     return message
+
+
+def create_report(
+    conn: sqlite3.Connection,
+    thread_id: str,
+    message_id: str = "",
+    title: str = "",
+    markdown: str = "",
+) -> "Report":
+    from .models import Report
+
+    if get_thread(conn, thread_id) is None:
+        raise KeyError(f"unknown thread {thread_id}")
+    if len(markdown) > 8000:
+        raise ValueError("report markdown exceeds size cap")
+    report = Report(id=new_id("rep"), thread_id=thread_id, message_id=message_id,
+                    title=title, markdown=markdown)
+    conn.execute(
+        "INSERT INTO reports (id, thread_id, message_id, title, markdown, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        (report.id, report.thread_id, report.message_id, report.title, report.markdown,
+         report.created_at.isoformat()),
+    )
+    conn.commit()
+    return report
+
+
+def get_report(conn: sqlite3.Connection, report_id: str) -> "Report | None":
+    from .models import Report
+
+    row = conn.execute("SELECT * FROM reports WHERE id = ?", (report_id,)).fetchone()
+    if row is None:
+        return None
+    return Report(
+        id=row["id"],
+        thread_id=row["thread_id"],
+        message_id=row["message_id"] or "",
+        title=row["title"] or "",
+        markdown=row["markdown"] or "",
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def update_report_message(conn: sqlite3.Connection, report_id: str, message_id: str) -> None:
+    conn.execute("UPDATE reports SET message_id = ? WHERE id = ?", (message_id, report_id))
+    conn.commit()
+
+
+def find_message_by_proposal(conn: sqlite3.Connection, proposal_id: str) -> "ChatMessage | None":
+    rows = conn.execute("SELECT * FROM chat_messages ORDER BY rowid DESC").fetchall()
+    for row in rows:
+        msg = _message_from_row(row)
+        for part in msg.parts or []:
+            if isinstance(part, dict) and part.get("proposal_id") == proposal_id:
+                return msg
+    return None
+
+
+def update_message_parts(conn: sqlite3.Connection, message_id: str, parts: list[dict[str, Any]]) -> None:
+    conn.execute("UPDATE chat_messages SET parts = ? WHERE id = ?",
+                 (json.dumps(parts), message_id))
+    conn.commit()
 
 
 def list_messages(

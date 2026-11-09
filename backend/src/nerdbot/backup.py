@@ -37,6 +37,7 @@ EXPORT_TABLES = (
     "events",
     "chat_threads",
     "chat_messages",
+    "reports",
 )
 
 
@@ -88,6 +89,12 @@ def build_manifest(conn: sqlite3.Connection, project_id: str) -> dict[str, Any]:
             rows = conn.execute(
                 "SELECT chat_messages.* FROM chat_messages JOIN chat_threads "
                 "ON chat_messages.thread_id = chat_threads.id "
+                "WHERE chat_threads.project_id = ?", (project_id,)
+            ).fetchall()
+        elif table == "reports":
+            rows = conn.execute(
+                "SELECT reports.* FROM reports JOIN chat_threads "
+                "ON reports.thread_id = chat_threads.id "
                 "WHERE chat_threads.project_id = ?", (project_id,)
             ).fetchall()
         elif table == "approvals":

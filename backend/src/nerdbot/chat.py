@@ -535,7 +535,8 @@ def _execute_chat_tool(
     args: dict[str, Any],
     conn: sqlite3.Connection,
     project_id: str,
-    transport: httpx.BaseTransport | None,
+    thread_id: str | None = None,
+    transport: httpx.BaseTransport | None = None,
 ) -> str:
     """Run one chat tool and return a bounded text result."""
 
@@ -560,14 +561,24 @@ def _execute_chat_tool(
                 [{"id": m.id, "persona": m.persona, "status": m.status.value} for m in mates]
             )
         if name == "propose_task":
+            import uuid as _uuid
+
             title = str(args.get("title", "")).strip() or "Proposed task"
             body = str(args.get("body", "")).strip()
-            part = {"type": "task", "proposal": {"title": title, "body": body}}
+            proposal_id = "prp_" + _uuid.uuid4().hex[:12]
+            part = {"type": "task", "proposal": {"title": title, "body": body, "proposal_id": proposal_id}}
             return json.dumps({"ok": True, "title": title, "_part": part})
         if name == "save_report":
             title = str(args.get("title", "")).strip() or "Report"
             content = str(args.get("content", "")).strip()
-            part = {"type": "report", "title": title, "content": content}
+            rid = ""
+            if thread_id:
+                try:
+                    rep = store.create_report(conn, thread_id, "", title, content)
+                    rid = rep.id
+                except Exception:
+                    rid = ""
+            part = {"type": "report", "title": title, "content": content, "report_id": rid}
             return json.dumps({"ok": True, "title": title, "_part": part})
     except Exception as exc:  # noqa: BLE001 - tool errors are data, not crashes
         return f"error: {exc}"
@@ -666,6 +677,7 @@ def chat_complete_with_tools(
             thread_tainted = False
     saw_untrusted = thread_tainted
     searched_queries: set[str] = set()
+    searched_urls: set[str] = set()
     parts: list[dict[str, Any]] = []
     for _ in range(max_turns):
         tools = (
@@ -700,14 +712,22 @@ def chat_complete_with_tools(
                 else:
                     if q:
                         searched_queries.add(q)
-                    result = _execute_chat_tool(name, args, conn, project_id, transport)
+                    result = _execute_chat_tool(name, args, conn, project_id, thread_id, transport)
+            elif name == "fetch_url":
+                u = str(args.get("url", "")).strip().lower()
+                if u and u in searched_urls:
+                    result = "already fetched: " + u
+                else:
+                    if u:
+                        searched_urls.add(u)
+                    result = _execute_chat_tool(name, args, conn, project_id, thread_id, transport)
             elif name == "create_task" and (saw_untrusted or thread_tainted):
                 result = (
                     "error: task creation is blocked in this turn because web "
                     "content was read; confirm with the user before creating tasks"
                 )
             else:
-                result = _execute_chat_tool(name, args, conn, project_id, transport)
+                result = _execute_chat_tool(name, args, conn, project_id, thread_id, transport)
             # Extract any UI part embedded in the tool result.
             try:
                 parsed = json.loads(result) if isinstance(result, str) else None
@@ -718,13 +738,13 @@ def chat_complete_with_tools(
                 result = json.dumps({k: v for k, v in parsed.items() if k != "_part"})
             if name in ("web_search", "fetch_url"):
                 saw_untrusted = True
+                if thread_id is not None:
+                    with contextlib.suppress(Exception):
+                        store.set_thread_tainted(conn, thread_id, True)
             msgs.append(
                 {"role": "tool", "tool_call_id": tc.get("id"), "content": str(result)[:4000]}
             )
 
-    if thread_id is not None and (saw_untrusted or thread_tainted):
-        with contextlib.suppress(Exception):
-            store.set_thread_tainted(conn, thread_id, True)
     # Final pass without tools to force a text answer.
     data = _openai_post(provider, msgs, tools=None, transport=transport, timeout_s=timeout_s)
     try:
@@ -771,6 +791,7 @@ def chat_stream_with_tools(
             thread_tainted = False
     saw_untrusted = thread_tainted
     searched_queries: set[str] = set()
+    searched_urls: set[str] = set()
     parts: list[dict[str, Any]] = []
     for _ in range(5):
         tools = (
@@ -812,14 +833,22 @@ def chat_stream_with_tools(
                 else:
                     if q:
                         searched_queries.add(q)
-                    result = _execute_chat_tool(name, args, conn, project_id, transport)
+                    result = _execute_chat_tool(name, args, conn, project_id, thread_id, transport)
+            elif name == "fetch_url":
+                u = str(args.get("url", "")).strip().lower()
+                if u and u in searched_urls:
+                    result = "already fetched: " + u
+                else:
+                    if u:
+                        searched_urls.add(u)
+                    result = _execute_chat_tool(name, args, conn, project_id, thread_id, transport)
             elif name == "create_task" and (saw_untrusted or thread_tainted):
                 result = (
                     "error: task creation is blocked in this turn because web "
                     "content was read; confirm with the user before creating tasks"
                 )
             else:
-                result = _execute_chat_tool(name, args, conn, project_id, transport)
+                result = _execute_chat_tool(name, args, conn, project_id, thread_id, transport)
             try:
                 parsed = json.loads(result) if isinstance(result, str) else None
             except (ValueError, TypeError):
@@ -829,6 +858,9 @@ def chat_stream_with_tools(
                 result = json.dumps({k: v for k, v in parsed.items() if k != "_part"})
             if name in ("web_search", "fetch_url"):
                 saw_untrusted = True
+                if thread_id is not None:
+                    with contextlib.suppress(Exception):
+                        store.set_thread_tainted(conn, thread_id, True)
             msgs.append(
                 {"role": "tool", "tool_call_id": tc.get("id"), "content": str(result)[:4000]}
             )

@@ -3354,6 +3354,47 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return updated.model_dump(mode="json")
 
+    @app.post("/proposals/{proposal_id}/accept")
+    def accept_proposal(
+        proposal_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        msg = store.find_message_by_proposal(conn, proposal_id)
+        if msg is None:
+            raise HTTPException(status_code=404, detail="proposal not found")
+        thread = store.get_thread(conn, msg.thread_id)
+        if thread is None:
+            raise HTTPException(status_code=404, detail="thread not found")
+        require_project_owner(conn, thread.project_id, principal)
+        # Find the part.
+        parts = list(msg.parts or [])
+        target_idx = None
+        for i, part in enumerate(parts):
+            if (isinstance(part, dict) and part.get("type") == "task"
+                    and isinstance(part.get("proposal"), dict)
+                    and part["proposal"].get("proposal_id") == proposal_id):
+                target_idx = i
+                break
+        if target_idx is None:
+            raise HTTPException(status_code=404, detail="proposal not found")
+        part = parts[target_idx]
+        # Idempotent: already accepted.
+        if part.get("task_id"):
+            task = store.get_task(conn, part["task_id"])
+            if task is not None:
+                return task.model_dump(mode="json")
+        proposal = part.get("proposal") or {}
+        task = store.create_task(
+            conn, thread.project_id,
+            description=str(proposal.get("title") or "Proposed task"),
+            command="",
+        )
+        part["task_id"] = task.id
+        parts[target_idx] = part
+        store.update_message_parts(conn, msg.id, parts)
+        return task.model_dump(mode="json")
+
     @app.post("/threads/{thread_id}/chat")
     def chat_complete_endpoint(
         thread_id: str,
@@ -3376,6 +3417,12 @@ def create_app() -> FastAPI:
         except Exception as exc:
             raise _chat_error_to_http(exc) from exc
         message = store.append_message(conn, thread_id, "assistant", text, parts=parts)
+        for part in parts or []:
+            if isinstance(part, dict) and part.get("type") == "report" and part.get("report_id"):
+                try:
+                    store.update_report_message(conn, part["report_id"], message.id)
+                except Exception:
+                    pass
         provider_id = provider.id if provider else None
         return {
             "message": message.model_dump(mode="json"),
@@ -3430,7 +3477,13 @@ def create_app() -> FastAPI:
                 yield "data: [DONE]\n\n"
                 return
             full = "".join(text_parts)
-            store.append_message(conn, thread_id, "assistant", full or "(empty reply)", parts=parts)
+            message = store.append_message(conn, thread_id, "assistant", full or "(empty reply)", parts=parts)
+            for part in parts or []:
+                if isinstance(part, dict) and part.get("type") == "report" and part.get("report_id"):
+                    try:
+                        store.update_report_message(conn, part["report_id"], message.id)
+                    except Exception:
+                        pass
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(generate(), media_type="text/event-stream")
@@ -3930,6 +3983,21 @@ def create_app() -> FastAPI:
             if "/assets/" in str(path):
                 return {"Cache-Control": "public, max-age=31536000, immutable"}
             return {"Cache-Control": "no-cache"}
+
+        @app.get("/reports/{report_id}")
+        def get_report_endpoint(
+            report_id: str,
+            conn: sqlite3.Connection = Depends(get_conn),
+            principal: str = Depends(principal_from_header),
+        ) -> dict[str, Any]:
+            report = store.get_report(conn, report_id)
+            if report is None:
+                raise HTTPException(status_code=404, detail="report not found")
+            # ownership: thread -> project
+            thread = store.get_thread(conn, report.thread_id)
+            if thread is not None:
+                require_project_owner(conn, thread.project_id, principal)
+            return report.model_dump(mode="json")
 
         @app.get("/{spa_path:path}", include_in_schema=False)
         async def _spa_fallback(spa_path: str, request: Request) -> Response:
