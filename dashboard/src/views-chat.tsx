@@ -1305,6 +1305,46 @@ function TaskProposalCard({ proposal, onCreateTask }: { proposal: any; onCreateT
   );
 }
 
+function ReportCard({ part }: { part: any }) {
+  const [open, setOpen] = useState(false);
+  const content = part.content || "";
+  return (
+    <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3 text-step--1">
+      <div className="flex items-center justify-between gap-2">
+        <div className="font-semibold text-[var(--text)]">{part.title || "Report"}</div>
+        <div className="flex gap-2">
+          <button type="button" className="text-step--2 text-[var(--accent)] hover:underline" onClick={() => setOpen((v) => !v)}>
+            {open ? "Hide" : "Open"}
+          </button>
+          <button type="button" className="text-step--2 text-[var(--accent)] hover:underline" onClick={() => navigator.clipboard?.writeText(content)}>
+            Copy
+          </button>
+          <button
+            type="button"
+            className="text-step--2 text-[var(--accent)] hover:underline"
+            onClick={() => {
+              const blob = new Blob([content], { type: "text/markdown" });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = `${(part.title || "report").replace(/[^a-z0-9]+/gi, "-")}.md`;
+              a.click();
+              URL.revokeObjectURL(url);
+            }}
+          >
+            Export
+          </button>
+        </div>
+      </div>
+      {open ? (
+        <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap text-step--1 text-[var(--text-soft)]">{content}</pre>
+      ) : (
+        <div className="mt-1 line-clamp-3 whitespace-pre-wrap text-[var(--text-soft)]">{content.slice(0, 200)}</div>
+      )}
+    </div>
+  );
+}
+
 function Message({ message, streaming = false, parts, onCreateTask }: { message: ChatMessage; streaming?: boolean; parts?: any[]; onCreateTask?: (proposal: any) => void }) {
   const isUser = message.role === "user";
   const [expanded, setExpanded] = useState(false);
@@ -1350,21 +1390,7 @@ function Message({ message, streaming = false, parts, onCreateTask }: { message:
           {parts.map((p, i) => (
             <div key={i} className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3 text-step--1">
               {p.type === "report" ? (
-                <>
-                  <div className="font-semibold text-[var(--text)]">{p.title || "Report"}</div>
-                  <pre className="mt-2 max-h-60 overflow-auto whitespace-pre-wrap text-step--1 text-[var(--text-soft)]">
-                    {p.content}
-                  </pre>
-                  <div className="mt-2 flex gap-2">
-                    <button
-                      type="button"
-                      className="text-step--2 text-[var(--accent)] hover:underline"
-                      onClick={() => navigator.clipboard?.writeText(p.content || "")}
-                    >
-                      Copy
-                    </button>
-                  </div>
-                </>
+                <ReportCard part={p} />
               ) : p.type === "task" && p.proposal ? (
                 <TaskProposalCard proposal={p.proposal} onCreateTask={onCreateTask} />
               ) : (
