@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS projects (
 );
 CREATE TABLE IF NOT EXISTS teammates (
   id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
-  persona TEXT NOT NULL DEFAULT '', instructions TEXT NOT NULL DEFAULT '',
+  slug TEXT NOT NULL DEFAULT '', persona TEXT NOT NULL DEFAULT '', instructions TEXT NOT NULL DEFAULT '',
   capabilities TEXT NOT NULL DEFAULT '[]', memory_scope TEXT NOT NULL DEFAULT 'teammate',
   permissions TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'active',
   tool_policy TEXT NOT NULL DEFAULT '{}', provider_id TEXT, created_at TEXT NOT NULL DEFAULT '',
@@ -185,6 +185,12 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES chat_threads(id),
   role TEXT NOT NULL DEFAULT 'user', content TEXT NOT NULL DEFAULT '',
   parts TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS objectives (
+  id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES chat_threads(id),
+  title TEXT NOT NULL DEFAULT '', owner_text TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'planning', plan TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS reports (
   id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES chat_threads(id),
@@ -565,6 +571,7 @@ _PHASE23_COLUMNS: dict[str, list[tuple[str, str]]] = {
 
 _PHASE24_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "teammates": [
+        ("slug", "TEXT NOT NULL DEFAULT ''"),
         ("model", "TEXT NOT NULL DEFAULT ''"),
         ("temperature", "REAL"),
         ("max_tokens", "INTEGER"),
@@ -581,6 +588,10 @@ _PHASE25_COLUMNS: dict[str, list[tuple[str, str]]] = {
 
 _PHASE26_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "reports": [],
+}
+
+_PHASE27_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "tasks": [("objective_id", "TEXT NOT NULL DEFAULT ''")],
 }
 
 
@@ -615,7 +626,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
                   _PHASE14_COLUMNS, _PHASE15_COLUMNS, _PHASE16_COLUMNS, _PHASE17_COLUMNS,
                   _PHASE18_COLUMNS, _PHASE19_COLUMNS, _PHASE20_COLUMNS,
                   _PHASE21_COLUMNS, _PHASE22_COLUMNS, _PHASE23_COLUMNS, _PHASE24_COLUMNS,
-                  _PHASE25_COLUMNS, _PHASE26_COLUMNS):
+                  _PHASE25_COLUMNS, _PHASE26_COLUMNS, _PHASE27_COLUMNS):
         for table, columns in phase.items():
             phases.setdefault(table, []).extend(columns)
     for table, columns in phases.items():
@@ -776,6 +787,7 @@ def list_projects(conn: sqlite3.Connection, owner: str | None = None) -> list[Pr
 def create_teammate(
     conn: sqlite3.Connection,
     project_id: str,
+    slug: str = "",
     persona: str = "",
     instructions: str = "",
     capabilities: list[str] | None = None,
@@ -791,6 +803,7 @@ def create_teammate(
     mate = Teammate(
         id=new_id("tm"),
         project_id=project_id,
+        slug=slug,
         persona=persona,
         instructions=instructions,
         capabilities=capabilities or [],
@@ -799,12 +812,13 @@ def create_teammate(
         face=BotFace(**faces_mod.merge_face(face or {})),
     )
     conn.execute(
-        "INSERT INTO teammates (id, project_id, persona, instructions, capabilities,"
+        "INSERT INTO teammates (id, project_id, slug, persona, instructions, capabilities,"
         " memory_scope, permissions, face, soul, goals, wisdom, persona_version)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             mate.id,
             mate.project_id,
+            mate.slug,
             mate.persona,
             mate.instructions,
             json.dumps(mate.capabilities),
@@ -827,6 +841,7 @@ def _teammate_from_row(row: sqlite3.Row) -> Teammate:
     return Teammate(
         id=row["id"],
         project_id=row["project_id"],
+        slug=row["slug"] if "slug" in keys else "",
         persona=row["persona"],
         instructions=row["instructions"],
         capabilities=json.loads(row["capabilities"]),
@@ -1214,6 +1229,7 @@ def create_task(
     issue_id: str | None = None,
     board_id: str = "",
     parent_task_id: str = "",
+    objective_id: str = "",
     workspace_mode: str = "checkout",
     title: str = "",
 ) -> Task:
@@ -1268,7 +1284,7 @@ def create_task(
     conn.execute(
         "INSERT INTO tasks (id, project_id, description, status, owner_teammate_id,"
         " dependencies, command, issue_id, branch, workspace_path, board_id, parent_task_id,"
-        " workspace_mode, title) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " objective_id, workspace_mode, title) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             task.id,
             task.project_id,
@@ -1282,6 +1298,7 @@ def create_task(
             task.workspace_path,
             task.board_id,
             task.parent_task_id,
+            task.objective_id,
             task.workspace_mode,
             task.title,
         ),
@@ -1338,6 +1355,7 @@ def _task_from_row(row: sqlite3.Row) -> Task:
         else "checkout",
         board_id=row["board_id"] if "board_id" in keys else "",
         parent_task_id=row["parent_task_id"] if "parent_task_id" in keys and row["parent_task_id"] else "",
+        objective_id=row["objective_id"] if "objective_id" in keys and row["objective_id"] else "",
         blocked_reason=row["blocked_reason"] if "blocked_reason" in keys and row["blocked_reason"] else "",
         title=row["title"] if "title" in keys and row["title"] else "",
     )
@@ -4609,6 +4627,71 @@ def get_report(conn: sqlite3.Connection, report_id: str) -> "Report | None":
 
 def update_report_message(conn: sqlite3.Connection, report_id: str, message_id: str) -> None:
     conn.execute("UPDATE reports SET message_id = ? WHERE id = ?", (message_id, report_id))
+    conn.commit()
+
+
+
+def create_objective(conn, thread_id, title="", owner_text="", plan=None) -> "Objective":
+    from .models import Objective, ObjectiveStatus
+    import json as _j
+
+    if get_thread(conn, thread_id) is None:
+        raise KeyError(f"unknown thread {thread_id}")
+    obj = Objective(id=new_id("obj"), thread_id=thread_id, title=title, owner_text=owner_text,
+                    plan=plan or {})
+    conn.execute(
+        "INSERT INTO objectives (id, thread_id, title, owner_text, status, plan, created_at) VALUES (?,?,?,?,?,?,?)",
+        (obj.id, obj.thread_id, obj.title, obj.owner_text, obj.status.value, _j.dumps(obj.plan), obj.created_at.isoformat()),
+    )
+    conn.commit()
+    return obj
+
+
+def get_objective(conn, objective_id) -> "Objective | None":
+    from .models import Objective, ObjectiveStatus
+    import json as _j
+
+    row = conn.execute("SELECT * FROM objectives WHERE id = ?", (objective_id,)).fetchone()
+    if row is None:
+        return None
+    return Objective(
+        id=row["id"],
+        thread_id=row["thread_id"],
+        title=row["title"] or "",
+        owner_text=row["owner_text"] or "",
+        status=ObjectiveStatus(row["status"]),
+        plan=_j.loads(row["plan"] or "{}"),
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def list_tasks_for_objective(conn, objective_id) -> list:
+    rows = conn.execute("SELECT * FROM tasks WHERE objective_id = ?", (objective_id,)).fetchall()
+    return [_task_from_row(r) for r in rows]
+
+
+def derive_objective_status(conn, objective_id) -> str:
+    from .models import ObjectiveStatus, TaskStatus
+
+    tasks = list_tasks_for_objective(conn, objective_id)
+    if not tasks:
+        return ObjectiveStatus.PLANNING.value
+    statuses = {t.status for t in tasks}
+    if any(s in ("pending", "ready", "running") for s in statuses):
+        if any(s == "running" for s in statuses):
+            return ObjectiveStatus.RUNNING.value
+        return ObjectiveStatus.AWAITING_APPROVAL.value if "pending" in statuses else ObjectiveStatus.RUNNING.value
+    if all(s == "done" for s in statuses):
+        return ObjectiveStatus.DONE.value
+    if any(s in ("failed", "blocked", "cancelled") for s in statuses):
+        if all(s in ("failed", "blocked", "cancelled") for s in statuses):
+            return ObjectiveStatus.FAILED.value
+        return ObjectiveStatus.PARTLY_FAILED.value
+    return ObjectiveStatus.PLANNING.value
+
+
+def update_objective_status(conn, objective_id, status) -> None:
+    conn.execute("UPDATE objectives SET status = ? WHERE id = ?", (status, objective_id))
     conn.commit()
 
 

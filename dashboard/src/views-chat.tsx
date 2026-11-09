@@ -1356,6 +1356,51 @@ function ReportCard({ part }: { part: any }) {
   );
 }
 
+function PlanCard({ part, threadId }: { part: any; threadId: string }) {
+  const [approved, setApproved] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const steps = part.steps || [];
+  return (
+    <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3 text-step--1">
+      <div className="font-semibold text-[var(--text)]">{part.objective || "Plan"}</div>
+      <ul className="mt-2 flex flex-col gap-1.5">
+        {steps.map((st: any, i: number) => (
+          <li key={i} className="rounded-md bg-[var(--surface)] px-2.5 py-1.5">
+            <div className="text-[var(--text)]">{st.title}</div>
+            {st.assignee_slug ? <div className="text-step--2 text-[var(--muted)]">assignee: {st.assignee_slug}</div> : null}
+            {st.depends_on?.length ? <div className="text-step--2 text-[var(--faint)]">depends on: {st.depends_on.map((d: number) => d + 1).join(", ")}</div> : null}
+          </li>
+        ))}
+      </ul>
+      {!approved && !part.approved ? (
+        <div className="mt-3">
+          <button
+            type="button"
+            disabled={busy}
+            className="rounded-md bg-[var(--accent)] px-2.5 py-1 text-step--2 font-medium text-white disabled:opacity-50"
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await api.approvePlan?.(threadId, part.plan_id);
+                setApproved(true);
+                toast.success("Plan approved");
+              } catch (err) {
+                notifyError(err);
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {busy ? "Approving…" : "Approve plan"}
+          </button>
+        </div>
+      ) : (
+        <div className="mt-2 text-step--2 text-[var(--muted)]">Approved</div>
+      )}
+    </div>
+  );
+}
+
 function Message({ message, streaming = false, parts, onCreateTask }: { message: ChatMessage; streaming?: boolean; parts?: any[]; onCreateTask?: (proposal: any) => void }) {
   const isUser = message.role === "user";
   const [expanded, setExpanded] = useState(false);
@@ -1399,11 +1444,13 @@ function Message({ message, streaming = false, parts, onCreateTask }: { message:
       {parts && parts.length > 0 ? (
         <div className="mt-3 flex flex-col gap-2">
           {parts.map((p, i) => (
-            <div key={i} className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3 text-step--1">
+            <div key={i}>
               {p.type === "report" ? (
                 <ReportCard part={p} />
               ) : p.type === "task" && p.proposal ? (
                 <TaskProposalCard proposal={p.proposal} onCreateTask={onCreateTask} />
+              ) : p.type === "plan" ? (
+                <PlanCard part={p} threadId={message.thread_id} />
               ) : (
                 <pre className="whitespace-pre-wrap text-[var(--text-soft)]">{JSON.stringify(p)}</pre>
               )}

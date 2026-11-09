@@ -527,6 +527,33 @@ CHAT_TOOL_SCHEMAS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "propose_plan",
+            "description": "Propose a plan (steps with assignees). Does not create anything.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "objective": {"type": "string"},
+                    "steps": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": {"type": "string"},
+                                "body": {"type": "string"},
+                                "assignee_slug": {"type": "string"},
+                                "depends_on": {"type": "array", "items": {"type": "integer"}},
+                            },
+                            "required": ["title"],
+                        },
+                    },
+                },
+                "required": ["objective", "steps"],
+            },
+        },
+    },
 ]
 
 
@@ -560,6 +587,59 @@ def _execute_chat_tool(
             return json.dumps(
                 [{"id": m.id, "persona": m.persona, "status": m.status.value} for m in mates]
             )
+        if name == "propose_plan":
+            import json as _j
+            import uuid as _uuid
+
+            objective = str(args.get("objective", "")).strip()
+            steps_raw = args.get("steps") or []
+            if not isinstance(steps_raw, list) or not steps_raw:
+                return _j.dumps({"error": "steps must be a non-empty array"})
+            if len(steps_raw) > 12:
+                return _j.dumps({"error": "too many steps (max 12)"})
+            mates = {m.slug: m for m in store.list_teammates(conn, project_id) if m.slug}
+            steps = []
+            for i, st in enumerate(steps_raw):
+                if not isinstance(st, dict):
+                    return _j.dumps({"error": f"step {i} invalid"})
+                title = str(st.get("title", "")).strip()
+                if not title:
+                    return _j.dumps({"error": f"step {i} missing title"})
+                if len(title) > 200:
+                    return _j.dumps({"error": f"step {i} title too long"})
+                assignee = str(st.get("assignee_slug", "")).strip()
+                if assignee and assignee not in mates:
+                    return _j.dumps({"error": f"unknown assignee {assignee!r}"})
+                deps = st.get("depends_on") or []
+                if not isinstance(deps, list):
+                    return _j.dumps({"error": f"step {i} depends_on must be array"})
+                steps.append({
+                    "index": i,
+                    "title": title,
+                    "body": str(st.get("body", "")).strip()[:2000],
+                    "assignee_slug": assignee,
+                    "depends_on": [int(d) for d in deps if isinstance(d, int)],
+                })
+            n = len(steps)
+            adj = [list(s["depends_on"]) for s in steps]
+            visited = [0] * n
+            def dfs(u):
+                if visited[u] == 1:
+                    return True
+                if visited[u] == 2:
+                    return False
+                visited[u] = 1
+                for v in adj[u]:
+                    if 0 <= v < n and dfs(v):
+                        return True
+                visited[u] = 2
+                return False
+            for i in range(n):
+                if dfs(i):
+                    return _j.dumps({"error": "dependency cycle detected"})
+            plan_id = "pln_" + _uuid.uuid4().hex[:12]
+            part = {"type": "plan", "plan_id": plan_id, "objective": str(args.get("objective", "")).strip(), "steps": steps}
+            return _j.dumps({"ok": True, "plan_id": plan_id, "_part": part})
         if name == "propose_task":
             import uuid as _uuid
 

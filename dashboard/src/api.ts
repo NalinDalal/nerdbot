@@ -583,6 +583,8 @@ export const api = {
       mock?: boolean;
     }>(`/threads/${threadId}/chat`, { content, mode }),
   summarizeThread: (threadId: string) => post<ChatThread>(`/threads/${threadId}/summarize`),
+  approvePlan: (threadId: string, planId: string) =>
+    post<any>(`/threads/${threadId}/plans/${planId}/approve`, {}),
   sendChatStream: (
     threadId: string,
     content: string,

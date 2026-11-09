@@ -292,6 +292,18 @@ def create_app() -> FastAPI:
         try:
             app.state.recovered_runs = orchestrator.recover_incomplete_runs(conn)
             app.state.restart_count = store.meta_incr(conn, "restart_count")
+            # Seed teammates (idempotent) into the Home project.
+            try:
+                from . import seed as seed_mod
+
+                home = None
+                projects = store.list_projects(conn, "local-owner")
+                home = next((p for p in projects if p.repository == "Home"), None)
+                if home is None:
+                    home = store.create_project(conn, owner="local-owner", repository="Home", config={})
+                seed_mod.seed_teammates(conn, home.id)
+            except Exception:
+                pass
         finally:
             conn.close()
 
@@ -3353,6 +3365,74 @@ def create_app() -> FastAPI:
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return updated.model_dump(mode="json")
+
+    @app.post("/threads/{thread_id}/plans/{plan_id}/approve")
+    def approve_plan(
+        thread_id: str,
+        plan_id: str,
+        body: dict[str, Any] = {},
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, _chat_thread_project(conn, thread_id), principal)
+        # find plan part
+        msg = None
+        for m in store.list_messages(conn, thread_id, limit=200):
+            for part in (m.parts or []):
+                if isinstance(part, dict) and part.get("type") == "plan" and part.get("plan_id") == plan_id:
+                    msg = m
+                    break
+            if msg:
+                break
+        if msg is None:
+            raise HTTPException(status_code=404, detail="plan not found")
+        part = next(p for p in (msg.parts or []) if isinstance(p, dict) and p.get("plan_id") == plan_id)
+        # idempotent: already approved?
+        if part.get("objective_id"):
+            obj = store.get_objective(conn, part["objective_id"])
+            if obj is not None:
+                return obj.model_dump(mode="json")
+        # apply edits from body
+        steps = list(part.get("steps") or [])
+        if isinstance(body.get("steps"), list):
+            steps = body["steps"]
+        objective_title = str(body.get("title") or part.get("objective") or "Objective").strip()
+        project_id = _chat_thread_project(conn, thread_id)
+        # validate assignees
+        mates = {m.slug: m for m in store.list_teammates(conn, project_id) if m.slug}
+        for st in steps:
+            a = str(st.get("assignee_slug", "")).strip()
+            if a and a not in mates:
+                raise HTTPException(status_code=422, detail=f"unknown assignee {a!r}")
+        # create objective + tasks in one transaction
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            obj = store.create_objective(conn, thread_id, title=objective_title, owner_text=part.get("objective", ""), plan={"steps": steps})
+            index_to_id = {}
+            for idx, st in enumerate(steps):
+                dep_ids = [index_to_id[d] for d in (st.get("depends_on") or []) if d in index_to_id]
+                owner = None
+                a = str(st.get("assignee_slug", "")).strip()
+                if a and a in mates:
+                    owner = mates[a].id
+                task = store.create_task(
+                    conn, project_id, description=str(st.get("title", "")), command="",
+                    owner_teammate_id=owner, dependencies=dep_ids, objective_id=obj.id,
+                )
+                index_to_id[idx] = task.id
+            # update part
+            new_parts = list(msg.parts or [])
+            for i, p in enumerate(new_parts):
+                if isinstance(p, dict) and p.get("plan_id") == plan_id:
+                    p["objective_id"] = obj.id
+                    p["approved"] = True
+                    new_parts[i] = p
+            store.update_message_parts(conn, msg.id, new_parts)
+            conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return obj.model_dump(mode="json")
 
     @app.post("/proposals/{proposal_id}/accept")
     def accept_proposal(

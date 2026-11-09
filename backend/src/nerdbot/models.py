@@ -100,6 +100,7 @@ class BotFace(BaseModel):
 class Teammate(BaseModel):
     id: str
     project_id: str
+    slug: str = ""
     persona: str = ""
     instructions: str = ""
     capabilities: list[str] = Field(default_factory=list)
@@ -154,6 +155,7 @@ class Task(BaseModel):
     workspace_mode: str = "checkout"
     board_id: str = ""
     parent_task_id: str = ""
+    objective_id: str = ""
     # Why the task is blocked, in plain words ("openai-compatible provider
     # not configured"). Set when the task enters the blocked state and
     # cleared when it leaves it, so a blocked task can always explain
@@ -306,6 +308,26 @@ class ChatMessage(BaseModel):
     role: str = "user"
     content: str = ""
     parts: list[dict[str, Any]] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+class ObjectiveStatus(StrEnum):
+    PLANNING = "planning"
+    AWAITING_APPROVAL = "awaiting_approval"
+    RUNNING = "running"
+    DONE = "done"
+    PARTLY_FAILED = "partly_failed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class Objective(BaseModel):
+    id: str
+    thread_id: str
+    title: str = ""
+    owner_text: str = ""
+    status: ObjectiveStatus = ObjectiveStatus.PLANNING
+    plan: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_utcnow)
 
 
