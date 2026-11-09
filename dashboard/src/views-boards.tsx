@@ -125,6 +125,7 @@ export function BoardDetailView({
 }) {
   const detail = useAsync(() => api.getBoard(boardId), [boardId]);
   const execution = useAsync(() => api.getBoardExecution(boardId), [boardId]);
+  const teammates = useAsync(() => api.listTeammates(detail.data?.board?.project_id || ""), [detail.data?.board?.project_id]);
   const [showAddMember, setShowAddMember] = useState(false);
   const [newMemberId, setNewMemberId] = useState("");
   const [newRole, setNewRole] = useState("member");
@@ -320,6 +321,7 @@ export function BoardDetailView({
                   <thead>
                     <tr>
                       <th className={TH}>Task</th>
+                      <th className={TH}>Assignee</th>
                       <th className={TH}>Status</th>
                       <th className={TH}>Latest run</th>
                       <th className={TH}>Artifacts</th>
@@ -338,7 +340,23 @@ export function BoardDetailView({
                           <div className="mono text-step--2 text-[var(--faint)]">{row.task.id}</div>
                         </td>
                         <td className={TD}>
+                          {(() => {
+                            const mate = (teammates.data?.teammates || []).find((m: any) => m.id === row.task.owner_teammate_id);
+                            if (!mate) return <span className="text-[var(--faint)]">—</span>;
+                            return (
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-step--1">{mate.slug || mate.id}</span>
+                              </div>
+                            );
+                          })()}
+                        </td>
+                        <td className={TD}>
                           <StatusBadge status={row.task.status} />
+                          {row.task.status === "pending" ? (
+                            <div className="mt-1 text-step--2 text-[var(--muted)]">
+                              {row.task.dependencies?.length ? "Waiting for dependencies" : "Queued (executor not running)"}
+                            </div>
+                          ) : null}
                         </td>
                         <td className={TD}>
                           {row.latest_run ? (

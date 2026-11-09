@@ -29,6 +29,7 @@ export interface BotFace {
 export interface Teammate {
   id: string;
   project_id: string;
+  slug: string;
   persona: string;
   instructions: string;
   capabilities: string[];

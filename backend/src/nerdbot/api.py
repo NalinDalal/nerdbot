@@ -4114,6 +4114,27 @@ def create_app() -> FastAPI:
                 return {"Cache-Control": "public, max-age=31536000, immutable"}
             return {"Cache-Control": "no-cache"}
 
+        @app.post("/projects/{project_id}/teammates/attach-provider")
+        def attach_provider_all(
+            project_id: str,
+            body: dict[str, Any],
+            conn: sqlite3.Connection = Depends(get_conn),
+            principal: str = Depends(principal_from_header),
+        ) -> dict[str, Any]:
+            require_project_owner(conn, project_id, principal)
+            provider_id = body.get("provider_id")
+            if not provider_id:
+                raise HTTPException(status_code=400, detail="provider_id required")
+            provider = store.get_provider(conn, str(provider_id))
+            if provider is None or provider.project_id != project_id:
+                raise HTTPException(status_code=400, detail="provider not found")
+            updated = 0
+            for mate in store.list_teammates(conn, project_id):
+                if mate.provider_id is None:
+                    store.set_teammate_provider(conn, mate.id, str(provider_id))
+                    updated += 1
+            return {"updated": updated}
+
         @app.get("/reports/{report_id}")
         def get_report_endpoint(
             report_id: str,

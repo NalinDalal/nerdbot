@@ -891,6 +891,11 @@ def _face_from_row(row: sqlite3.Row) -> BotFace:
         return BotFace(**faces_mod.default_face())
 
 
+def set_teammate_provider(conn: sqlite3.Connection, teammate_id: str, provider_id: str | None) -> None:
+    conn.execute("UPDATE teammates SET provider_id = ? WHERE id = ?", (provider_id, teammate_id))
+    conn.commit()
+
+
 def get_teammate(conn: sqlite3.Connection, teammate_id: str) -> Teammate | None:
     row = conn.execute("SELECT * FROM teammates WHERE id = ?", (teammate_id,)).fetchone()
     if row is None:
