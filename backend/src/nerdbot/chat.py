@@ -60,6 +60,26 @@ SYSTEM_PROMPT = (
 )
 
 
+def _ceo_persona_prompt(conn: sqlite3.Connection, project_id: str) -> str:
+    """Return the CEO teammate's persona as a system prompt, if seeded.
+
+    Chat routes through the CEO teammate when one exists, so the owner talks
+    to a single bot whose identity lives in config (never hardcoded here).
+    """
+    try:
+        for mate in store.list_teammates(conn, project_id):
+            if getattr(mate, "slug", "") == "ceo":
+                parts = []
+                if mate.persona:
+                    parts.append(mate.persona)
+                if mate.instructions:
+                    parts.append("Instructions: " + mate.instructions)
+                return "\n\n".join(parts)
+    except Exception:
+        return ""
+    return ""
+
+
 def resolve_chat_provider(
     conn: sqlite3.Connection, project_id: str, thread: ChatThread | None = None
 ) -> Provider | None:
@@ -116,7 +136,9 @@ def build_messages(
     cannot see it. Recalled memory and thread summaries follow as untrusted
     context with provenance.
     """
-    messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    ceo_prompt = _ceo_persona_prompt(conn, project_id)
+    base_prompt = ceo_prompt if ceo_prompt else SYSTEM_PROMPT
+    messages: list[dict[str, Any]] = [{"role": "system", "content": base_prompt}]
     project_ctx = _project_context(conn, project_id)
     if project_ctx:
         messages.append({"role": "system", "content": project_ctx})
@@ -132,7 +154,9 @@ def build_planning_messages(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Thread-less variant for planning flows (decomposition): system prompt
     plus recalled memory and every thread summary — no thread history."""
-    messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    ceo_prompt = _ceo_persona_prompt(conn, project_id)
+    base_prompt = ceo_prompt if ceo_prompt else SYSTEM_PROMPT
+    messages: list[dict[str, Any]] = [{"role": "system", "content": base_prompt}]
     project_ctx = _project_context(conn, project_id)
     if project_ctx:
         messages.append({"role": "system", "content": project_ctx})

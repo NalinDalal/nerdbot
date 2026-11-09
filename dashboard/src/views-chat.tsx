@@ -1359,16 +1359,39 @@ function ReportCard({ part }: { part: any }) {
 function PlanCard({ part, threadId }: { part: any; threadId: string }) {
   const [approved, setApproved] = useState(false);
   const [busy, setBusy] = useState(false);
-  const steps = part.steps || [];
+  const [steps, setSteps] = useState<any[]>(part.steps || []);
   return (
     <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3 text-step--1">
       <div className="font-semibold text-[var(--text)]">{part.objective || "Plan"}</div>
       <ul className="mt-2 flex flex-col gap-1.5">
         {steps.map((st: any, i: number) => (
           <li key={i} className="rounded-md bg-[var(--surface)] px-2.5 py-1.5">
-            <div className="text-[var(--text)]">{st.title}</div>
-            {st.assignee_slug ? <div className="text-step--2 text-[var(--muted)]">assignee: {st.assignee_slug}</div> : null}
-            {st.depends_on?.length ? <div className="text-step--2 text-[var(--faint)]">depends on: {st.depends_on.map((d: number) => d + 1).join(", ")}</div> : null}
+            <input
+              value={st.title}
+              onChange={(e) => {
+                const next = [...steps];
+                next[i] = { ...next[i], title: e.target.value };
+                setSteps(next);
+              }}
+              className="w-full bg-transparent text-[var(--text)] outline-none"
+            />
+            <input
+              value={st.assignee_slug || ""}
+              onChange={(e) => {
+                const next = [...steps];
+                next[i] = { ...next[i], assignee_slug: e.target.value };
+                setSteps(next);
+              }}
+              placeholder="assignee slug"
+              className="mt-1 w-full bg-transparent text-step--2 text-[var(--muted)] outline-none"
+            />
+            <button
+              type="button"
+              className="mt-1 text-step--2 text-[var(--danger)] hover:underline"
+              onClick={() => setSteps(steps.filter((_, j) => j !== i))}
+            >
+              Remove
+            </button>
           </li>
         ))}
       </ul>
@@ -1381,7 +1404,7 @@ function PlanCard({ part, threadId }: { part: any; threadId: string }) {
             onClick={async () => {
               setBusy(true);
               try {
-                await api.approvePlan?.(threadId, part.plan_id);
+                await api.approvePlan?.(threadId, part.plan_id, { steps });
                 setApproved(true);
                 toast.success("Plan approved");
               } catch (err) {

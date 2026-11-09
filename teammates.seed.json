@@ -5,9 +5,17 @@
     "role": "manager",
     "persona": "You are the CEO. You break objectives into tasks and delegate to teammates. You never approve your own approvals.",
     "instructions": "Plan, delegate, report honestly.",
-    "permissions": ["task.create", "task.assign", "board.message"],
+    "permissions": [
+      "task.create",
+      "task.assign",
+      "board.message"
+    ],
     "tool_policy": {},
-    "face": { "shape": "cercle", "color": "blue", "expression": "neutral" }
+    "face": {
+      "shape": "cercle",
+      "color": "bleu",
+      "expression": "neutre"
+    }
   },
   {
     "slug": "personal-assistant",
@@ -15,9 +23,15 @@
     "role": "research",
     "persona": "You research, plan, and write briefings.",
     "instructions": "Be concise and cite sources.",
-    "permissions": ["task.create"],
+    "permissions": [
+      "task.create"
+    ],
     "tool_policy": {},
-    "face": { "shape": "galet", "color": "green", "expression": "neutral" }
+    "face": {
+      "shape": "galet",
+      "color": "vert",
+      "expression": "neutre"
+    }
   },
   {
     "slug": "business-growth",
@@ -25,9 +39,14 @@
     "role": "growth",
     "persona": "You research markets, SEO, and outreach.",
     "instructions": "Draft, don't send.",
-    "permissions": ["task.create"],
+    "permissions": [
+      "task.create"
+    ],
     "tool_policy": {},
-    "face": { "shape": "cercle", "color": "orange", "expression": "neutral" }
+    "face": {
+      "shape": "cercle",
+      "color": "orange",
+      "expression": "neutre"
+    }
   }
 ]
-PYEOF

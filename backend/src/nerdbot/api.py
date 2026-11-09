@@ -292,18 +292,6 @@ def create_app() -> FastAPI:
         try:
             app.state.recovered_runs = orchestrator.recover_incomplete_runs(conn)
             app.state.restart_count = store.meta_incr(conn, "restart_count")
-            # Seed teammates (idempotent) into the Home project.
-            try:
-                from . import seed as seed_mod
-
-                home = None
-                projects = store.list_projects(conn, "local-owner")
-                home = next((p for p in projects if p.repository == "Home"), None)
-                if home is None:
-                    home = store.create_project(conn, owner="local-owner", repository="Home", config={})
-                seed_mod.seed_teammates(conn, home.id)
-            except Exception:
-                pass
         finally:
             conn.close()
 
@@ -3183,6 +3171,12 @@ def create_app() -> FastAPI:
             home = store.create_project(
                 conn, owner=principal, repository="Home", config={}
             )
+        try:
+            from . import seed as seed_mod
+
+            seed_mod.seed_teammates(conn, home.id)
+        except Exception:
+            pass
         return home.model_dump(mode="json")
 
     @app.get("/capabilities")
@@ -3400,6 +3394,10 @@ def create_app() -> FastAPI:
         project_id = _chat_thread_project(conn, thread_id)
         # validate assignees
         mates = {m.slug: m for m in store.list_teammates(conn, project_id) if m.slug}
+        from . import delegation as delegation_mod
+
+        if len(steps) > delegation_mod.MAX_DELEGATIONS_PER_TASK:
+            raise HTTPException(status_code=422, detail=f"too many steps (max {delegation_mod.MAX_DELEGATIONS_PER_TASK})")
         for st in steps:
             a = str(st.get("assignee_slug", "")).strip()
             if a and a not in mates:

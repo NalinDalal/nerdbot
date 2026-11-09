@@ -1278,6 +1278,7 @@ def create_task(
         issue_id=issue_id,
         board_id=board_id,
         parent_task_id=parent_task_id,
+        objective_id=objective_id,
         workspace_mode=workspace_mode,
         title=title,
     )
