@@ -19,11 +19,17 @@ from fastapi import HTTPException
 from . import gates, store
 from .models import Team, Teammate, TeammateStatus, TeamMember
 
+# Handles are store's business (they must stay unique per project); fleet
+# re-exports the formatter it derives a new teammate's handle from.
+slugify = store.slugify
+
 
 def create_teammate_service(
     conn: sqlite3.Connection,
     project_id: str,
     persona: str = "",
+    name: str = "",
+    slug: str = "",
     instructions: str = "",
     capabilities: list[str] | None = None,
     memory_scope: str = "project",
@@ -75,6 +81,8 @@ def create_teammate_service(
         mate = store.create_teammate(
             conn,
             project_id,
+            slug=slug or slugify(name),
+            name=name,
             persona=persona,
             instructions=instructions,
             capabilities=capabilities,

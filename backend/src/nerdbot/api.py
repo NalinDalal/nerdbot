@@ -460,6 +460,8 @@ def create_app() -> FastAPI:
             conn,
             project_id,
             persona=body.persona or "",
+            name=body.name or "",
+            slug=body.slug or "",
             instructions=body.instructions or "",
             capabilities=list(body.capabilities or []),
             memory_scope=body.memory_scope or "project",
@@ -529,6 +531,8 @@ def create_app() -> FastAPI:
         require_project_owner(conn, _mate_project(conn, teammate_id), principal)
         updates: dict[str, Any] = {
             "persona": body.get("persona"),
+            **({"name": body.get("name")} if "name" in body else {}),
+            **({"slug": body.get("slug")} if "slug" in body else {}),
             "instructions": body.get("instructions"),
             "capabilities": body.get("capabilities"),
             "memory_scope": body.get("memory_scope"),
@@ -3325,19 +3329,27 @@ def create_app() -> FastAPI:
         return message.model_dump(mode="json")
 
     def _prepare_chat(
-        conn: sqlite3.Connection, thread_id: str
-    ) -> tuple[Any, Any, list[dict[str, Any]], list[dict[str, Any]]]:
+        conn: sqlite3.Connection, thread_id: str, user_text: str = ""
+    ) -> tuple[Any, Any, list[dict[str, Any]], list[dict[str, Any]], Any]:
+        """Resolve thread, provider, provider messages, provenance, speaker.
+
+        ``user_text`` is the message just appended; an @mention in it selects
+        which teammate answers (and whose persona becomes the system prompt).
+        """
         thread = store.get_thread(conn, thread_id)
         if thread is None:
             raise HTTPException(status_code=404, detail="thread not found")
+        speaker = chat_mod.resolve_speaker(conn, thread.project_id, user_text)
         try:
             provider = chat_mod.resolve_chat_provider(conn, thread.project_id, thread)
-            messages, provenance = chat_mod.build_messages(conn, thread.project_id, thread)
+            messages, provenance = chat_mod.build_messages(
+                conn, thread.project_id, thread, speaker=speaker
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except store.MemoryReadError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
-        return thread, provider, messages, provenance
+        return thread, provider, messages, provenance, speaker
 
     def _chat_error_to_http(exc: Exception) -> HTTPException:
         # Chat maps every failure to a status: unknowns are an upstream fault
@@ -3539,7 +3551,9 @@ def create_app() -> FastAPI:
         if not content.strip():
             raise HTTPException(status_code=400, detail="content is required")
         store.append_message(conn, thread_id, "user", content)
-        thread, provider, messages, provenance = _prepare_chat(conn, thread_id)
+        thread, provider, messages, provenance, speaker = _prepare_chat(
+            conn, thread_id, content
+        )
         _ = thread
         try:
             mode = str(body.get("mode", "chat") or "chat")
@@ -3549,7 +3563,10 @@ def create_app() -> FastAPI:
             )
         except Exception as exc:
             raise _chat_error_to_http(exc) from exc
-        message = store.append_message(conn, thread_id, "assistant", text, parts=parts)
+        message = store.append_message(
+            conn, thread_id, "assistant", text, parts=parts,
+            teammate_id=speaker.id if speaker else "",
+        )
         for part in parts or []:
             if isinstance(part, dict) and part.get("type") == "report" and part.get("report_id"):
                 try:
@@ -3579,7 +3596,9 @@ def create_app() -> FastAPI:
         if not content.strip():
             raise HTTPException(status_code=400, detail="content is required")
         store.append_message(conn, thread_id, "user", content)
-        thread, provider, messages, provenance = _prepare_chat(conn, thread_id)
+        thread, provider, messages, provenance, speaker = _prepare_chat(
+            conn, thread_id, content
+        )
         _ = (thread, provenance)
 
         def generate() -> Any:
@@ -3587,6 +3606,10 @@ def create_app() -> FastAPI:
 
             text_parts: list[str] = []
             parts: list[dict[str, Any]] = []
+            # Name the speaker up front so the streaming bubble can show the
+            # teammate's face and name while the reply is still arriving.
+            if speaker is not None:
+                yield f"data: {_json.dumps({'kind': 'speaker', 'teammate_id': speaker.id, 'name': speaker.name or speaker.slug})}\n\n"
             # The mock provider answers with canned text and executes nothing;
             # the interface is told, so it can label the reply.
             if provider and provider.kind == ProviderKind.MOCK:
@@ -3610,7 +3633,10 @@ def create_app() -> FastAPI:
                 yield "data: [DONE]\n\n"
                 return
             full = "".join(text_parts)
-            message = store.append_message(conn, thread_id, "assistant", full or "(empty reply)", parts=parts)
+            message = store.append_message(
+                conn, thread_id, "assistant", full or "(empty reply)", parts=parts,
+                teammate_id=speaker.id if speaker else "",
+            )
             for part in parts or []:
                 if isinstance(part, dict) and part.get("type") == "report" and part.get("report_id"):
                     try:

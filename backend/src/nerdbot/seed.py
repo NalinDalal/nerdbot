@@ -44,13 +44,22 @@ def seed_teammates(conn, project_id):
     existing = {m.slug: m for m in store.list_teammates(conn, project_id) if m.slug}
     for entry in load_seed():
         slug = str(entry.get("slug", "")).strip()
-        if not slug or slug in existing:
+        if not slug:
+            continue
+        name = str(entry.get("name", "")).strip()
+        if slug in existing:
+            # Rows created before names existed carry only the slug; the seed
+            # owns that slug, so it fills in the display name it defines.
+            mate = existing[slug]
+            if name and not mate.name:
+                store.update_teammate(conn, mate.id, name=name)
             continue
         permissions = list(entry.get("permissions") or [])
         mate = store.create_teammate(
             conn,
             project_id,
             slug=slug,
+            name=name,
             persona=str(entry.get("persona", "")),
             instructions=str(entry.get("instructions", "")),
             permissions=permissions,

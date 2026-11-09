@@ -6,6 +6,7 @@ import { TeamView } from "./team-view";
 import type { ChatMessage, ChatThread, Plan, Provider, Project, ProjectCounts, Teammate } from "./types";
 import { useWorkspaceSummary } from "./views-home";
 import { Markdown } from "./markdown";
+import { insertMention, mentionHandle, splitMentions } from "./mentions";
 import { explainRunError } from "./explainRunError";
 import { providerIsUsable, usableProviders } from "./readiness";
 import {
@@ -719,11 +720,35 @@ function ThreadPane({
   const [planBusy, setPlanBusy] = useState(false);
   const [contextPanel, setContextPanel] = useState<"files" | "bots" | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<Array<{ name: string; content: string }>>([]);
+  const [mates, setMates] = useState<Teammate[]>([]);
+  // Speaker announced by the stream's first event, so the in-flight bubble
+  // already carries the teammate's face and name while the reply arrives.
+  const [streamSpeaker, setStreamSpeaker] = useState<{
+    teammate_id: string;
+    name: string;
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const providerId = view.data?.thread.provider_id ?? "__default__";
+
+  useEffect(() => {
+    api
+      .listTeammates(projectId)
+      .then((res: any) => setMates((res.teammates || []) as Teammate[]))
+      .catch(() => setMates([]));
+  }, [projectId]);
+
+  const mateOf = (teammateId?: string): Teammate | null =>
+    (teammateId && mates.find((m) => m.id === teammateId)) || null;
+
+  // Name + face to hang on an assistant message; null = the default bot.
+  const speakerFor = (teammateId?: string) => {
+    const mate = mateOf(teammateId);
+    return mate ? { name: mate.name || mate.slug || "teammate", face: mate.face } : null;
+  };
 
   /* Stick to the newest message while streaming. */
   useEffect(() => {
@@ -765,6 +790,7 @@ function ThreadPane({
     abortRef.current = controller;
     setBusy(true);
     setStreaming("");
+    setStreamSpeaker(null);
     setRetryFrom(null);
     let stopped = false;
     try {
@@ -781,7 +807,10 @@ function ThreadPane({
         setStreamParts([]);
         await api.sendChatStream(threadId, fullContent, (chunk) => {
           setStreaming((prev) => prev + chunk);
-        }, (status) => setStreamStatus(status), (parts) => setStreamParts(parts), mode, { signal: controller.signal });
+        }, (status) => setStreamStatus(status), (parts) => setStreamParts(parts), mode, {
+          signal: controller.signal,
+          onSpeaker: setStreamSpeaker,
+        });
       } else {
         await api.sendChat(threadId, fullContent, mode);
       }
@@ -798,7 +827,7 @@ function ThreadPane({
     } finally {
       abortRef.current = null;
       setBusy(false);
-      if (!stopped) { setStreaming(""); setStreamStatus(""); setStreamParts([]); }
+      if (!stopped) { setStreaming(""); setStreamStatus(""); setStreamParts([]); setStreamSpeaker(null); }
     }
   };
 
@@ -814,6 +843,7 @@ function ThreadPane({
     abortRef.current = controller;
     setBusy(true);
     setStreaming("");
+    setStreamSpeaker(null);
     let stopped = false;
     try {
       const content =
@@ -823,7 +853,10 @@ function ThreadPane({
         setStreamParts([]);
         await api.sendChatStream(threadId, content, (chunk) => {
           setStreaming((prev) => prev + chunk);
-        }, (status) => setStreamStatus(status), (parts) => setStreamParts(parts), mode, { signal: controller.signal });
+        }, (status) => setStreamStatus(status), (parts) => setStreamParts(parts), mode, {
+          signal: controller.signal,
+          onSpeaker: setStreamSpeaker,
+        });
       } else {
         await api.sendChat(threadId, content, mode);
       }
@@ -840,7 +873,7 @@ function ThreadPane({
     } finally {
       abortRef.current = null;
       setBusy(false);
-      if (!stopped) { setStreaming(""); setStreamStatus(""); setStreamParts([]); }
+      if (!stopped) { setStreaming(""); setStreamStatus(""); setStreamParts([]); setStreamSpeaker(null); }
     }
   };
 
@@ -918,7 +951,15 @@ function ThreadPane({
     });
   };
 
-  const handleBotSelect = (teammateId: string) => {
+  const handleBotSelect = (mate: Teammate) => {
+    // Mention, don't navigate: picking a teammate here addresses a reply to
+    // it, so the handle goes into the composer and the panel closes.
+    setContextPanel(null);
+    setDraft((prev) => insertMention(prev, mentionHandle(mate)));
+    requestAnimationFrame(() => composerRef.current?.focus());
+  };
+
+  const handleBotOpen = (teammateId: string) => {
     setContextPanel(null);
     navigate(`/bot/${teammateId}`);
   };
@@ -1039,6 +1080,7 @@ function ThreadPane({
                   message={message}
                   parts={message.parts}
                   projectId={projectId}
+                  speaker={speakerFor(message.teammate_id)}
                   onPlanApproved={(id) => onPlanApproved?.(id)}
                   onCreateTask={async (proposal) => {
                     try {
@@ -1072,6 +1114,14 @@ function ThreadPane({
                     created_at: "",
                   }}
                   streaming
+                  speaker={
+                    streamSpeaker
+                      ? {
+                          name: streamSpeaker.name || "nerdbot",
+                          face: mateOf(streamSpeaker.teammate_id)?.face,
+                        }
+                      : null
+                  }
                   parts={streamParts}
                 />
               )}
@@ -1141,6 +1191,7 @@ function ThreadPane({
               />
             </div>
             <textarea
+              ref={composerRef}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
@@ -1217,6 +1268,7 @@ function ThreadPane({
           projectId={projectId}
           onClose={() => setContextPanel(null)}
           onSelectBot={handleBotSelect}
+          onOpenBot={handleBotOpen}
           onAttachFile={(file) => {
             setAttachedFiles((prev) => [...prev, file]);
             setContextPanel(null);
@@ -1444,7 +1496,40 @@ function PlanCard({ part, threadId, projectId, onApproved }: { part: any; thread
   );
 }
 
-function Message({ message, streaming = false, parts, projectId, onCreateTask, onPlanApproved }: { message: ChatMessage; streaming?: boolean; parts?: any[]; projectId?: string; onCreateTask?: (proposal: any) => void; onPlanApproved?: (id: string) => void }) {
+/** Split text on @handles so a mention reads as an address, not prose. */
+function renderMentions(text: string) {
+  return splitMentions(text).map((chunk, i) =>
+    chunk.mention ? (
+      <span
+        key={i}
+        className="rounded bg-[var(--accent-dim)] px-0.5 font-medium text-[var(--accent)]"
+      >
+        {chunk.text}
+      </span>
+    ) : (
+      <span key={i}>{chunk.text}</span>
+    ),
+  );
+}
+
+function Message({
+  message,
+  streaming = false,
+  parts,
+  projectId,
+  speaker,
+  onCreateTask,
+  onPlanApproved,
+}: {
+  message: ChatMessage;
+  streaming?: boolean;
+  parts?: any[];
+  projectId?: string;
+  /** Who is answering: name + face, or null for the default bot. */
+  speaker?: { name: string; face?: Teammate["face"] } | null;
+  onCreateTask?: (proposal: any) => void;
+  onPlanApproved?: (id: string) => void;
+}) {
   const isUser = message.role === "user";
   const [expanded, setExpanded] = useState(false);
   // Long assistant replies (e.g. a model dumping a whole file) flood the
@@ -1465,7 +1550,7 @@ function Message({ message, streaming = false, parts, projectId, onCreateTask, o
         } ${streaming ? "animate-pulse" : ""}`}
       >
         {isUser ? (
-          <div className="whitespace-pre-wrap break-words">{message.content}</div>
+          <div className="whitespace-pre-wrap break-words">{renderMentions(message.content)}</div>
         ) : (
           <>
             <Markdown text={displayContent} />
@@ -1501,8 +1586,9 @@ function Message({ message, streaming = false, parts, projectId, onCreateTask, o
           ))}
         </div>
       ) : null}
-      <div className={`mono mt-1 text-step--2 text-[var(--faint)] ${isUser ? "mr-1" : "ml-1"}`}>
-        {isUser ? "you" : "nerdbot"}
+      <div className={`mono mt-1 flex items-center gap-1.5 text-step--2 text-[var(--faint)] ${isUser ? "mr-1" : "ml-1"}`}>
+        {!isUser && speaker?.face ? <BotFace face={speaker.face} size={16} /> : null}
+        <span>{isUser ? "you" : speaker?.name || "nerdbot"}</span>
         {streaming ? " · streaming…" : ""}
       </div>
     </div>
@@ -1706,12 +1792,16 @@ function ContextPanel({
   projectId,
   onClose,
   onSelectBot,
+  onOpenBot,
   onAttachFile,
 }: {
   type: "files" | "bots";
   projectId: string;
   onClose: () => void;
-  onSelectBot: (teammateId: string) => void;
+  /** Insert the teammate's @mention into the composer. */
+  onSelectBot: (mate: Teammate) => void;
+  /** Leave the conversation to open the teammate's own page. */
+  onOpenBot: (teammateId: string) => void;
   onAttachFile: (file: { name: string; content: string }) => void;
 }) {
   const bots = useAsync(
@@ -1790,16 +1880,21 @@ function ContextPanel({
                     <BotFace face={mate.face} size={32} />
                     <div className="min-w-0">
                       <div className="truncate text-step--1 font-medium text-[var(--text)]">
-                        {mate.persona || mate.id}
+                        {mate.name || mate.slug || mate.id}
                       </div>
                       <div className="truncate text-step--2 text-[var(--faint)]">
-                        {mate.instructions?.slice(0, 80) || ""}
+                        {mate.persona?.slice(0, 80) || mate.instructions?.slice(0, 80) || ""}
                       </div>
                     </div>
                   </div>
-                  <Button variant="primary" onClick={() => onSelectBot(mate.id)}>
-                    Open
-                  </Button>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <Button variant="primary" onClick={() => onSelectBot(mate)}>
+                      Mention
+                    </Button>
+                    <Button variant="ghost" onClick={() => onOpenBot(mate.id)}>
+                      Open
+                    </Button>
+                  </div>
                 </div>
               ))}
             </div>

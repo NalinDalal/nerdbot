@@ -10,6 +10,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import uuid
 from collections.abc import Iterator
@@ -69,7 +70,8 @@ CREATE TABLE IF NOT EXISTS projects (
 );
 CREATE TABLE IF NOT EXISTS teammates (
   id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
-  slug TEXT NOT NULL DEFAULT '', persona TEXT NOT NULL DEFAULT '', instructions TEXT NOT NULL DEFAULT '',
+  slug TEXT NOT NULL DEFAULT '', name TEXT NOT NULL DEFAULT '',
+  persona TEXT NOT NULL DEFAULT '', instructions TEXT NOT NULL DEFAULT '',
   capabilities TEXT NOT NULL DEFAULT '[]', memory_scope TEXT NOT NULL DEFAULT 'teammate',
   permissions TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'active',
   tool_policy TEXT NOT NULL DEFAULT '{}', provider_id TEXT, created_at TEXT NOT NULL DEFAULT '',
@@ -184,7 +186,8 @@ CREATE TABLE IF NOT EXISTS chat_threads (
 CREATE TABLE IF NOT EXISTS chat_messages (
   id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES chat_threads(id),
   role TEXT NOT NULL DEFAULT 'user', content TEXT NOT NULL DEFAULT '',
-  parts TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL
+  parts TEXT NOT NULL DEFAULT '[]', teammate_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS objectives (
   id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES chat_threads(id),
@@ -594,6 +597,13 @@ _PHASE27_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "tasks": [("objective_id", "TEXT NOT NULL DEFAULT ''"), ("assigned_by", "TEXT NOT NULL DEFAULT ''")],
 }
 
+_PHASE28_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    # Named-teammate chat: a display name for the teammate, and which
+    # teammate authored each assistant message (empty = the default bot).
+    "teammates": [("name", "TEXT NOT NULL DEFAULT ''")],
+    "chat_messages": [("teammate_id", "TEXT NOT NULL DEFAULT ''")],
+}
+
 
 _PHASE20_COLUMNS: dict[str, list[tuple[str, str]]] = {
     # Bot persona files (ai-teammates model): a bot's identity, its active
@@ -626,7 +636,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
                   _PHASE14_COLUMNS, _PHASE15_COLUMNS, _PHASE16_COLUMNS, _PHASE17_COLUMNS,
                   _PHASE18_COLUMNS, _PHASE19_COLUMNS, _PHASE20_COLUMNS,
                   _PHASE21_COLUMNS, _PHASE22_COLUMNS, _PHASE23_COLUMNS, _PHASE24_COLUMNS,
-                  _PHASE25_COLUMNS, _PHASE26_COLUMNS, _PHASE27_COLUMNS):
+                  _PHASE25_COLUMNS, _PHASE26_COLUMNS, _PHASE27_COLUMNS, _PHASE28_COLUMNS):
         for table, columns in phase.items():
             phases.setdefault(table, []).extend(columns)
     for table, columns in phases.items():
@@ -637,6 +647,43 @@ def _migrate(conn: sqlite3.Connection) -> None:
     conn.commit()
     _backfill_blocked_reasons(conn)
     _encrypt_legacy_provider_secrets(conn)
+    _backfill_teammate_names(conn)
+
+
+def _backfill_teammate_names(conn: sqlite3.Connection) -> None:
+    """Name the teammates that predate the ``name`` column.
+
+    Older rows kept their label in ``persona`` ("ceo") and had no mention
+    handle at all, so chat could neither show a face and name next to a
+    reply nor address them with ``@``. A bare label — short, no spaces —
+    becomes the display name and yields a slug; a persona sentence stays a
+    persona, since it would read badly as a name, and that row keeps using
+    its id as a handle. Idempotent: rows that already have both are skipped.
+    """
+    rows = conn.execute(
+        "SELECT id, project_id, slug, name, persona FROM teammates"
+        " WHERE name = '' OR slug = ''"
+    ).fetchall()
+    changed = False
+    for row in rows:
+        name = row["name"]
+        if not name:
+            persona = (row["persona"] or "").strip()
+            if persona and len(persona) <= 40 and not any(ch.isspace() for ch in persona):
+                name = persona
+        slug = row["slug"]
+        if not slug and name:
+            slug = slugify(name)
+            if slug:
+                slug = _free_slug(conn, row["project_id"], slug, exclude_id=row["id"])
+        if name != row["name"] or slug != row["slug"]:
+            conn.execute(
+                "UPDATE teammates SET name = ?, slug = ? WHERE id = ?",
+                (name, slug, row["id"]),
+            )
+            changed = True
+    if changed:
+        conn.commit()
 
 
 def _backfill_blocked_reasons(conn: sqlite3.Connection) -> None:
@@ -802,10 +849,42 @@ def list_projects(conn: sqlite3.Connection, owner: str | None = None) -> list[Pr
 # -- Teammates --------------------------------------------------------------
 
 
+def slugify(value: str) -> str:
+    """Turn a display name into the @handle used to mention it.
+
+    "Personal Assistant" becomes "personal-assistant". Anything that is not
+    a letter, digit, underscore or hyphen collapses into one hyphen, the
+    ends trim, the result is lowercased and capped at 64 characters — the
+    full grammar chat's mention regex accepts.
+    """
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", (value or "").strip()).strip("-").lower()
+    return slug[:64]
+
+
+def _free_slug(conn: sqlite3.Connection, project_id: str, slug: str, exclude_id: str = "") -> str:
+    """First unused slug in this project: ``slug``, ``slug-2``, ``slug-3``…
+
+    Mentions address a teammate by slug, so two teammates sharing one would
+    make ``@handle`` ambiguous — the message would reach whichever teammate
+    the scan happens to find first.
+    """
+    rows = conn.execute(
+        "SELECT id, slug FROM teammates WHERE project_id = ?", (project_id,)
+    ).fetchall()
+    taken = {r["slug"] for r in rows if r["slug"] and r["id"] != exclude_id}
+    if slug not in taken:
+        return slug
+    n = 2
+    while f"{slug}-{n}" in taken:
+        n += 1
+    return f"{slug}-{n}"
+
+
 def create_teammate(
     conn: sqlite3.Connection,
     project_id: str,
     slug: str = "",
+    name: str = "",
     persona: str = "",
     instructions: str = "",
     capabilities: list[str] | None = None,
@@ -818,10 +897,13 @@ def create_teammate(
     unknown = permissions_mod.unknown_permissions(permissions or [])
     if unknown:
         raise ValueError(f"unknown permission(s): {unknown}")
+    if slug:
+        slug = _free_slug(conn, project_id, slug)
     mate = Teammate(
         id=new_id("tm"),
         project_id=project_id,
         slug=slug,
+        name=name,
         persona=persona,
         instructions=instructions,
         capabilities=capabilities or [],
@@ -830,13 +912,14 @@ def create_teammate(
         face=BotFace(**faces_mod.merge_face(face or {})),
     )
     conn.execute(
-        "INSERT INTO teammates (id, project_id, slug, persona, instructions, capabilities,"
+        "INSERT INTO teammates (id, project_id, slug, name, persona, instructions, capabilities,"
         " memory_scope, permissions, face, soul, goals, wisdom, persona_version)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             mate.id,
             mate.project_id,
             mate.slug,
+            mate.name,
             mate.persona,
             mate.instructions,
             json.dumps(mate.capabilities),
@@ -860,6 +943,7 @@ def _teammate_from_row(row: sqlite3.Row) -> Teammate:
         id=row["id"],
         project_id=row["project_id"],
         slug=row["slug"] if "slug" in keys else "",
+        name=row["name"] if "name" in keys and row["name"] else "",
         persona=row["persona"],
         instructions=row["instructions"],
         capabilities=json.loads(row["capabilities"]),
@@ -932,6 +1016,8 @@ def update_teammate(
     conn: sqlite3.Connection,
     teammate_id: str,
     persona: str | None = None,
+    name: str | None = None,
+    slug: str | None = None,
     instructions: str | None = None,
     capabilities: list[str] | None = None,
     memory_scope: str | None = None,
@@ -966,6 +1052,10 @@ def update_teammate(
             raise ValueError(f"unknown permission(s) in tool_policy: {unknown}")
     if persona is not None:
         mate.persona = persona
+    if name is not None:
+        mate.name = name
+    if slug is not None:
+        mate.slug = _free_slug(conn, mate.project_id, slug, exclude_id=mate.id) if slug else ""
     if instructions is not None:
         mate.instructions = instructions
     if capabilities is not None:
@@ -1012,13 +1102,16 @@ def update_teammate(
             raise ValueError(f"provider {provider_id} is not active")
         mate.provider_id = provider_id
     conn.execute(
-        "UPDATE teammates SET persona = ?, instructions = ?, capabilities = ?,"
+        "UPDATE teammates SET persona = ?, name = ?, slug = ?, instructions = ?,"
+        " capabilities = ?,"
         " memory_scope = ?, permissions = ?, tool_policy = ?, provider_id = ?, model = ?,"
         " temperature = ?, max_tokens = ?, context_limit = ?, fallback_provider_id = ?,"
         " fallback_model = ?, face = ?, soul = ?, goals = ?, wisdom = ?, persona_version = ?"
         " WHERE id = ?",
         (
             mate.persona,
+            mate.name,
+            mate.slug,
             mate.instructions,
             json.dumps(mate.capabilities),
             mate.memory_scope,
@@ -4474,6 +4567,7 @@ def _message_from_row(row: sqlite3.Row) -> ChatMessage:
         role=row["role"] or "user",
         content=row["content"] or "",
         parts=parts,
+        teammate_id=row["teammate_id"] if "teammate_id" in keys else "",
         created_at=datetime.fromisoformat(row["created_at"]),
     )
 
@@ -4589,7 +4683,7 @@ def list_thread_summaries(
 
 def append_message(
     conn: sqlite3.Connection, thread_id: str, role: str, content: str,
-    parts: list[dict[str, Any]] | None = None,
+    parts: list[dict[str, Any]] | None = None, teammate_id: str = "",
 ) -> ChatMessage:
     thread = get_thread(conn, thread_id)
     if thread is None:
@@ -4600,13 +4694,14 @@ def append_message(
         raise ValueError("message content is required")
     message = ChatMessage(
         id=new_id("msg"), thread_id=thread_id, role=role, content=content,
-        parts=parts or [],
+        parts=parts or [], teammate_id=teammate_id,
     )
     conn.execute(
-        "INSERT INTO chat_messages (id, thread_id, role, content, parts, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO chat_messages (id, thread_id, role, content, parts, teammate_id, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
         (message.id, message.thread_id, message.role, message.content,
-         json.dumps(message.parts), message.created_at.isoformat()),
+         json.dumps(message.parts), message.teammate_id,
+         message.created_at.isoformat()),
     )
     conn.commit()
     return message

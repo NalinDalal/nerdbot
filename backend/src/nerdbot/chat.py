@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import sqlite3
 from collections.abc import Iterator
 from typing import Any
@@ -25,6 +26,7 @@ from .models import (
     ProviderKind,
     ProviderStatus,
     TaskStatus,
+    Teammate,
     TeammateStatus,
 )
 from .providers import (
@@ -80,6 +82,64 @@ def _ceo_persona_prompt(conn: sqlite3.Connection, project_id: str) -> str:
     return ""
 
 
+# A mention is "@handle": letters, digits, underscore and hyphen, so it can
+# never swallow punctuation that follows ("@ceo," is "@ceo").
+MENTION_RE = re.compile(r"@([A-Za-z0-9][A-Za-z0-9_-]{0,63})")
+
+
+def resolve_speaker(
+    conn: sqlite3.Connection, project_id: str, text: str
+) -> Teammate | None:
+    """Resolve the first @mention in a message to a teammate of this project.
+
+    Slug wins (it is the handle the teammate picker inserts), then the
+    display name, both case-insensitively. Only active teammates can be
+    addressed. An unknown or misspelled handle resolves to None rather than
+    failing the message: chat then falls back to the default bot, so a typo
+    costs an identity, never a reply.
+    """
+    if not text:
+        return None
+    try:
+        mates = store.list_teammates(conn, project_id)
+    except Exception:
+        return None
+    active = [m for m in mates if m.status == TeammateStatus.ACTIVE]
+    for token in MENTION_RE.findall(text):
+        needle = token.casefold()
+        for mate in active:
+            if mate.slug and mate.slug.casefold() == needle:
+                return mate
+        for mate in active:
+            if mate.name and mate.name.casefold() == needle:
+                return mate
+        # Last resort: the id is a valid handle and the picker falls back to
+        # it when a teammate has neither slug nor a one-word name.
+        for mate in active:
+            if mate.id.casefold() == needle:
+                return mate
+    return None
+
+
+def speaker_prompt(mate: Teammate) -> str:
+    """Build the system prompt that makes the reply come *from* this teammate.
+
+    Identity first (name + role), then the persona, then instructions. The
+    prompt carries no permissions — who may do what stays in gates.py, so a
+    teammate's persona can never widen its own authority.
+    """
+    display = mate.name or mate.slug or "a teammate"
+    parts = [
+        f"You are {display}, a teammate in this workspace. "
+        "Answer as yourself, in your own voice, and keep replies concise."
+    ]
+    if mate.persona:
+        parts.append(mate.persona)
+    if mate.instructions:
+        parts.append("Instructions: " + mate.instructions)
+    return "\n\n".join(parts)
+
+
 def resolve_chat_provider(
     conn: sqlite3.Connection, project_id: str, thread: ChatThread | None = None
 ) -> Provider | None:
@@ -127,17 +187,25 @@ def recall_context(conn: sqlite3.Connection, project_id: str) -> list[MemoryEntr
 
 
 def build_messages(
-    conn: sqlite3.Connection, project_id: str, thread: ChatThread
+    conn: sqlite3.Connection,
+    project_id: str,
+    thread: ChatThread,
+    speaker: Teammate | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Assemble provider messages + provenance records for recalled memory.
 
+    The first system message carries the speaker: a named teammate when the
+    user @mentioned one, else the CEO persona, else the default prompt.
     Project context (name, task and teammate counts) is prepended so the
     assistant can answer questions about the workspace instead of claiming it
     cannot see it. Recalled memory and thread summaries follow as untrusted
     context with provenance.
     """
-    ceo_prompt = _ceo_persona_prompt(conn, project_id)
-    base_prompt = ceo_prompt if ceo_prompt else SYSTEM_PROMPT
+    if speaker is not None:
+        base_prompt = speaker_prompt(speaker)
+    else:
+        ceo_prompt = _ceo_persona_prompt(conn, project_id)
+        base_prompt = ceo_prompt if ceo_prompt else SYSTEM_PROMPT
     messages: list[dict[str, Any]] = [{"role": "system", "content": base_prompt}]
     project_ctx = _project_context(conn, project_id)
     if project_ctx:

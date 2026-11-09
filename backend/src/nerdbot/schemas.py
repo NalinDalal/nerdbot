@@ -84,6 +84,10 @@ class TerminalResize(_Body):
 
 class TeammateCreate(_Body):
     persona: str | None = None
+    # Display identity: ``name`` is what chat shows next to the face, ``slug``
+    # is the @mention handle (derived from the name when omitted).
+    name: str | None = None
+    slug: str | None = None
     instructions: str | None = None
     capabilities: list[str] | None = None
     memory_scope: str | None = None
@@ -106,6 +110,8 @@ class TeammateUpdate(_Body):
     """Partial update: only the fields the caller actually sent are applied."""
 
     persona: str | None = None
+    name: str | None = None
+    slug: str | None = None
     instructions: str | None = None
     capabilities: list[str] | None = None
     memory_scope: str | None = None

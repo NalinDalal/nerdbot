@@ -598,7 +598,11 @@ export const api = {
     onStatus?: (text: string) => void,
     onParts?: (parts: any[]) => void,
     mode?: string,
-    opts?: { signal?: AbortSignal },
+    opts?: {
+      signal?: AbortSignal;
+      /** Which teammate the backend says is answering this reply. */
+      onSpeaker?: (speaker: { teammate_id: string; name: string }) => void;
+    },
   ): Promise<string> =>
     streamChat(threadId, content, onChunk, onStatus, onParts, mode, opts),
   /** Live run execution: SSE that replays from ``after`` and closes on the
@@ -787,7 +791,10 @@ async function streamChat(
   onStatus?: (text: string) => void,
   onParts?: (parts: any[]) => void,
   mode?: string,
-  opts?: { signal?: AbortSignal },
+  opts?: {
+    signal?: AbortSignal;
+    onSpeaker?: (speaker: { teammate_id: string; name: string }) => void;
+  },
 ): Promise<string> {
   const current = getSession();
   if (!current) throw new ApiError(0, "Not connected. Enter your API token first.");
@@ -856,16 +863,38 @@ async function streamChat(
         if (!text.startsWith("data:")) continue;
         const payload = text.slice(5).trim();
         if (payload === "[DONE]") continue;
-        let data: { kind?: unknown; text?: unknown; error?: unknown; mock?: unknown; parts?: unknown };
+        let data: {
+          kind?: unknown;
+          text?: unknown;
+          error?: unknown;
+          mock?: unknown;
+          parts?: unknown;
+          teammate_id?: unknown;
+          name?: unknown;
+        };
         try {
-          data = JSON.parse(payload) as { kind?: unknown; text?: unknown; error?: unknown; mock?: unknown };
+          data = JSON.parse(payload) as {
+            kind?: unknown;
+            text?: unknown;
+            error?: unknown;
+            mock?: unknown;
+            parts?: unknown;
+            teammate_id?: unknown;
+            name?: unknown;
+          };
         } catch {
           throw new ApiError(502, "Unreadable stream payload");
         }
         if (typeof data.error === "string" && data.error) {
           throw new ApiError(res.status, data.error);
         }
-        if (data.kind === "status" && typeof data.text === "string" && data.text) {
+        if (
+          data.kind === "speaker" &&
+          typeof data.teammate_id === "string" &&
+          typeof data.name === "string"
+        ) {
+          opts?.onSpeaker?.({ teammate_id: data.teammate_id, name: data.name });
+        } else if (data.kind === "status" && typeof data.text === "string" && data.text) {
           onStatus?.(data.text);
         } else if (data.kind === "parts" && Array.isArray(data.parts)) {
           onParts?.(data.parts);

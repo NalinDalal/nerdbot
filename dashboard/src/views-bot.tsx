@@ -71,6 +71,7 @@ export function BotDetailView({
   const catalogue = usePermissionCatalogue();
   const [showEdit, setShowEdit] = useState(false);
   const [editPersona, setEditPersona] = useState("");
+  const [editName, setEditName] = useState("");
   const [editInstructions, setEditInstructions] = useState("");
   const [editProviderId, setEditProviderId] = useState("");
   const [editMemoryScope, setEditMemoryScope] = useState("project");
@@ -83,6 +84,7 @@ export function BotDetailView({
   const openEditor = () => {
     if (!mate) return;
     setEditPersona(mate.persona ?? "");
+    setEditName(mate.name ?? "");
     setEditInstructions(mate.instructions ?? "");
     setEditProviderId(mate.provider_id ?? "");
     setEditMemoryScope(mate.memory_scope || "project");
@@ -96,6 +98,7 @@ export function BotDetailView({
     try {
       await api.patchTeammate(teammateId, {
         persona: editPersona.trim(),
+        name: editName.trim(),
         instructions: editInstructions,
         provider_id: editProviderId || null,
         memory_scope: editMemoryScope,
@@ -115,6 +118,7 @@ export function BotDetailView({
     if (!mate) return;
     try {
       const copy = await api.createTeammate(mate.project_id, {
+        name: mate.name ? `${mate.name} copy` : "",
         persona: `${mate.persona || "Teammate"} copy`,
         instructions: mate.instructions,
         capabilities: mate.capabilities,
@@ -251,7 +255,7 @@ export function BotDetailView({
             animated
             follow
             state={faceStateFor(activity)}
-            label={`The face of ${mate.persona || "this bot"}`}
+            label={`The face of ${mate.name || mate.persona || "this bot"}`}
           />
           <div className="min-w-0 flex-1">
             <div className="mb-1 text-step--2 uppercase tracking-[0.16em] text-[var(--faint)]">
@@ -261,7 +265,7 @@ export function BotDetailView({
               / Teammate
             </div>
             <h1 className="text-step-1 font-semibold tracking-tight text-[var(--text)]">
-              {mate.persona || "Unnamed teammate"}
+              {mate.name || mate.persona || "Unnamed teammate"}
             </h1>
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-step--1 text-[var(--muted)]">
               <StatusDot
@@ -615,7 +619,19 @@ export function BotDetailView({
       {showEdit ? (
         <Modal title="Edit teammate" onClose={() => setShowEdit(false)}>
           <form onSubmit={saveEdit} className="flex flex-col gap-3">
-            <Field label="Persona / name">
+            <Field label="Display name (shown in chat)">
+              <input
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                placeholder="Research Analyst"
+                className={FORM_INPUT}
+              />
+              <p className="text-step--1 text-[var(--faint)]">
+                What the conversation shows next to this bot&rsquo;s face. Its
+                @mention handle follows the name when it has no slug yet.
+              </p>
+            </Field>
+            <Field label="Persona">
               <input
                 value={editPersona}
                 onChange={(e) => setEditPersona(e.target.value)}
@@ -712,8 +728,8 @@ export function BotDetailView({
         >
           <p className="text-step--1 text-[var(--text-soft)]">
             {confirmStatus === "disable"
-              ? `${mate.persona || "This teammate"} will stop receiving new work. Existing tasks and memory are kept.`
-              : `${mate.persona || "This teammate"} will be archived and hidden from active work. Existing tasks and memory are kept.`}
+              ? `${mate.name || mate.persona || "This teammate"} will stop receiving new work. Existing tasks and memory are kept.`
+              : `${mate.name || mate.persona || "This teammate"} will be archived and hidden from active work. Existing tasks and memory are kept.`}
           </p>
           <p className="mt-2 text-step--1 text-[var(--muted)]">
             This build has no re-enable action, so confirm only if you mean it.
@@ -1010,6 +1026,7 @@ export function BotsView() {
 
   // creation draft
   const [pid, setPid] = useState("");
+  const [mateName, setMateName] = useState("");
   const [persona, setPersona] = useState("");
   const [instructions, setInstructions] = useState("");
   const [providerId, setProviderId] = useState("");
@@ -1095,6 +1112,7 @@ export function BotsView() {
     }
     try {
       await api.createTeammate(p, {
+        name: mateName.trim(),
         persona: persona.trim(),
         instructions: instructions.trim(),
         capabilities: [],
@@ -1105,6 +1123,7 @@ export function BotsView() {
       });
       setShowCreate(false);
       setPid("");
+      setMateName("");
       setPersona("");
       setInstructions("");
       setProviderId("");
@@ -1179,7 +1198,7 @@ export function BotsView() {
   const filteredMates = mates.filter((mate) => {
     if (statusFilter !== "all" && mate.status !== statusFilter) return false;
     if (!needle) return true;
-    return [mate.persona, mate.instructions, projectOf(mate.project_id)]
+    return [mate.name, mate.persona, mate.instructions, projectOf(mate.project_id)]
       .filter(Boolean)
       .some((value) => String(value).toLowerCase().includes(needle));
   });
@@ -1269,7 +1288,7 @@ export function BotsView() {
                     ))}
                   </select>
                   <p className="text-step--1 text-[var(--faint)]">
-                    Prefills name and instructions. You can edit everything after.
+                    Prefills the persona and instructions. You can edit everything after.
                   </p>
                 </Field>
                 <Field label="Project (workspace)">
@@ -1287,7 +1306,19 @@ export function BotsView() {
                     ))}
                   </select>
                 </Field>
-                <Field label="Persona / name">
+                <Field label="Display name (shown in chat)">
+                  <input
+                    value={mateName}
+                    onChange={(e) => setMateName(e.target.value)}
+                    placeholder="Research Analyst"
+                    className={FORM_INPUT}
+                  />
+                  <p className="text-step--1 text-[var(--faint)]">
+                    The name chat shows next to the face, and the base of its
+                    @mention handle. Leave blank to fall back to the persona.
+                  </p>
+                </Field>
+                <Field label="Persona">
                   <input
                     value={persona}
                     onChange={(e) => setPersona(e.target.value)}
@@ -1527,7 +1558,7 @@ export function BotsView() {
                 <div className="flex items-start justify-between gap-3">
                   <BotChip
                     href={`/bot/${mate.id}`}
-                    persona={mate.persona || "Unnamed teammate"}
+                    persona={mate.name || mate.persona || "Unnamed teammate"}
                     id={mate.id}
                     status={liveStatus}
                     face={mate.face}
@@ -1600,7 +1631,7 @@ export function BotsView() {
                     className="align-top transition-colors hover:bg-[var(--surface-2)]"
                   >
                     <td className={TABLE_TD}>
-                      <BotChip href={`/bot/${mate.id}`} persona={mate.persona || "Unnamed teammate"} id={mate.id} status={liveStatus} face={mate.face} />
+                      <BotChip href={`/bot/${mate.id}`} persona={mate.name || mate.persona || "Unnamed teammate"} id={mate.id} status={liveStatus} face={mate.face} />
                       <div
                         className="mt-0.5 truncate text-step--2 text-[var(--faint)]"
                         title={`${projectOf(mate.project_id)} · ${tasks.length} tasks`}

@@ -101,6 +101,9 @@ class Teammate(BaseModel):
     id: str
     project_id: str
     slug: str = ""
+    # Display name shown next to a teammate's face in chat. Distinct from
+    # persona (the system prompt) and slug (the @mention handle).
+    name: str = ""
     persona: str = ""
     instructions: str = ""
     capabilities: list[str] = Field(default_factory=list)
@@ -309,6 +312,8 @@ class ChatMessage(BaseModel):
     role: str = "user"
     content: str = ""
     parts: list[dict[str, Any]] = Field(default_factory=list)
+    # Which teammate authored this message ("" = the default bot or the user).
+    teammate_id: str = ""
     created_at: datetime = Field(default_factory=_utcnow)
 
 

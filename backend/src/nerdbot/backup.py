@@ -230,6 +230,7 @@ _IMPORT_COLUMNS: dict[str, frozenset[str]] = {
             "id",
             "project_id",
             "slug",
+            "name",
             "persona",
             "instructions",
             "capabilities",
@@ -337,7 +338,7 @@ _IMPORT_COLUMNS: dict[str, frozenset[str]] = {
         {"id", "project_id", "title", "provider_id", "summary", "tainted", "created_at"}
     ),
     "chat_messages": frozenset(
-        {"id", "thread_id", "role", "content", "parts", "created_at"}
+        {"id", "thread_id", "role", "content", "parts", "teammate_id", "created_at"}
     ),
     "reports": frozenset(
         {"id", "thread_id", "message_id", "title", "markdown", "created_at"}

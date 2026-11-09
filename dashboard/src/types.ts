@@ -31,6 +31,8 @@ export interface Teammate {
   id: string;
   project_id: string;
   slug: string;
+  /** Display name shown next to the face; "" when never set. */
+  name: string;
   persona: string;
   instructions: string;
   capabilities: string[];
@@ -415,6 +417,8 @@ export interface ChatMessage {
   role: string;
   content: string;
   parts?: Array<{ type: string; [key: string]: any }>;
+  /** Teammate that authored this reply ("" = default bot or the user). */
+  teammate_id?: string;
   created_at: string;
 }
 
