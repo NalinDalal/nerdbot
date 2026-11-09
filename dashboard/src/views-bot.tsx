@@ -246,7 +246,7 @@ export function BotDetailView({
           }}
           className="mb-3 inline-flex items-center gap-1 text-step--1 text-[var(--muted)] transition-colors hover:text-[var(--text)]"
         >
-          <span aria-hidden>←</span> Teammates
+          <span aria-hidden>←</span> Team
         </button>
         <div className="flex flex-wrap items-start gap-4">
           <BotAvatar
@@ -1237,8 +1237,9 @@ export function BotsView() {
   return (
     <Page>
       <PageHeader
+        eyebrow="Your team"
         title="Teammates"
-        description="Persistent AI teammates. Each one owns its work, model, permissions and memory."
+        description="The AI teammates working in your workspaces. Each one has a role, model, permissions, and memory."
         actions={
           <>
             <Button variant="primary" onClick={() => setShowCreate(true)}>
@@ -1250,8 +1251,8 @@ export function BotsView() {
       />
 
       <div className="mb-5 flex flex-wrap items-center gap-1.5">
-        <Badge variant={mates.length > 0 ? "info" : "neutral"}>{mates.length} teammates</Badge>
-        <Badge variant={busyBots > 0 ? "ok" : "neutral"}>{busyBots} running</Badge>
+        <Badge variant={mates.length > 0 ? "info" : "neutral"}>{mates.length} teammate{mates.length === 1 ? "" : "s"}</Badge>
+        <Badge variant={busyBots > 0 ? "ok" : "neutral"}>{busyBots} working now</Badge>
       </div>
 
       {showCreate ? (
@@ -1723,7 +1724,7 @@ export function BotsView() {
               Create your first teammate
             </Button>
           }
-          hint="Teammates are persistent AI agents. Give one a persona, attach a model, and assign it tasks. It runs work in an isolated workspace and keeps its own memory."
+          hint="Create a teammate with a role and model, then chat with them or assign work from a task."
         />
       )}
 

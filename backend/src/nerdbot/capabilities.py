@@ -92,12 +92,17 @@ CAPABILITIES: list[dict[str, Any]] = [
     {
         "id": "tools.fetch_url",
         "status": "ready",
-        "description": "SSRF-guarded public-URL fetch for the agent loop.",
+        "description": "SSRF-guarded public-URL fetch with metadata extraction for chat and research.",
     },
     {
         "id": "tools.web_search",
         "status": "ready",
-        "description": "Credential-free DuckDuckGo Lite search for the agent loop; bounded results; rides the SSRF-pinned fetch transport.",
+        "description": "Configurable web search (DuckDuckGo default; optional Tavily/Serper/Brave when keys are configured). Normalized, bounded results via SSRF-safe transport where applicable.",
+    },
+    {
+        "id": "research.jobs",
+        "status": "ready",
+        "description": "Background deep research jobs: plan/search/read/synthesize cited reports, persisted events, cancellable/retryable, saved to Library/thread.",
     },
     {
         "id": "backup.manifest",

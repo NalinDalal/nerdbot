@@ -1,21 +1,21 @@
-"""Credential-free web search for the agent loop (DuckDuckGo Lite).
+"""Web search for chat and research.
 
-Uses ``fetch.fetch_url_text`` — the SSRF-pinned, budgeted, credential-free
-transport — to GET ``https://lite.duckduckgo.com/lite/?q=<query>`` and
-parses the HTML table for a bounded number of results.
+Phase 1: provider layer with normalized results, config-driven backends,
+timeouts/limits/dedupe, and safe error mapping.
 
-Clean-room implementation written from the behavior contract only.
-Structure assumptions (defensive): one ``<a rel="nofollow">`` per result
-row, optional snippet in ``<td class="result-snippet">``, and an optional
-``//duckduckgo.com/l/?uddg=<encoded>`` URL wrapper. A page that parses to
-no anchors is returned as zero results (a legitimate empty search), never
-as a fabricated success.
+Default provider is DuckDuckGo Lite (credential-free) and preserves the
+original behavior/API used by agent tools and tests. Optional API providers
+(Tavily, Serper, Brave Search) are enabled when their API keys are present
+in config or environment variables.
 """
 
 from __future__ import annotations
 
 import json
+import os
+from dataclasses import dataclass
 from html.parser import HTMLParser
+from typing import Any, TypedDict
 from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
 
 import httpx
@@ -27,6 +27,7 @@ MAX_QUERY_CHARS = 400
 DEFAULT_MAX_RESULTS = 5
 HARD_MAX_RESULTS = 10
 SEARCH_MAX_BYTES = 512_000
+DEFAULT_TIMEOUT_S = 15.0
 
 
 class SearchProviderError(ValueError):
@@ -37,15 +38,126 @@ class SearchProviderError(ValueError):
     """
 
 
+class SearchResult(TypedDict, total=False):
+    title: str
+    url: str
+    snippet: str
+    source: str
+    rank: int
+
+
+@dataclass
+class SearchConfig:
+    provider: str = "duckduckgo"
+    max_results: int = DEFAULT_MAX_RESULTS
+    timeout_s: float = DEFAULT_TIMEOUT_S
+    tavily_api_key: str = ""
+    serper_api_key: str = ""
+    brave_api_key: str = ""
+
+    @classmethod
+    def from_env(cls, **overrides: Any) -> "SearchConfig":
+        provider = str(
+            overrides.get("provider")
+            or os.environ.get("NERDBOT_SEARCH_PROVIDER")
+            or "duckduckgo"
+        ).strip().lower()
+        return cls(
+            provider=provider,
+            max_results=int(overrides.get("max_results") or DEFAULT_MAX_RESULTS),
+            timeout_s=float(overrides.get("timeout_s") or DEFAULT_TIMEOUT_S),
+            tavily_api_key=str(
+                overrides.get("tavily_api_key") or os.environ.get("TAVILY_API_KEY") or ""
+            ),
+            serper_api_key=str(
+                overrides.get("serper_api_key") or os.environ.get("SERPER_API_KEY") or ""
+            ),
+            brave_api_key=str(
+                overrides.get("brave_api_key")
+                or os.environ.get("BRAVE_SEARCH_API_KEY")
+                or ""
+            ),
+        )
+
+
+def available_providers(config: SearchConfig | None = None) -> list[dict[str, Any]]:
+    """Report configured search backends (honest; no secret values)."""
+    cfg = config or SearchConfig.from_env()
+    providers = [
+        {
+            "id": "duckduckgo",
+            "name": "DuckDuckGo Lite",
+            "configured": True,
+            "credential_free": True,
+        },
+        {
+            "id": "tavily",
+            "name": "Tavily",
+            "configured": bool(cfg.tavily_api_key),
+            "credential_free": False,
+        },
+        {
+            "id": "serper",
+            "name": "Serper (Google)",
+            "configured": bool(cfg.serper_api_key),
+            "credential_free": False,
+        },
+        {
+            "id": "brave",
+            "name": "Brave Search",
+            "configured": bool(cfg.brave_api_key),
+            "credential_free": False,
+        },
+    ]
+    for p in providers:
+        p["active"] = p["id"] == cfg.provider and bool(p["configured"])
+    return providers
+
+
+def _normalize_query(query: str) -> str:
+    if not isinstance(query, str) or not query.strip():
+        raise ValueError("web_search requires a non-empty query string")
+    return query.strip()[:MAX_QUERY_CHARS]
+
+
+def _normalize_max_results(max_results: Any) -> int:
+    try:
+        max_results = int(max_results)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("max_results must be an integer") from exc
+    return max(1, min(max_results, HARD_MAX_RESULTS))
+
+
+def _dedupe(results: list[SearchResult]) -> list[SearchResult]:
+    seen: set[str] = set()
+    out: list[SearchResult] = []
+    for r in results:
+        url = str(r.get("url") or "").strip()
+        key = url.lower().rstrip("/")
+        if not url or key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    for i, r in enumerate(out, start=1):
+        r["rank"] = i
+    return out
+
+
+# --- DuckDuckGo Lite (default, backward compatible) ---
+
+
 def _unwrap_ddg_href(href: str) -> str:
     """Resolve protocol-relative wrappers and unwrap uddg redirect links."""
     base = urljoin(SEARCH_URL, href)
     parts = urlparse(base)
-    if (parts.hostname or "") in ("duckduckgo.com", "www.duckduckgo.com",
-                                  "lite.duckduckgo.com") and parts.query:
+    if (parts.hostname or "") in (
+        "duckduckgo.com",
+        "www.duckduckgo.com",
+        "lite.duckduckgo.com",
+    ) and parts.query:
         qs = parse_qs(parts.query)
         if "uddg" in qs and qs["uddg"]:
-            return qs["uddg"][0]  # parse_qs already URL-decoded the target once
+            return qs["uddg"][0]
     return base
 
 
@@ -84,8 +196,9 @@ class _LiteParser(HTMLParser):
         if tag == "a" and self._in_anchor:
             self._in_anchor = False
             title = " ".join("".join(self._title).split())
-            self.rows.append({"href": self._href, "title": title or self._href,
-                              "snippet": ""})
+            self.rows.append(
+                {"href": self._href, "title": title or self._href, "snippet": ""}
+            )
         elif tag == "td" and self._in_snippet:
             self._in_snippet = False
             snippet = " ".join("".join(self._snippet).split())
@@ -93,34 +206,18 @@ class _LiteParser(HTMLParser):
                 self.rows[-1]["snippet"] = snippet
 
     def close(self) -> None:
-        if self._in_anchor:  # unterminated final anchor
+        if self._in_anchor:
             title = " ".join("".join(self._title).split())
-            self.rows.append({"href": self._href, "title": title or self._href,
-                              "snippet": ""})
+            self.rows.append(
+                {"href": self._href, "title": title or self._href, "snippet": ""}
+            )
             self._in_anchor = False
         super().close()
 
 
-def web_search(
-    query: str,
-    max_results: int = DEFAULT_MAX_RESULTS,
-    transport: httpx.BaseTransport | None = None,
-) -> list[dict[str, str]]:
-    """Search DuckDuckGo Lite; return bounded {title,url,snippet} results.
-
-    Raises ValueError for a malformed query and SearchProviderError for
-    provider failures (rate limit, HTTP errors, unreachable host). No
-    credentials, cookies, or Authorization headers are ever sent.
-    """
-    if not isinstance(query, str) or not query.strip():
-        raise ValueError("web_search requires a non-empty query string")
-    query = query.strip()[:MAX_QUERY_CHARS]
-    try:
-        max_results = int(max_results)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("max_results must be an integer") from exc
-    max_results = max(1, min(max_results, HARD_MAX_RESULTS))
-
+def _search_duckduckgo(
+    query: str, max_results: int, transport: httpx.BaseTransport | None
+) -> list[SearchResult]:
     url = f"{SEARCH_URL}?q={quote_plus(query)}"
     try:
         page = fetch_mod.fetch_url_text(
@@ -133,9 +230,8 @@ def web_search(
     except fetch_mod.FetchProtocolError as exc:
         status = getattr(exc, "status", None)
         if status == 429:
-            raise SearchProviderError(
-                "search provider rate-limited; retry later"
-            ) from exc
+            raise SearchProviderError("search provider rate-limited; retry later") from exc
+        # Preserve original error shape/text for compatibility (tests match "HTTP 500").
         raise SearchProviderError(f"search provider failed: {exc}") from exc
     except fetch_mod.FetchTooLargeError as exc:
         raise SearchProviderError(f"search provider failed: {exc}") from exc
@@ -146,7 +242,7 @@ def web_search(
     parser.feed(page)
     parser.close()
 
-    results: list[dict[str, str]] = []
+    results: list[SearchResult] = []
     for row in parser.rows:
         if len(results) >= max_results:
             break
@@ -154,12 +250,193 @@ def web_search(
         if not target.lower().startswith(("http://", "https://")):
             continue
         results.append(
-            {"title": row["title"], "url": target, "snippet": row["snippet"]}
+            {
+                "title": row["title"],
+                "url": target,
+                "snippet": row["snippet"],
+                "source": "duckduckgo",
+            }
         )
-    return results
+    return _dedupe(results)
 
 
-def format_results(results: list[dict[str, str]]) -> str:
+# --- API providers (config-driven) ---
+
+
+def _http_json(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    json_body: dict[str, Any] | None = None,
+    timeout_s: float,
+    transport: httpx.BaseTransport | None = None,
+) -> dict[str, Any]:
+    try:
+        with httpx.Client(timeout=timeout_s, transport=transport, follow_redirects=False) as client:
+            resp = client.request(method, url, headers=headers, json=json_body)
+    except httpx.TimeoutException as exc:
+        raise SearchProviderError(f"search provider timed out: {exc}") from exc
+    except httpx.RequestError as exc:
+        raise SearchProviderError(f"search provider failed: {exc}") from exc
+    if resp.status_code == 429:
+        raise SearchProviderError("search provider rate-limited; retry later")
+    if resp.status_code >= 400:
+        raise SearchProviderError(f"search provider failed: HTTP {resp.status_code}")
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        raise SearchProviderError(f"search provider failed: invalid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise SearchProviderError("search provider failed: unexpected response")
+    return data
+
+
+def _search_tavily(
+    query: str, max_results: int, cfg: SearchConfig, transport: httpx.BaseTransport | None
+) -> list[SearchResult]:
+    if not cfg.tavily_api_key:
+        raise SearchProviderError("Tavily search is not configured (missing TAVILY_API_KEY)")
+    data = _http_json(
+        "POST",
+        "https://api.tavily.com/search",
+        json_body={
+            "api_key": cfg.tavily_api_key,
+            "query": query,
+            "max_results": max_results,
+            "search_depth": "basic",
+            "include_answer": False,
+            "include_raw_content": False,
+        },
+        timeout_s=cfg.timeout_s,
+        transport=transport,
+    )
+    items = data.get("results") or []
+    results: list[SearchResult] = []
+    if isinstance(items, list):
+        for item in items[:max_results]:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url") or "").strip()
+            if not url.lower().startswith(("http://", "https://")):
+                continue
+            results.append(
+                {
+                    "title": str(item.get("title") or url),
+                    "url": url,
+                    "snippet": str(item.get("content") or item.get("snippet") or ""),
+                    "source": "tavily",
+                }
+            )
+    return _dedupe(results)
+
+
+def _search_serper(
+    query: str, max_results: int, cfg: SearchConfig, transport: httpx.BaseTransport | None
+) -> list[SearchResult]:
+    if not cfg.serper_api_key:
+        raise SearchProviderError("Serper search is not configured (missing SERPER_API_KEY)")
+    data = _http_json(
+        "POST",
+        "https://google.serper.dev/search",
+        headers={"X-API-KEY": cfg.serper_api_key, "Content-Type": "application/json"},
+        json_body={"q": query, "num": max_results},
+        timeout_s=cfg.timeout_s,
+        transport=transport,
+    )
+    items = data.get("organic") or []
+    results: list[SearchResult] = []
+    if isinstance(items, list):
+        for item in items[:max_results]:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("link") or "").strip()
+            if not url.lower().startswith(("http://", "https://")):
+                continue
+            results.append(
+                {
+                    "title": str(item.get("title") or url),
+                    "url": url,
+                    "snippet": str(item.get("snippet") or ""),
+                    "source": "serper",
+                }
+            )
+    return _dedupe(results)
+
+
+def _search_brave(
+    query: str, max_results: int, cfg: SearchConfig, transport: httpx.BaseTransport | None
+) -> list[SearchResult]:
+    if not cfg.brave_api_key:
+        raise SearchProviderError("Brave Search is not configured (missing BRAVE_SEARCH_API_KEY)")
+    url = f"https://api.search.brave.com/res/v1/web/search?q={quote_plus(query)}&count={max_results}"
+    data = _http_json(
+        "GET",
+        url,
+        headers={"Accept": "application/json", "X-Subscription-Token": cfg.brave_api_key},
+        timeout_s=cfg.timeout_s,
+        transport=transport,
+    )
+    web = data.get("web") if isinstance(data.get("web"), dict) else {}
+    items = web.get("results") if isinstance(web, dict) else []
+    results: list[SearchResult] = []
+    if isinstance(items, list):
+        for item in items[:max_results]:
+            if not isinstance(item, dict):
+                continue
+            urlv = str(item.get("url") or "").strip()
+            if not urlv.lower().startswith(("http://", "https://")):
+                continue
+            results.append(
+                {
+                    "title": str(item.get("title") or urlv),
+                    "url": urlv,
+                    "snippet": str(item.get("description") or ""),
+                    "source": "brave",
+                }
+            )
+    return _dedupe(results)
+
+
+def web_search(
+    query: str,
+    max_results: int = DEFAULT_MAX_RESULTS,
+    transport: httpx.BaseTransport | None = None,
+    provider: str | None = None,
+    config: SearchConfig | dict[str, Any] | None = None,
+) -> list[SearchResult]:
+    """Search the web and return bounded normalized results.
+
+    Backward compatible: DDG remains the default and returns
+    ``{title,url,snippet,...}`` dicts. Configured API providers are used when
+    selected and their keys are present.
+    """
+    query = _normalize_query(query)
+    max_results = _normalize_max_results(max_results)
+
+    if isinstance(config, dict):
+        cfg = SearchConfig.from_env(**config)
+    elif isinstance(config, SearchConfig):
+        cfg = config
+    else:
+        cfg = SearchConfig.from_env()
+    if provider:
+        cfg.provider = str(provider).strip().lower()
+
+    if cfg.provider in ("", "duckduckgo", "ddg", "duckduckgo-lite"):
+        return _search_duckduckgo(query, max_results, transport)
+    if cfg.provider == "tavily":
+        return _search_tavily(query, max_results, cfg, transport)
+    if cfg.provider in ("serper", "google", "google-serper"):
+        return _search_serper(query, max_results, cfg, transport)
+    if cfg.provider == "brave":
+        return _search_brave(query, max_results, cfg, transport)
+    raise SearchProviderError(
+        f"unknown search provider {cfg.provider!r}; use duckduckgo, tavily, serper, or brave"
+    )
+
+
+def format_results(results: list[dict[str, Any]]) -> str:
     """Compact JSON line for the tool wall (bounded by tool truncation)."""
     return json.dumps(results, ensure_ascii=False, separators=(",", ":"))
 

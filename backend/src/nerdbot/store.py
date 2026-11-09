@@ -23,6 +23,8 @@ from . import permissions as permissions_mod
 from .models import (
     BOARD_MEMBER_ROLES,
     CHAT_ROLES,
+    LIBRARY_ACCESS_LEVELS,
+    LIBRARY_KINDS,
     Approval,
     Artifact,
     Board,
@@ -40,6 +42,9 @@ from .models import (
     Issue,
     KnowledgeChunk,
     KnowledgeSource,
+    LibraryDoc,
+    LibraryDocAccess,
+    LibraryDocVersion,
     MemoryEntry,
     MemoryTier,
     Notification,
@@ -48,6 +53,10 @@ from .models import (
     ProviderKind,
     ProviderStatus,
     PRPackage,
+    Report,
+    ResearchJob,
+    ResearchJobEvent,
+    ResearchJobStatus,
     Review,
     ReviewVerdict,
     Run,
@@ -195,6 +204,23 @@ CREATE TABLE IF NOT EXISTS objectives (
   status TEXT NOT NULL DEFAULT 'planning', plan TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS research_jobs (
+  id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+  thread_id TEXT NOT NULL DEFAULT '', owner TEXT NOT NULL DEFAULT '',
+  query TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'queued',
+  provider TEXT NOT NULL DEFAULT '', report_title TEXT NOT NULL DEFAULT '',
+  report_markdown TEXT NOT NULL DEFAULT '', sources_json TEXT NOT NULL DEFAULT '[]',
+  error TEXT NOT NULL DEFAULT '', library_doc_id TEXT NOT NULL DEFAULT '',
+  report_id TEXT NOT NULL DEFAULT '', cancel_requested INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_research_jobs_project ON research_jobs(project_id, created_at);
+CREATE TABLE IF NOT EXISTS research_job_events (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL REFERENCES research_jobs(id),
+  kind TEXT NOT NULL DEFAULT 'status', content TEXT NOT NULL DEFAULT '',
+  data_json TEXT NOT NULL DEFAULT '{}', timestamp TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_research_job_events_job ON research_job_events(job_id, seq);
 CREATE TABLE IF NOT EXISTS reports (
   id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES chat_threads(id),
   message_id TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '',
@@ -244,6 +270,29 @@ CREATE TABLE IF NOT EXISTS board_messages (
 CREATE INDEX IF NOT EXISTS idx_board_members_board ON board_members(board_id);
 CREATE INDEX IF NOT EXISTS idx_board_messages_board ON board_messages(board_id);
 CREATE INDEX IF NOT EXISTS idx_board_messages_to_board ON board_messages(to_board_id);
+CREATE TABLE IF NOT EXISTS library_docs (
+  id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+  kind TEXT NOT NULL DEFAULT 'note', title TEXT NOT NULL DEFAULT '',
+  content TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT '',
+  teammate_id TEXT NOT NULL DEFAULT '', tainted INTEGER NOT NULL DEFAULT 0,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_library_docs_project ON library_docs(project_id, updated_at);
+CREATE TABLE IF NOT EXISTS library_doc_versions (
+  id TEXT PRIMARY KEY, doc_id TEXT NOT NULL REFERENCES library_docs(id),
+  version INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '',
+  content TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT '',
+  teammate_id TEXT NOT NULL DEFAULT '', tainted INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_library_versions_doc ON library_doc_versions(doc_id, version);
+CREATE TABLE IF NOT EXISTS library_doc_access (
+  id TEXT PRIMARY KEY, doc_id TEXT NOT NULL REFERENCES library_docs(id),
+  teammate_id TEXT NOT NULL, access TEXT NOT NULL DEFAULT 'read',
+  created_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_library_access_doc ON library_doc_access(doc_id, teammate_id);
 """
 
 
@@ -4926,3 +4975,477 @@ def rollup_objective(conn, objective_id, thread_id) -> "Report":
     markdown = "\n".join(lines)
     report = create_report(conn, thread_id, "", f"Rollup {objective_id}", markdown)
     return report
+
+
+# -- Library -------------------------------------------------------------------
+#
+# The owner's documents: notes, markdown docs and uploaded text files. Every
+# save appends an immutable version row (who wrote it, whether it is tainted)
+# and bumps the doc's version; access is a per-teammate ACL where a missing
+# row means no access, so permission checks fail closed by construction.
+
+
+# Content cap for one document: 1 MiB of text. Bigger belongs in a file, not
+# in a row the dashboard has to render.
+LIBRARY_MAX_CONTENT_CHARS = 1_048_576
+LIBRARY_MAX_TITLE_CHARS = 200
+
+
+def _check_library_size(title: str, content: str) -> None:
+    """Reject oversized titles/content before any row is written."""
+    if len(title) > LIBRARY_MAX_TITLE_CHARS:
+        raise ValueError("document title exceeds 200 characters")
+    if len(content) > LIBRARY_MAX_CONTENT_CHARS:
+        raise ValueError("document content exceeds 1MiB size cap")
+
+
+def _library_doc_from_row(row: sqlite3.Row) -> LibraryDoc:
+    return LibraryDoc(
+        id=row["id"],
+        project_id=row["project_id"],
+        kind=row["kind"] or "note",
+        title=row["title"] or "",
+        content=row["content"] or "",
+        source=row["source"] or "",
+        teammate_id=row["teammate_id"] or "",
+        tainted=bool(row["tainted"]),
+        version=int(row["version"] or 1),
+        created_at=datetime.fromisoformat(row["created_at"]),
+        updated_at=datetime.fromisoformat(row["updated_at"]),
+    )
+
+
+def _library_version_from_row(row: sqlite3.Row) -> LibraryDocVersion:
+    return LibraryDocVersion(
+        id=row["id"],
+        doc_id=row["doc_id"],
+        version=int(row["version"] or 1),
+        title=row["title"] or "",
+        content=row["content"] or "",
+        source=row["source"] or "",
+        teammate_id=row["teammate_id"] or "",
+        tainted=bool(row["tainted"]),
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def _library_access_from_row(row: sqlite3.Row) -> LibraryDocAccess:
+    return LibraryDocAccess(
+        id=row["id"],
+        doc_id=row["doc_id"],
+        teammate_id=row["teammate_id"],
+        access=row["access"] or "read",
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def _library_version_row(
+    doc_id: str, version: int, title: str, content: str, source: str,
+    teammate_id: str, tainted: bool, created_at: str,
+) -> tuple[str, ...]:
+    return (
+        new_id("lvr"), doc_id, str(version), title, content, source,
+        teammate_id, "1" if tainted else "0", created_at,
+    )
+
+
+def create_library_doc(
+    conn: sqlite3.Connection,
+    project_id: str,
+    *,
+    kind: str = "note",
+    title: str = "",
+    content: str = "",
+    source: str = "",
+    teammate_id: str = "",
+    tainted: bool = False,
+) -> LibraryDoc:
+    """Create a document and its version 1 in one commit."""
+    if get_project(conn, project_id) is None:
+        raise KeyError(f"unknown project {project_id}")
+    if kind not in LIBRARY_KINDS:
+        raise ValueError(f"unknown library kind {kind!r}")
+    _check_library_size(title, content)
+    if teammate_id and get_teammate(conn, teammate_id) is None:
+        raise KeyError(f"unknown teammate {teammate_id}")
+    now = _now_iso()
+    doc = LibraryDoc(
+        id=new_id("lib"), project_id=project_id, kind=kind, title=title,
+        content=content, source=source, teammate_id=teammate_id,
+        tainted=tainted, version=1,
+        created_at=datetime.fromisoformat(now), updated_at=datetime.fromisoformat(now),
+    )
+    conn.execute(
+        "INSERT INTO library_docs (id, project_id, kind, title, content, source,"
+        " teammate_id, tainted, version, created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (doc.id, project_id, kind, title, content, source, teammate_id,
+         "1" if tainted else "0", "1", now, now),
+    )
+    conn.execute(
+        "INSERT INTO library_doc_versions (id, doc_id, version, title, content,"
+        " source, teammate_id, tainted, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        _library_version_row(doc.id, 1, title, content, source, teammate_id,
+                             tainted, now),
+    )
+    conn.commit()
+    record_event(conn, project_id, "library", doc.id, "library.created")
+    return doc
+
+
+def get_library_doc(conn: sqlite3.Connection, doc_id: str) -> LibraryDoc | None:
+    row = conn.execute("SELECT * FROM library_docs WHERE id = ?", (doc_id,)).fetchone()
+    return None if row is None else _library_doc_from_row(row)
+
+
+def list_library_docs(conn: sqlite3.Connection, project_id: str) -> list[LibraryDoc]:
+    """All documents of a project, most recently saved first."""
+    rows = conn.execute(
+        "SELECT * FROM library_docs WHERE project_id = ?"
+        " ORDER BY updated_at DESC, id",
+        (project_id,),
+    ).fetchall()
+    return [_library_doc_from_row(r) for r in rows]
+
+
+def update_library_doc(
+    conn: sqlite3.Connection,
+    doc_id: str,
+    *,
+    title: str | None = None,
+    content: str | None = None,
+    source: str | None = None,
+    teammate_id: str | None = None,
+    tainted: bool | None = None,
+) -> LibraryDoc:
+    """Save a document: apply the given fields, bump the version, append history.
+
+    ``None`` means "leave this field alone"; pass ``""``/``False`` to clear it.
+    The caller (library.py) decides which of these a principal is allowed to
+    set — this function only persists what it is told.
+    """
+    doc = get_library_doc(conn, doc_id)
+    if doc is None:
+        raise KeyError(f"unknown library doc {doc_id}")
+    new_title = doc.title if title is None else title
+    new_content = doc.content if content is None else content
+    _check_library_size(new_title, new_content)
+    new_source = doc.source if source is None else source
+    new_writer = doc.teammate_id if teammate_id is None else teammate_id
+    if new_writer and get_teammate(conn, new_writer) is None:
+        raise KeyError(f"unknown teammate {new_writer}")
+    new_tainted = doc.tainted if tainted is None else tainted
+    version = doc.version + 1
+    now = _now_iso()
+    conn.execute(
+        "UPDATE library_docs SET title = ?, content = ?, source = ?,"
+        " teammate_id = ?, tainted = ?, version = ?, updated_at = ? WHERE id = ?",
+        (new_title, new_content, new_source, new_writer,
+         "1" if new_tainted else "0", version, now, doc_id),
+    )
+    conn.execute(
+        "INSERT INTO library_doc_versions (id, doc_id, version, title, content,"
+        " source, teammate_id, tainted, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        _library_version_row(doc_id, version, new_title, new_content, new_source,
+                             new_writer, new_tainted, now),
+    )
+    conn.commit()
+    updated = get_library_doc(conn, doc_id)
+    assert updated is not None  # just wrote it
+    return updated
+
+
+def delete_library_doc(conn: sqlite3.Connection, doc_id: str) -> bool:
+    """Remove a document with its history and ACL. True when it existed."""
+    doc = get_library_doc(conn, doc_id)
+    if doc is None:
+        return False
+    conn.execute("DELETE FROM library_doc_versions WHERE doc_id = ?", (doc_id,))
+    conn.execute("DELETE FROM library_doc_access WHERE doc_id = ?", (doc_id,))
+    conn.execute("DELETE FROM library_docs WHERE id = ?", (doc_id,))
+    conn.commit()
+    record_event(conn, doc.project_id, "library", doc_id, "library.deleted")
+    return True
+
+
+def list_library_doc_versions(
+    conn: sqlite3.Connection, doc_id: str
+) -> list[LibraryDocVersion]:
+    """Version history, oldest first (version 1 at the top)."""
+    rows = conn.execute(
+        "SELECT * FROM library_doc_versions WHERE doc_id = ? ORDER BY version",
+        (doc_id,),
+    ).fetchall()
+    return [_library_version_from_row(r) for r in rows]
+
+
+def get_library_doc_version(
+    conn: sqlite3.Connection, doc_id: str, version: int
+) -> LibraryDocVersion | None:
+    row = conn.execute(
+        "SELECT * FROM library_doc_versions WHERE doc_id = ? AND version = ?",
+        (doc_id, version),
+    ).fetchone()
+    return None if row is None else _library_version_from_row(row)
+
+
+def list_library_doc_access(
+    conn: sqlite3.Connection, doc_id: str
+) -> list[LibraryDocAccess]:
+    rows = conn.execute(
+        "SELECT * FROM library_doc_access WHERE doc_id = ? ORDER BY created_at, id",
+        (doc_id,),
+    ).fetchall()
+    return [_library_access_from_row(r) for r in rows]
+
+
+def get_library_doc_access(
+    conn: sqlite3.Connection, doc_id: str, teammate_id: str
+) -> LibraryDocAccess | None:
+    row = conn.execute(
+        "SELECT * FROM library_doc_access WHERE doc_id = ? AND teammate_id = ?",
+        (doc_id, teammate_id),
+    ).fetchone()
+    return None if row is None else _library_access_from_row(row)
+
+
+def set_library_doc_access(
+    conn: sqlite3.Connection, doc_id: str, teammate_id: str, access: str
+) -> LibraryDocAccess:
+    """Grant (or change) one teammate's access. Upserts the single ACL row."""
+    if access not in LIBRARY_ACCESS_LEVELS:
+        raise ValueError(f"unknown access level {access!r}")
+    if get_library_doc(conn, doc_id) is None:
+        raise KeyError(f"unknown library doc {doc_id}")
+    if get_teammate(conn, teammate_id) is None:
+        raise KeyError(f"unknown teammate {teammate_id}")
+    existing = get_library_doc_access(conn, doc_id, teammate_id)
+    if existing is not None:
+        conn.execute(
+            "UPDATE library_doc_access SET access = ? WHERE id = ?",
+            (access, existing.id),
+        )
+        conn.commit()
+        refreshed = get_library_doc_access(conn, doc_id, teammate_id)
+        assert refreshed is not None
+        return refreshed
+    row = LibraryDocAccess(
+        id=new_id("lax"), doc_id=doc_id, teammate_id=teammate_id, access=access,
+        created_at=datetime.fromisoformat(_now_iso()),
+    )
+    conn.execute(
+        "INSERT INTO library_doc_access (id, doc_id, teammate_id, access, created_at)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (row.id, doc_id, teammate_id, access, row.created_at.isoformat()),
+    )
+    conn.commit()
+    return row
+
+
+def clear_library_doc_access(
+    conn: sqlite3.Connection, doc_id: str, teammate_id: str
+) -> None:
+    conn.execute(
+        "DELETE FROM library_doc_access WHERE doc_id = ? AND teammate_id = ?",
+        (doc_id, teammate_id),
+    )
+    conn.commit()
+
+
+# --- Research jobs (Phase 1: deep research, background) ---
+
+def _research_job_from_row(row: sqlite3.Row) -> ResearchJob:
+    try:
+        sources = json.loads(row["sources_json"] or "[]")
+    except Exception:
+        sources = []
+    if not isinstance(sources, list):
+        sources = []
+    return ResearchJob(
+        id=row["id"],
+        project_id=row["project_id"],
+        thread_id=row["thread_id"] or "",
+        owner=row["owner"] or "",
+        query=row["query"] or "",
+        status=ResearchJobStatus(row["status"]),
+        provider=row["provider"] or "",
+        report_title=row["report_title"] or "",
+        report_markdown=row["report_markdown"] or "",
+        sources=sources,
+        error=row["error"] or "",
+        library_doc_id=row["library_doc_id"] or "",
+        report_id=row["report_id"] or "",
+        cancel_requested=bool(row["cancel_requested"]),
+        created_at=datetime.fromisoformat(row["created_at"]),
+        started_at=datetime.fromisoformat(row["started_at"]) if row["started_at"] else None,
+        finished_at=datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None,
+        updated_at=datetime.fromisoformat(row["updated_at"]),
+    )
+
+
+def create_research_job(
+    conn: sqlite3.Connection,
+    project_id: str,
+    *,
+    query: str,
+    owner: str = "",
+    thread_id: str = "",
+    provider: str = "",
+) -> ResearchJob:
+    if get_project(conn, project_id) is None:
+        raise KeyError(f"unknown project {project_id}")
+    now = _now_iso()
+    job = ResearchJob(
+        id=new_id("rsj"),
+        project_id=project_id,
+        thread_id=thread_id,
+        owner=owner,
+        query=(query or "").strip(),
+        status=ResearchJobStatus.QUEUED,
+        provider=(provider or "").strip(),
+        created_at=datetime.fromisoformat(now),
+        updated_at=datetime.fromisoformat(now),
+    )
+    conn.execute(
+        """INSERT INTO research_jobs
+           (id, project_id, thread_id, owner, query, status, provider, report_title, report_markdown,
+            sources_json, error, library_doc_id, report_id, cancel_requested, created_at, started_at, finished_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            job.id, job.project_id, job.thread_id, job.owner, job.query, job.status.value,
+            job.provider, job.report_title, job.report_markdown, json.dumps(job.sources),
+            job.error, job.library_doc_id, job.report_id, 1 if job.cancel_requested else 0,
+            job.created_at.isoformat(), None, None, job.updated_at.isoformat(),
+        ),
+    )
+    conn.commit()
+    record_event(conn, project_id, "research_job", job.id, "research_job.created")
+    return job
+
+
+def get_research_job(conn: sqlite3.Connection, job_id: str) -> ResearchJob | None:
+    row = conn.execute("SELECT * FROM research_jobs WHERE id = ?", (job_id,)).fetchone()
+    return _research_job_from_row(row) if row else None
+
+
+def list_research_jobs(
+    conn: sqlite3.Connection, project_id: str, *, limit: int = 50
+) -> list[ResearchJob]:
+    rows = conn.execute(
+        "SELECT * FROM research_jobs WHERE project_id = ? ORDER BY rowid DESC LIMIT ?",
+        (project_id, max(1, min(int(limit or 50), 200))),
+    ).fetchall()
+    return [_research_job_from_row(r) for r in rows]
+
+
+def list_research_jobs_for_owner(
+    conn: sqlite3.Connection, owner: str, *, limit: int = 50
+) -> list[ResearchJob]:
+    rows = conn.execute(
+        "SELECT research_jobs.* FROM research_jobs"
+        " JOIN projects ON research_jobs.project_id = projects.id"
+        " WHERE projects.owner = ?"
+        " ORDER BY research_jobs.created_at DESC, research_jobs.rowid DESC LIMIT ?",
+        (owner, max(1, min(int(limit or 50), 200))),
+    ).fetchall()
+    return [_research_job_from_row(r) for r in rows]
+
+
+def update_research_job(
+    conn: sqlite3.Connection,
+    job_id: str,
+    *,
+    status: ResearchJobStatus | None = None,
+    provider: str | None = None,
+    report_title: str | None = None,
+    report_markdown: str | None = None,
+    sources: list[dict[str, Any]] | None = None,
+    error: str | None = None,
+    library_doc_id: str | None = None,
+    report_id: str | None = None,
+    cancel_requested: bool | None = None,
+    started_at: datetime | None = None,
+    finished_at: datetime | None = None,
+) -> ResearchJob:
+    job = get_research_job(conn, job_id)
+    if job is None:
+        raise KeyError(f"unknown research job {job_id}")
+    fields: list[str] = []
+    vals: list[Any] = []
+    if status is not None:
+        fields.append("status = ?"); vals.append(status.value)
+    if provider is not None:
+        fields.append("provider = ?"); vals.append(provider)
+    if report_title is not None:
+        fields.append("report_title = ?"); vals.append(report_title)
+    if report_markdown is not None:
+        fields.append("report_markdown = ?"); vals.append(report_markdown)
+    if sources is not None:
+        fields.append("sources_json = ?"); vals.append(json.dumps(sources, ensure_ascii=False))
+    if error is not None:
+        fields.append("error = ?"); vals.append(error)
+    if library_doc_id is not None:
+        fields.append("library_doc_id = ?"); vals.append(library_doc_id)
+    if report_id is not None:
+        fields.append("report_id = ?"); vals.append(report_id)
+    if cancel_requested is not None:
+        fields.append("cancel_requested = ?"); vals.append(1 if cancel_requested else 0)
+    if started_at is not None:
+        fields.append("started_at = ?"); vals.append(started_at.isoformat())
+    if finished_at is not None:
+        fields.append("finished_at = ?"); vals.append(finished_at.isoformat())
+    now = _now_iso()
+    fields.append("updated_at = ?"); vals.append(now)
+    vals.append(job_id)
+    conn.execute(f"UPDATE research_jobs SET {', '.join(fields)} WHERE id = ?", vals)
+    conn.commit()
+    return get_research_job(conn, job_id)  # type: ignore[return-value]
+
+
+def request_research_job_cancel(conn: sqlite3.Connection, job_id: str) -> ResearchJob:
+    return update_research_job(conn, job_id, cancel_requested=True)
+
+
+def append_research_job_event(
+    conn: sqlite3.Connection,
+    job_id: str,
+    kind: str,
+    content: str = "",
+    data: dict[str, Any] | None = None,
+) -> ResearchJobEvent:
+    if get_research_job(conn, job_id) is None:
+        raise KeyError(f"unknown research job {job_id}")
+    ts = _now_iso()
+    cur = conn.execute(
+        "INSERT INTO research_job_events (job_id, kind, content, data_json, timestamp) VALUES (?,?,?,?,?)",
+        (job_id, kind or "status", content or "", json.dumps(data or {}, ensure_ascii=False), ts),
+    )
+    conn.commit()
+    seq = int(cur.lastrowid or 0)
+    return ResearchJobEvent(
+        seq=seq, job_id=job_id, kind=kind or "status", content=content or "",
+        data=data or {}, timestamp=datetime.fromisoformat(ts),
+    )
+
+
+def list_research_job_events(
+    conn: sqlite3.Connection, job_id: str, after: int = 0
+) -> list[ResearchJobEvent]:
+    rows = conn.execute(
+        "SELECT * FROM research_job_events WHERE job_id = ? AND seq > ? ORDER BY seq",
+        (job_id, int(after or 0)),
+    ).fetchall()
+    events: list[ResearchJobEvent] = []
+    for r in rows:
+        try:
+            data = json.loads(r["data_json"] or "{}")
+        except Exception:
+            data = {}
+        events.append(
+            ResearchJobEvent(
+                seq=int(r["seq"]), job_id=r["job_id"], kind=r["kind"] or "status",
+                content=r["content"] or "", data=data if isinstance(data, dict) else {},
+                timestamp=datetime.fromisoformat(r["timestamp"]),
+            )
+        )
+    return events

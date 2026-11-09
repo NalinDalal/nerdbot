@@ -3,12 +3,12 @@ import { toast } from "sonner";
 import { api, ApiError } from "./api";
 import { notifyError, navigate } from "./app";
 import { TeamView } from "./team-view";
-import type { ChatMessage, ChatThread, Plan, Provider, Project, ProjectCounts, Teammate } from "./types";
+import type { ChatMessage, ChatThread, Plan, Provider, ResearchJob, ResearchJobEvent, Teammate } from "./types";
 import { useWorkspaceSummary } from "./views-home";
 import { Markdown } from "./markdown";
 import { insertMention, mentionHandle, splitMentions } from "./mentions";
 import { explainRunError } from "./explainRunError";
-import { providerIsUsable, usableProviders } from "./readiness";
+import { usableProviders } from "./readiness";
 import {
   EmptyState,
   ErrorState,
@@ -721,6 +721,7 @@ function ThreadPane({
   const [contextPanel, setContextPanel] = useState<"files" | "bots" | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<Array<{ name: string; content: string }>>([]);
   const [mates, setMates] = useState<Teammate[]>([]);
+  const [researchJobIds, setResearchJobIds] = useState<string[]>([]);
   // Speaker announced by the stream's first event, so the in-flight bubble
   // already carries the teammate's face and name while the reply arrives.
   const [streamSpeaker, setStreamSpeaker] = useState<{
@@ -732,12 +733,31 @@ function ThreadPane({
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  useEffect(() => {
+    let alive = true;
+    api
+      .listResearchJobs(projectId, 20)
+      .then((res) => {
+        if (!alive) return;
+        const jobs = (res.jobs || []) as ResearchJob[];
+        const ids = jobs
+          .filter((j) => j.thread_id === threadId || (j.thread_id === "" && researchJobIds.includes(j.id)))
+          .map((j) => j.id);
+        if (ids.length) setResearchJobIds((prev) => Array.from(new Set([...ids, ...prev])).slice(0, 8));
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, threadId]);
+
   const providerId = view.data?.thread.provider_id ?? "__default__";
 
   useEffect(() => {
     api
       .listTeammates(projectId)
-      .then((res: any) => setMates((res.teammates || []) as Teammate[]))
+      .then((res) => setMates(res.teammates || []))
       .catch(() => setMates([]));
   }, [projectId]);
 
@@ -887,6 +907,32 @@ function ThreadPane({
     } catch (err) {
       notifyError(err);
       view.reload();
+    }
+  };
+
+  const startDeepResearch = async () => {
+    const query = draft.trim();
+    if (!query) {
+      toast.error("Enter a research question first.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await api.createProjectResearchJob(projectId, {
+        query,
+        thread_id: threadId,
+      });
+      const job = res.job as ResearchJob;
+      if (job?.id) {
+        setResearchJobIds((prev) => [job.id, ...prev.filter((id) => id !== job.id)].slice(0, 8));
+        setDraft("");
+        setMode("research");
+        toast.success("Deep research started in the background.");
+      }
+    } catch (err) {
+      notifyError(err);
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -1130,6 +1176,20 @@ function ThreadPane({
         </div>
       </div>
 
+      {researchJobIds.length > 0 ? (
+        <div className="border-t border-[var(--border-dim)] px-4 py-3 md:px-6">
+          <div className="mx-auto flex w-full max-w-[var(--max-width-read)] flex-col gap-3">
+            {researchJobIds.map((id) => (
+              <ResearchJobCard
+                key={id}
+                jobId={id}
+                onClose={() => setResearchJobIds((prev) => prev.filter((x) => x !== id))}
+              />
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       {/* Composer */}
       <form onSubmit={send} className="border-t border-[var(--border-dim)] px-4 py-3 md:px-6">
         <div className="mx-auto w-full max-w-[var(--max-width-read)]">
@@ -1211,6 +1271,15 @@ function ThreadPane({
             <div className="flex items-center gap-1.5 justify-end pb-0.5">
               <button
                 type="button"
+                onClick={() => void startDeepResearch()}
+                disabled={!draft.trim() || busy}
+                title="Run multi-source deep research in the background with citations"
+                className="rounded-md px-2.5 py-1.5 text-step--1 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)] disabled:opacity-50"
+              >
+                Deep research
+              </button>
+              <button
+                type="button"
                 onClick={createTaskFromChat}
                 title="Create a task from this conversation"
                 className="rounded-md px-2.5 py-1.5 text-step--1 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
@@ -1241,7 +1310,7 @@ function ThreadPane({
             </span>
             <select
               value={mode}
-              onChange={(e) => setMode(e.target.value as any)}
+              onChange={(e) => setMode(e.target.value as "chat" | "research" | "delegate")}
               className="h-6 rounded-md border border-[var(--border)] bg-[var(--surface)] px-1.5 text-step--2 text-[var(--text-soft)]"
               aria-label="Chat mode"
             >
@@ -1294,7 +1363,11 @@ function TaskProposalCard({ proposal, onCreateTask }: { proposal: any; onCreateT
   };
 
   useEffect(() => {
-    if (createdId) loadTask(createdId);
+    if (!createdId) return;
+    const id = createdId;
+    queueMicrotask(() => {
+      void loadTask(id);
+    });
   }, [createdId]);
 
   if (!createdId) {
@@ -1374,6 +1447,153 @@ function TaskProposalCard({ proposal, onCreateTask }: { proposal: any; onCreateT
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+function ResearchJobCard({
+  jobId,
+  initialJob,
+  onClose,
+}: {
+  jobId: string;
+  initialJob?: ResearchJob;
+  onClose?: () => void;
+}) {
+  const [job, setJob] = useState<ResearchJob | null>(initialJob ?? null);
+  const [events, setEvents] = useState<ResearchJobEvent[]>([]);
+  const [busy, setBusy] = useState(false);
+  const terminal = job?.status === "done" || job?.status === "failed" || job?.status === "cancelled";
+
+  useEffect(() => {
+    let alive = true;
+    let after = 0;
+    const tick = async () => {
+      try {
+        const [jr, er] = await Promise.all([
+          api.getResearchJob(jobId),
+          api.getResearchJobEvents(jobId, after),
+        ]);
+        if (!alive) return;
+        setJob(jr.job as ResearchJob);
+        const evs = (er.events || []) as ResearchJobEvent[];
+        if (evs.length) {
+          after = Math.max(after, ...evs.map((e) => e.seq || 0));
+          setEvents((prev) => {
+            const seen = new Set(prev.map((e) => e.seq));
+            return [...prev, ...evs.filter((e) => !seen.has(e.seq))].slice(-120);
+          });
+        }
+      } catch {
+        /* best effort while polling */
+      }
+    };
+    void tick();
+    if (terminal) return () => { alive = false; };
+    const t = setInterval(() => { void tick(); }, 1500);
+    return () => { alive = false; clearInterval(t); };
+  }, [jobId, terminal]);
+
+  const cancel = async () => {
+    setBusy(true);
+    try {
+      const res = await api.cancelResearchJob(jobId);
+      setJob(res.job as ResearchJob);
+    } catch (err) {
+      notifyError(err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const statusLabel: Record<string, string> = {
+    queued: "Queued", planning: "Planning", searching: "Searching", reading: "Reading sources",
+    synthesizing: "Synthesizing", done: "Complete", failed: "Failed", cancelled: "Cancelled",
+  };
+  const s = job?.status || "queued";
+  const sources = (job?.sources || []) as Array<Record<string, unknown>>;
+  const readOk = sources.filter((x) => x.read_ok).length;
+
+  return (
+    <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-step--1">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold text-[var(--text)]">Deep research</span>
+            <StatusBadge status={s} label={statusLabel[s] || s} />
+          </div>
+          <p className="mt-1 text-[var(--muted)]">{job?.query || "Research job"}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {!terminal ? (
+            <Button variant="danger" disabled={busy} onClick={() => void cancel()}>
+              {busy ? "Stopping…" : "Stop"}
+            </Button>
+          ) : null}
+          {onClose ? <Button variant="ghost" onClick={onClose}>Close</Button> : null}
+        </div>
+      </div>
+
+      {!terminal ? (
+        <div className="mt-3 rounded-lg border border-[var(--border-dim)] bg-[var(--surface-2)] px-3 py-2">
+          <div className="text-step--2 text-[var(--muted)]">
+            {events.length ? events[events.length - 1]?.content : "Starting…"}
+          </div>
+          {sources.length > 0 ? (
+            <div className="mt-1 text-step--2 text-[var(--faint)]">
+              {sources.length} sources found · {readOk} read
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {job?.status === "failed" && job.error ? (
+        <div className="mt-3 rounded-lg border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-[var(--danger)]">
+          {job.error}
+        </div>
+      ) : null}
+
+      {job?.status === "done" ? (
+        <div className="mt-3">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            {job.library_doc_id ? (
+              <Button variant="primary" onClick={() => navigate(`/library/${job.library_doc_id}`)}>
+                Open in Library
+              </Button>
+            ) : null}
+            {job.report_markdown ? (
+              <Button onClick={() => navigator.clipboard?.writeText(job.report_markdown || "")}>Copy report</Button>
+            ) : null}
+          </div>
+          {sources.length > 0 ? (
+            <details className="mb-3 rounded-lg border border-[var(--border-dim)]">
+              <summary className="cursor-pointer px-3 py-2 text-step--1 font-medium text-[var(--text-soft)]">
+                Citations ({sources.length})
+              </summary>
+              <ol className="border-t border-[var(--border-dim)] px-3 py-2 text-step--2 text-[var(--muted)]">
+                {sources.map((src, i) => (
+                  <li key={`${src.url}-${i}`} className="mb-1.5 break-all">
+                    <span className="text-[var(--faint)]">[{i + 1}]</span>{" "}
+                    {src.url ? (
+                      <a className="text-[var(--accent)] hover:underline" href={String(src.final_url || src.url)} target="_blank" rel="noreferrer">
+                        {String(src.title || src.url)}
+                      </a>
+                    ) : (
+                      String(src.title || "Source")
+                    )}
+                    {src.read_ok === false && src.read_error ? <span className="text-[var(--faint)]"> (unread)</span> : null}
+                  </li>
+                ))}
+              </ol>
+            </details>
+          ) : null}
+          {job.report_markdown ? (
+            <div className="max-h-[28rem] overflow-y-auto rounded-lg border border-[var(--border-dim)] bg-[var(--surface-2)] p-3">
+              <Markdown text={job.report_markdown} />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1953,192 +2173,6 @@ function ContextPanel({
   );
 }
 
-/* --- Getting Started (Home discovery path) --- */
-
-/** A single step in the getting-started path. Each step tells the owner
- *  what exists, what they can do, and how to do it. */
-function GettingStartedStep({
-  number,
-  title,
-  description,
-  cta,
-  done,
-  onClick,
-}: {
-  number: number;
-  title: string;
-  description: string;
-  cta: string;
-  done: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <div className="flex gap-3 p-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] transition-colors hover:border-[var(--faint)]">
-      <div
-        className={`shrink-0 flex items-center justify-center w-6 h-6 rounded-full border border-transparent font-medium text-step--1 ${
-          done
-            ? "bg-[var(--accent)] text-[var(--text-inverse)] border-[var(--accent)]"
-            : "bg-[var(--surface-2)] text-[var(--muted)] border-[var(--border)]"
-        }`}
-      >
-        {done ? "✓" : String(number)}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className={`font-medium text-step-0 ${
-          done ? "text-[var(--text)]" : "text-[var(--text-soft)]"
-        }`}>
-          {title}
-        </div>
-        <div className="mt-0.5 text-step--1 text-[var(--muted)] leading-relaxed">
-          {description}
-        </div>
-      </div>
-      <Button
-        variant="primary"
-        disabled={done}
-        onClick={onClick}
-        className={done ? "opacity-50 pointer-events-none" : ""}
-      >
-        {done ? "Done" : cta}
-      </Button>
-    </div>
-  );
-}
-
-interface GettingStartedStepsProps {
-  workspaces: Project[];
-  counts: Record<string, ProjectCounts>;
-  bots: Teammate[];
-  providersByProject: Record<string, Provider[]>;
-  onCreateWorkspace: () => void;
-  onConnectModel: (projectId: string) => void;
-  onCreateBot: () => void;
-  onNewTask: () => void;
-}
-
-/** Numbered onboarding path. Every step is honest about what exists and
- *  what the owner should do next. Skips steps that are already done. */
-function GettingStartedSteps({
-  workspaces,
-  counts,
-  bots,
-  providersByProject,
-  onCreateWorkspace,
-  onConnectModel,
-  onCreateBot,
-  onNewTask,
-}: GettingStartedStepsProps) {
-  const allProviders = Object.values(providersByProject).flat();
-  const usableList = allProviders.filter(providerIsUsable);
-  /* A mock provider answers with canned text; it is useful for a demo but it
-     is not a model that can do work. Counting it as one is what let Home say
-     "setup complete" directly above "nothing is really executed". */
-  const realModels = usableList.filter((provider) => provider.kind !== "mock");
-  const hasMockOnly = usableList.length > 0 && realModels.length === 0;
-  const hasWorkspace = workspaces.length > 0;
-  const hasModel = realModels.length > 0;
-  const hasBot = bots.length > 0;
-  const totalTasks = Object.values(counts).reduce((sum, c) => sum + c.tasks, 0);
-
-  const steps = [
-    {
-      id: "workspace" as const,
-      number: 1,
-      done: hasWorkspace,
-      title: "Create a project",
-      description: "Projects keep your teammates, tasks, and files separate.",
-      cta: "Create project",
-      show: !hasWorkspace,
-      onClick: onCreateWorkspace,
-    },
-    {
-      id: "model" as const,
-      number: 2,
-      done: hasModel,
-      title: "Connect a model",
-      description:
-        "Teammates need a model to think with. Connect one to your project.",
-      cta: "Connect model",
-      show: hasWorkspace && !hasModel,
-      onClick: () => onConnectModel(workspaces[0]?.id ?? ""),
-    },
-    {
-      id: "bot" as const,
-      number: 3,
-      done: hasBot,
-      title: "Create a teammate",
-      description: "Teammates are your AI agents. Give one a persona and a model.",
-      cta: "Create teammate",
-      show: hasModel && !hasBot,
-      onClick: onCreateBot,
-    },
-    {
-      id: "task" as const,
-      number: 4,
-      done: true,
-      title: "Start working",
-      description: "Create a task and a teammate will pick it up.",
-      cta: "New task",
-      show: true,
-      onClick: onNewTask,
-    },
-  ].filter((s) => s.show);
-
-  const setupComplete = hasWorkspace && hasModel && hasBot;
-
-  if (setupComplete) return null;
-
-  return (
-    <div className="mb-6">
-      <div className="mb-4 flex items-baseline justify-between gap-3">
-        <div>
-          <div className="text-step--2 uppercase tracking-[0.14em] text-[var(--faint)]">
-            Getting started
-          </div>
-          <div className="text-step-0 font-semibold text-[var(--text)]">
-            {setupComplete
-              ? "Setup complete. You're ready to work."
-              : `${steps.length - 1} step${steps.length - 1 === 1 ? "" : "s"} to go`}
-          </div>
-        </div>
-        {!setupComplete && (
-          <span className="mono text-step--2 text-[var(--faint)]">
-            Steps in order
-          </span>
-        )}
-      </div>
-
-      {setupComplete ? (
-        <div className="rounded-xl border border-[var(--accent)] bg-[var(--accent-dim)] px-4 py-3 text-step--1">
-          <div className="flex items-center gap-2">
-            <span className="text-[var(--accent)]">✓</span>
-            <span className="font-medium text-[var(--text)]">Everything is connected.</span>
-          </div>
-          <div className="mt-1 text-step--1 text-[var(--muted)]">
-            Create a task from Work, or start a conversation here.
-          </div>
-        </div>
-      ) : (
-        <div className="space-y-2">{steps.map((step) => (
-          <GettingStartedStep key={step.id} {...step} />
-        ))}</div>
-      )}
-
-      {/* What exists right now */}
-      <p className="mt-3 text-step--2 text-[var(--faint)]">
-        {workspaces.length} projects · {bots.length} teammates · {realModels.length} models · {totalTasks} tasks
-      </p>
-      {hasMockOnly ? (
-        <p className="mt-2 text-step--2 text-[var(--faint)]">
-          Only a demo model is connected. Replies are canned and nothing runs
-          until a real model is added.
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
-
 /* --- Command Center (Home landing) --- */
 
 function CommandCenter({
@@ -2192,7 +2226,7 @@ function CommandCenter({
   const workspacesLoader = useAsync(() => api.listProjects(), []);
   const botsLoader = useAsync(() => api.listAllTeammates(), []);
   const workspaces = workspacesLoader.data?.projects ?? [];
-  const counts = workspacesLoader.data?.counts ?? {};
+  void workspacesLoader.data?.counts;
   const bots = botsLoader.data?.teammates ?? [];
 
   const providersByProjectLoader = useAsync(async () => {
@@ -2207,12 +2241,14 @@ function CommandCenter({
     }
     return result;
   }, [workspaces]);
-  const providersByProject = providersByProjectLoader.data ?? {};
+  void providersByProjectLoader.data;
 
   const [busy, setBusy] = useState(false);
   const [streaming, setStreaming] = useState("");
-  const [planDraft, setPlanDraft] = useState<any>(null);
+  type PlanDraftState = { plan?: { tasks?: Array<{ description?: string; command?: string } & Record<string, unknown>> } & Record<string, unknown> } & Record<string, unknown>;
+  const [planDraft, setPlanDraft] = useState<PlanDraftState | null>(null);
   const [planObjective, setPlanObjective] = useState("");
+  const [researchJobIds, setResearchJobIds] = useState<string[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [showConfigure, setShowConfigure] = useState(false);
@@ -2272,6 +2308,28 @@ function CommandCenter({
     abortRef.current?.abort();
   };
 
+  const startDeepResearch = async () => {
+    const query = draft.trim();
+    if (!query) {
+      toast.error("Enter a research question first.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await api.createProjectResearchJob(projectId, { query });
+      const job = res.job as ResearchJob;
+      if (job?.id) {
+        setResearchJobIds((prev) => [job.id, ...prev.filter((id) => id !== job.id)].slice(0, 6));
+        setDraft("");
+        toast.success("Deep research started in the background.");
+      }
+    } catch (err) {
+      notifyError(err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // The resume list spans every project the owner owns, so a conversation
   // started elsewhere is still one click away from here.
   const sorted = [...recentThreads].sort(
@@ -2287,19 +2345,74 @@ function CommandCenter({
       <div className="mx-auto flex w-full max-w-[860px] flex-col gap-6 px-4 py-8 md:px-6">
         {/* The workspace banner renders once above this pane (ConversationView). */}
 
-        {/* Welcome hero: what NerdBot is and what it can do today. */}
-        <div className="space-y-1">
-          <h2 className="text-step-2 font-semibold tracking-tight text-[var(--text)]">
-            NerdBot
-          </h2>
-          <p className="mt-2 max-w-2xl text-step-0 text-[var(--text-soft)]">
-            Your personal AI fleet. Chat with models, delegate work to bots, run
-            tasks across projects, and approve what matters — all from one place.
-          </p>
-          <p className="mt-4 text-step-1 font-medium text-[var(--text)]">
-            What can I help you with today?
+        {/* Phase 0: chat-first, teammate-first home */}
+        <div className="space-y-2">
+          <h1 className="text-step-3 font-semibold tracking-tight text-[var(--text)]">
+            Chat with your AI team
+          </h1>
+          <p className="max-w-2xl text-step-0 text-[var(--text-soft)]">
+            Start a conversation, ask for research, or plan work with your teammates. NerdBot shows what is running, what needs your approval, and what finished.
           </p>
         </div>
+
+        {/* Teammate strip */}
+        {(summary.summary.bots.length > 0 || bots.length > 0) ? (
+          <section aria-label="Your team" className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <SectionLabel>Your team</SectionLabel>
+              <Button variant="ghost" onClick={() => navigate("/bots")}>View all</Button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {(summary.summary.bots.length > 0 ? summary.summary.bots : bots).slice(0, 8).map((bot) => {
+                const handle = mentionHandle(bot);
+                return (
+                  <div
+                    key={bot.id}
+                    className="inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface-2)] pr-1"
+                  >
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-step--1 text-[var(--text)] hover:bg-[var(--surface-3)]"
+                      onClick={() => navigate(`/bot/${bot.id}`)}
+                      title="Open teammate"
+                    >
+                      <BotFace face={bot.face} size={18} status={bot.status} />
+                      <span className="max-w-[10rem] truncate">{bot.persona || bot.name || "Teammate"}</span>
+                      <StatusDot status={bot.status} />
+                    </button>
+                    {handle ? (
+                      <button
+                        type="button"
+                        className="rounded-full px-1.5 py-0.5 text-step--2 text-[var(--muted)] hover:bg-[var(--surface-3)] hover:text-[var(--text)]"
+                        onClick={() => setDraft((d) => insertMention(d, handle))}
+                        title={`Mention @${handle}`}
+                        aria-label={`Mention @${handle}`}
+                      >
+                        @
+                      </button>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        ) : null}
+
+        {/* Capability-honest quick actions (modes available inside conversations) */}
+        <section aria-label="What you can do now" className="flex flex-wrap gap-2">
+          <span className="inline-flex items-center rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-1 text-step--2 text-[var(--text-soft)]">
+            Chat
+          </span>
+          <span className="inline-flex items-center rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-1 text-step--2 text-[var(--text-soft)]" title="Available in conversation mode when tools are enabled">
+            Research (web search)
+          </span>
+          <span className="inline-flex items-center rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-1 text-step--2 text-[var(--text-soft)]" title="Available in conversation mode">
+            Delegate work
+          </span>
+          <span className="inline-flex items-center rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-1 text-step--2 text-[var(--text-soft)]">
+            Plan &amp; run tasks
+          </span>
+        </section>
 
         {planDraft?.plan?.tasks ? (
           <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
@@ -2311,14 +2424,14 @@ function CommandCenter({
             </div>
             <p className="mb-3 text-step--1 text-[var(--muted)]">{planObjective}</p>
             <div className="space-y-3">
-              {(planDraft.plan.tasks as any[]).map((task, idx) => (
+              {(planDraft.plan?.tasks ?? []).map((task, idx) => (
                 <div key={idx} className="rounded-lg border border-[var(--border-dim)] p-3">
                   <input
                     className="mb-2 w-full rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2 py-1 text-step--1"
                     value={task.description}
                     onChange={(e) => {
                       const next = { ...planDraft };
-                      next.plan.tasks[idx] = { ...next.plan.tasks[idx], description: e.target.value };
+                      if (next.plan?.tasks?.[idx]) next.plan.tasks[idx] = { ...next.plan.tasks[idx], description: e.target.value };
                       setPlanDraft(next);
                     }}
                   />
@@ -2328,7 +2441,7 @@ function CommandCenter({
                     placeholder="command (optional)"
                     onChange={(e) => {
                       const next = { ...planDraft };
-                      next.plan.tasks[idx] = { ...next.plan.tasks[idx], command: e.target.value };
+                      if (next.plan?.tasks?.[idx]) next.plan.tasks[idx] = { ...next.plan.tasks[idx], command: e.target.value };
                       setPlanDraft(next);
                     }}
                   />
@@ -2365,24 +2478,7 @@ function CommandCenter({
           </section>
         ) : null}
 
-        {/* Getting-started path: tells the owner what exists, what they can
-            do, and how to do it. Shown above the composer so it is the first
-            thing a new user sees. */}
-        <GettingStartedSteps
-          workspaces={workspaces}
-          counts={counts}
-          bots={bots}
-          providersByProject={providersByProject}
-          onCreateWorkspace={() => {
-            // Handled by SettingsView's New Workspace modal; navigate there.
-            navigate("/settings");
-          }}
-          onConnectModel={() => navigate("/settings")}
-          onCreateBot={() => navigate("/bots")}
-          onNewTask={() => navigate("/work")}
-        />
-
-        {/* Landing composer */}
+        {/* Primary composer */}
         <div className="scroll-mt-6">
           <form onSubmit={send}>
             <div className="flex flex-col gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-2 shadow-sm focus-within:border-[var(--border-focus)] sm:flex-row sm:items-end">
@@ -2397,18 +2493,15 @@ function CommandCenter({
                 }}
                 placeholder={
                   hasProvider
-                    ? "Ask anything, delegate work, or continue a task…"
-                    : "Connect a model to start."
+                    ? "Message your team, ask for research, or describe work to plan…"
+                    : "Connect a model to start chatting."
                 }
                 disabled={busy || !hasProvider}
                 spellCheck
-                rows={2}
+                rows={3}
                 aria-label="Start a conversation"
-                className="max-h-48 min-h-[52px] w-full min-w-0 resize-none bg-transparent p-2.5 leading-relaxed outline-none placeholder:text-[var(--faint)] disabled:opacity-50 sm:w-auto sm:flex-1"
+                className="max-h-48 min-h-[64px] w-full min-w-0 resize-none bg-transparent p-2.5 leading-relaxed outline-none placeholder:text-[var(--faint)] disabled:opacity-50 sm:w-auto sm:flex-1"
               />
-              {/* The model chip and the send button keep their own row so the
-                  textarea gets the full width on a narrow screen instead of
-                  being squeezed to a few characters wide. */}
               <div className="flex items-center gap-2 justify-end">
                 <ModelChip
                   providers={providers}
@@ -2424,6 +2517,14 @@ function CommandCenter({
                   <>
                     <Button
                       type="button"
+                      disabled={busy || !draft.trim()}
+                      onClick={() => void startDeepResearch()}
+                      title="Run multi-source deep research in the background with citations"
+                    >
+                      Deep research
+                    </Button>
+                    <Button
+                      type="button"
                       disabled={busy || !draft.trim() || !hasProvider}
                       onClick={async () => {
                         const content = draft.trim();
@@ -2432,7 +2533,7 @@ function CommandCenter({
                         try {
                           const result = await api.createObjective(projectId, { objective: content, preview: true });
                           setPlanObjective(content);
-                          setPlanDraft(result as any);
+                          setPlanDraft(result as PlanDraftState);
                           setDraft("");
                         } catch (err) {
                           notifyError(err);
@@ -2440,8 +2541,9 @@ function CommandCenter({
                           setBusy(false);
                         }
                       }}
+                      title="Create a plan preview from your message"
                     >
-                      Plan & execute
+                      Plan &amp; execute
                     </Button>
                     <Button variant="primary" type="submit" disabled={busy || !draft.trim() || !hasProvider}>
                       Send ⏎
@@ -2456,30 +2558,55 @@ function CommandCenter({
                 <span className="ml-0.5 inline-block h-4 w-2 animate-pulse rounded-[1px] bg-[var(--accent)] align-middle" aria-hidden />
               </div>
             )}
+            {researchJobIds.length > 0 ? (
+              <div className="mt-3 flex flex-col gap-3">
+                {researchJobIds.map((id) => (
+                  <ResearchJobCard
+                    key={id}
+                    jobId={id}
+                    onClose={() => setResearchJobIds((prev) => prev.filter((x) => x !== id))}
+                  />
+                ))}
+              </div>
+            ) : null}
           </form>
-          {hasProvider && isMockModel ? (
+
+          {!hasProvider ? (
+            <div className="mt-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-step--1">
+              <p className="font-medium text-[var(--text)]">Connect a model to start</p>
+              <p className="mt-1 text-[var(--muted)]">
+                NerdBot needs a model connection to chat, research, or run work. Your data stays in your workspaces.
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Button variant="primary" type="button" onClick={() => setShowConfigure((v) => !v)}>
+                  Connect a model
+                </Button>
+                <Button type="button" onClick={() => navigate("/settings")}>Open settings</Button>
+              </div>
+            </div>
+          ) : hasProvider && isMockModel ? (
             <div
-              className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-[var(--info)] bg-[var(--info-dim)] px-4 py-2.5"
+              className="mt-3 rounded-lg border border-[var(--info)] bg-[var(--info-dim)] px-4 py-3"
               role="status"
             >
-              <span className="text-step--1 text-[var(--text)]">
-                Demo mode. This workspace has no working model, so replies are canned and
-                nothing is really executed.
-              </span>
-            </div>
-          ) : null}
-          {!hasProvider && (
-            <p className="mt-2 flex flex-wrap items-center gap-2 text-step--1 text-[var(--muted)]">
-              <span>This workspace has no model. A bot cannot think without one.</span>
+              <p className="text-step--1 font-medium text-[var(--text)]">Demo mode</p>
+              <p className="mt-1 text-step--1 text-[var(--text-soft)]">
+                Replies are simulated and no real work runs. Connect a model to use your team for real tasks.
+              </p>
               <button
                 type="button"
                 onClick={() => setShowConfigure((v) => !v)}
-                className="font-medium text-[var(--text)] underline underline-offset-4 hover:text-[var(--text-soft)]"
+                className="mt-2 text-step--1 font-medium text-[var(--text)] underline underline-offset-4"
               >
-                Connect one
+                Connect a real model
               </button>
+            </div>
+          ) : (
+            <p className="mt-2 text-step--2 text-[var(--faint)]">
+              New messages start in chat. Inside a conversation you can switch to Research (web search) or Delegate work when available.
             </p>
           )}
+
           {showConfigure && (
             <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
               <SectionLabel className="mb-3">Configure model connection</SectionLabel>
@@ -2550,7 +2677,7 @@ function CommandCenter({
                 </Button>
               </form>
               <p className="mt-2 text-step--2 text-[var(--faint)]">
-                Keys are stored Fernet-encrypted at rest when the server has NERDBOT_SECRET_KEY set.
+                Keys are stored encrypted at rest when the server has NERDBOT_SECRET_KEY set.
               </p>
             </div>
           )}

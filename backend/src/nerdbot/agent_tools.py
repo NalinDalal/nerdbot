@@ -245,6 +245,8 @@ def execute_tool(
         url = arguments.get("url", "")
         if not isinstance(url, str):
             raise ValueError("fetch_url requires a url string")
+        # Keep the runtime tool contract text-based for compatibility; chat
+        # and research paths use fetch_url_document for richer metadata.
         return truncate_output(fetch_mod.fetch_url_text(url, transport=transport))
     if name == "web_search":
         from . import search as search_mod

@@ -192,7 +192,7 @@ export function PageHeader({
 }: {
   eyebrow?: string;
   title: string;
-  description?: string;
+  description?: ReactNode;
   actions?: ReactNode;
   back?: { label: string; onClick: () => void };
 }) {
@@ -219,9 +219,15 @@ export function PageHeader({
             {title}
           </h1>
           {description ? (
-            <p className="mt-1 max-w-[68ch] text-step-0 text-[var(--muted)] leading-relaxed">
-              {description}
-            </p>
+            typeof description === "string" ? (
+              <p className="mt-1 max-w-[68ch] text-step-0 text-[var(--muted)] leading-relaxed">
+                {description}
+              </p>
+            ) : (
+              <div className="mt-1 max-w-[68ch] text-step-0 text-[var(--muted)] leading-relaxed">
+                {description}
+              </div>
+            )
           ) : null}
         </div>
         {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}

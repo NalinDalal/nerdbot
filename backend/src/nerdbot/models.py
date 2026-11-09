@@ -346,6 +346,47 @@ class Report(BaseModel):
     created_at: datetime = Field(default_factory=_utcnow)
 
 
+class ResearchJobStatus(StrEnum):
+    QUEUED = "queued"
+    PLANNING = "planning"
+    SEARCHING = "searching"
+    READING = "reading"
+    SYNTHESIZING = "synthesizing"
+    DONE = "done"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class ResearchJob(BaseModel):
+    id: str
+    project_id: str
+    thread_id: str = ""
+    owner: str = ""
+    query: str = ""
+    status: ResearchJobStatus = ResearchJobStatus.QUEUED
+    provider: str = ""
+    report_title: str = ""
+    report_markdown: str = ""
+    sources: list[dict[str, Any]] = Field(default_factory=list)
+    error: str = ""
+    library_doc_id: str = ""
+    report_id: str = ""
+    cancel_requested: bool = False
+    created_at: datetime = Field(default_factory=_utcnow)
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+
+class ResearchJobEvent(BaseModel):
+    seq: int = 0
+    job_id: str
+    kind: str = "status"
+    content: str = ""
+    data: dict[str, Any] = Field(default_factory=dict)
+    timestamp: datetime = Field(default_factory=_utcnow)
+
+
 CHAT_ROLES = frozenset({"user", "assistant", "tool", "system"})
 
 
@@ -400,6 +441,59 @@ class KnowledgeChunk(BaseModel):
     project_id: str
     idx: int = 0
     text: str = ""
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+# Library document kinds: a typed note, a markdown doc, or a text file
+# uploaded as-is. Everything is stored as markdown-capable text.
+LIBRARY_KINDS = frozenset({"note", "doc", "upload"})
+LIBRARY_ACCESS_LEVELS = frozenset({"read", "write"})
+
+
+class LibraryDoc(BaseModel):
+    """One owner-owned document in the project Library.
+
+    ``tainted`` marks content a bot has written: the owner sees the badge
+    and decides whether to keep it. ``teammate_id`` is the bot that last
+    wrote ("" = the owner). ``source`` is where the content came from
+    (upload filename, "note", …) and stays put across edits so provenance
+    survives rewrites.
+    """
+
+    id: str
+    project_id: str
+    kind: str = "note"
+    title: str = ""
+    content: str = ""
+    source: str = ""
+    teammate_id: str = ""
+    tainted: bool = False
+    version: int = 1
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+
+class LibraryDocVersion(BaseModel):
+    """One saved state of a doc, appended on every save and never rewritten."""
+
+    id: str
+    doc_id: str
+    version: int = 1
+    title: str = ""
+    content: str = ""
+    source: str = ""
+    teammate_id: str = ""
+    tainted: bool = False
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+class LibraryDocAccess(BaseModel):
+    """Per-teammate ACL row: absence of a row means no access (fail closed)."""
+
+    id: str
+    doc_id: str
+    teammate_id: str
+    access: str = "read"
     created_at: datetime = Field(default_factory=_utcnow)
 
 

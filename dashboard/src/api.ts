@@ -16,6 +16,9 @@ import type {
   Health,
   Issue,
   KnowledgeSource,
+  LibraryDoc,
+  LibraryDocAccess,
+  LibraryDocVersion,
   MemoryEntry,
   MemoryProvenance,
   Notification,
@@ -149,20 +152,34 @@ function joinUrl(base: string, path: string): string {
   return `${base.replace(/\/+$/, "")}${path}`;
 }
 
-async function req<T>(path: string, options: { method?: string; body?: unknown } = {}): Promise<T> {
+async function req<T>(
+  path: string,
+  options: { method?: string; body?: unknown; textBody?: string } = {},
+): Promise<T> {
   // getSession (not the bare module var) so a request path keeps working
   // after a full page reload restores the session from localStorage.
   const current = getSession();
   if (!current) throw new ApiError(0, "Not connected. Enter your API token first.");
   let res: Response;
   try {
+    // textBody sends the payload verbatim (text/plain) — used by the
+    // Library upload, which posts a file's contents as the raw body.
     res = await fetch(joinUrl(current.baseUrl, path), {
-      method: options.method ?? "GET",
+      method: options.method ?? (options.textBody !== undefined ? "POST" : "GET"),
       headers: {
         Authorization: `Bearer ${current.token}`,
-        ...(options.body !== undefined ? { "Content-Type": "application/json" } : {}),
+        ...(options.textBody !== undefined
+          ? { "Content-Type": "text/plain" }
+          : options.body !== undefined
+            ? { "Content-Type": "application/json" }
+            : {}),
       },
-      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      body:
+        options.textBody !== undefined
+          ? options.textBody
+          : options.body !== undefined
+            ? JSON.stringify(options.body)
+            : undefined,
     });
   } catch (err) {
     throw new ApiError(0, err instanceof Error ? `Network error: ${err.message}` : "Network error");
@@ -502,6 +519,38 @@ export const api = {
       run_id: runId,
     }),
 
+  // Library: the owner's documents. Access checks (owner vs. acting
+  // teammate) are enforced server-side; the dashboard is the owner's UI.
+  listLibrary: (projectId: string) =>
+    req<{ docs: LibraryDoc[] }>(`/projects/${projectId}/library`),
+  createLibraryDoc: (projectId: string, body: { kind?: string; title: string; content?: string; source?: string }) =>
+    post<LibraryDoc>(`/projects/${projectId}/library`, body),
+  uploadLibraryDoc: (projectId: string, filename: string, text: string) =>
+    req<LibraryDoc>(
+      `/projects/${projectId}/library/upload?filename=${encodeURIComponent(filename)}`,
+      { textBody: text },
+    ),
+  getLibraryDoc: (docId: string) => req<LibraryDoc>(`/library/${docId}`),
+  patchLibraryDoc: (docId: string, body: { title?: string; content?: string }) =>
+    patch<LibraryDoc>(`/library/${docId}`, body),
+  deleteLibraryDoc: (docId: string) =>
+    req<{ deleted: string }>(`/library/${docId}`, { method: "DELETE" }),
+  listLibraryVersions: (docId: string) =>
+    req<{ versions: LibraryDocVersion[] }>(`/library/${docId}/versions`),
+  restoreLibraryVersion: (docId: string, version: number) =>
+    post<LibraryDoc>(`/library/${docId}/versions/${version}/restore`),
+  listLibraryAccess: (docId: string) =>
+    req<{ access: LibraryDocAccess[] }>(`/library/${docId}/access`),
+  setLibraryAccess: (docId: string, teammateId: string, access: "read" | "write") =>
+    req<{ access: LibraryDocAccess[] }>(`/library/${docId}/access`, {
+      method: "PUT",
+      body: { teammate_id: teammateId, access },
+    }),
+  revokeLibraryAccess: (docId: string, teammateId: string) =>
+    req<{ access: LibraryDocAccess[] }>(`/library/${docId}/access/${teammateId}`, {
+      method: "DELETE",
+    }),
+
   listSchedules: (projectId: string) =>
     req<{ schedules: Schedule[] }>(`/projects/${projectId}/schedules`),
   createSchedule: (projectId: string, body: Record<string, unknown>) =>
@@ -591,6 +640,19 @@ export const api = {
     req<any>(`/team/activity?objective_id=${encodeURIComponent(objectiveId)}`),
   attachProviderAll: (projectId: string, body: any) =>
     post<any>(`/projects/${projectId}/teammates/attach-provider`, body),
+  // -- Search & research (Phase 1) -------------------------------------------
+  searchProviders: () => req<{ provider: string; providers: any[] }>("/search/providers"),
+  createResearchJob: (body: { project_id?: string; query: string; thread_id?: string; provider?: string }) =>
+    post<{ job: any }>("/research/jobs", body),
+  createProjectResearchJob: (projectId: string, body: { query: string; thread_id?: string; provider?: string }) =>
+    post<{ job: any }>(`/projects/${projectId}/research/jobs`, body),
+  listResearchJobs: (projectId?: string, limit = 50) =>
+    req<{ jobs: any[] }>(projectId ? `/projects/${projectId}/research/jobs?limit=${limit}` : `/research/jobs?limit=${limit}`),
+  getResearchJob: (jobId: string) => req<{ job: any }>(`/research/jobs/${jobId}`),
+  getResearchJobEvents: (jobId: string, after = 0) =>
+    req<{ events: any[] }>(`/research/jobs/${jobId}/events?after=${after}`),
+  cancelResearchJob: (jobId: string) => post<{ job: any }>(`/research/jobs/${jobId}/cancel`, {}),
+  retryResearchJob: (jobId: string) => post<{ job: any; retried_from?: string }>(`/research/jobs/${jobId}/retry`, {}),
   sendChatStream: (
     threadId: string,
     content: string,

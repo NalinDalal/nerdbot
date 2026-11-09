@@ -606,10 +606,22 @@ export function TaskDetailView({
   return (
     <Page>
       <PageHeader
-        eyebrow={`${projectName} · Task`}
+        eyebrow="Work in progress"
         title={heading}
-        description="What was asked, who is doing it, what is happening now, and what came out."
-        back={{ label: projectName, onClick: onBack }}
+        description={
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span>{projectName}</span>
+            <span className="text-[var(--faint)]" aria-hidden>·</span>
+            <span className="text-[var(--muted)]">
+              {owner ? (owner.persona || owner.name || "Teammate") : "Unassigned"}
+            </span>
+            <span className="text-[var(--faint)]" aria-hidden>·</span>
+            <span className="mono text-step--2 text-[var(--faint)]" title={task.id}>
+              <ShortId id={task.id} />
+            </span>
+          </span>
+        }
+        back={{ label: `Back to ${projectName}`, onClick: onBack }}
         actions={
           <>
             <StatusBadge status={task.status} />
@@ -645,7 +657,7 @@ export function TaskDetailView({
               </Button>
             )}
             <Button onClick={() => setShowMore((value) => !value)}>
-              {showMore ? "Close" : "More"}
+              {showMore ? "Close" : "More actions"}
             </Button>
           </>
         }
@@ -717,6 +729,62 @@ export function TaskDetailView({
             Refresh
           </Button>
         </div>
+      ) : null}
+
+      {pendingApprovals.length > 0 ? (
+        <section className="mb-6 rounded-xl border border-[var(--warn)] bg-[var(--warn-dim)] px-4 py-4" aria-label="Approval needed">
+          <div className="mb-3">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-step-0 font-semibold text-[var(--text)]">Needs your approval</h2>
+              <span className="mono text-step--2 text-[var(--faint)]">
+                {pendingApprovals.length} request{pendingApprovals.length === 1 ? "" : "s"}
+              </span>
+            </div>
+            <p className="mt-1 text-step--1 text-[var(--text-soft)]">
+              Review the exact action below. Approve only if you want that action carried out.
+            </p>
+          </div>
+          <div className="flex flex-col gap-2">
+            {pendingApprovals.map((approval) => (
+              <div key={approval.id} className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
+                <div className="mb-2 text-step--2 uppercase tracking-[0.12em] text-[var(--faint)]">Exact action</div>
+                <div className="mb-3 text-step--1 font-medium text-[var(--text)] break-words">
+                  {approval.action || "Requested action"}
+                </div>
+                <ApprovalRow
+                  approval={approval}
+                  busy={busy !== null}
+                  onDecide={async (decision) => {
+                    const result = await act("approval", () =>
+                      api.decideApproval(approval.id, decision),
+                    );
+                    const resume =
+                      result && typeof result === "object" && "resume" in result
+                        ? result.resume
+                        : null;
+                    if (resume && resume.outcome === "carried_out") {
+                      toast.success("Approved. The action was carried out.");
+                    } else if (resume && resume.outcome === "refused") {
+                      toast.error(`Approved, but the action did not run: ${resume.output}`);
+                    } else if (resume && resume.outcome === "waiting") {
+                      toast.message("Approved. One more decision is still needed.");
+                    } else if (decision === "denied") {
+                      toast.message("Rejected. Nothing was performed.");
+                    }
+                  }}
+                  onReask={
+                    approval.tool_name
+                      ? async () => {
+                          await act("approval", () => api.reaskApproval(approval.id));
+                          toast.message("Asked again. A new request is waiting for you.");
+                        }
+                      : undefined
+                  }
+                />
+              </div>
+            ))}
+          </div>
+        </section>
       ) : null}
 
       {/* Status at a glance: what this task is and where it stands. */}
@@ -843,58 +911,24 @@ export function TaskDetailView({
       </section>
 
       {latestRun ? (
-        <RunTimeline
-          key={latestRun.id}
-          run={latestRun}
-          live={latestRun.status === "running" || latestRun.status === "queued" || watching}
-        />
+        <details className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] sm:mb-6">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-step--1 font-medium text-[var(--text)]">
+            <span>Execution timeline</span>
+            <span className="shrink-0 text-step--2 font-normal text-[var(--muted)]">
+              {runStatusLabel(latestRun.status)}
+            </span>
+          </summary>
+          <div className="border-t border-[var(--border-dim)] px-2 pb-2 pt-1 sm:px-3">
+            <RunTimeline
+              key={latestRun.id}
+              run={latestRun}
+              live={latestRun.status === "running" || latestRun.status === "queued" || watching}
+            />
+          </div>
+        </details>
       ) : null}
 
-      {pendingApprovals.length > 0 ? (
-        <section className="mb-6">
-          <div className="mb-2 flex items-center justify-between">
-            <SectionLabel>Waiting on you</SectionLabel>
-            <span className="mono text-step--2 text-[var(--faint)]">
-              {pendingApprovals.length} request{pendingApprovals.length === 1 ? "" : "s"}
-            </span>
-          </div>
-          <div className="flex flex-col gap-2">
-            {pendingApprovals.map((approval) => (
-              <ApprovalRow
-                key={approval.id}
-                approval={approval}
-                busy={busy !== null}
-                onDecide={async (decision) => {
-                  const result = await act("approval", () =>
-                    api.decideApproval(approval.id, decision),
-                  );
-                  const resume =
-                    result && typeof result === "object" && "resume" in result
-                      ? result.resume
-                      : null;
-                  if (resume && resume.outcome === "carried_out") {
-                    toast.success("Approved. The action was carried out.");
-                  } else if (resume && resume.outcome === "refused") {
-                    toast.error(`Approved, but the action did not run: ${resume.output}`);
-                  } else if (resume && resume.outcome === "waiting") {
-                    toast.message("Approved. One more decision is still needed.");
-                  } else if (decision === "denied") {
-                    toast.message("Rejected. Nothing was performed.");
-                  }
-                }}
-                onReask={
-                  approval.tool_name
-                    ? async () => {
-                        await act("approval", () => api.reaskApproval(approval.id));
-                        toast.message("Asked again. A new request is waiting for you.");
-                      }
-                    : undefined
-                }
-              />
-            ))}
-          </div>
-        </section>
-      ) : null}
+      {null}
 
       {task.blocked_reason ? (
         <div
@@ -1097,22 +1131,21 @@ export function TaskDetailView({
         </Modal>
       ) : null}
 
-      {/* Runs */}
-      <section className="mb-6">
-        <div className="mb-2 flex items-baseline justify-between">
-          <SectionLabel>Runs</SectionLabel>
-          {latestRun ? (
-            <span className="mono text-step--2 text-[var(--faint)]">
-              {runs.length} total · latest {relativeTime(latestRun.started_at)}
-            </span>
-          ) : null}
+      <details className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] sm:mb-6">
+        <summary className="cursor-pointer list-none px-4 py-3 text-step--1 font-medium text-[var(--text)]">
+          Run history <span className="font-normal text-[var(--muted)]">({runs.length})</span>
+        </summary>
+        <div className="border-t border-[var(--border-dim)] p-3 sm:p-4">
+          <RunsTable runs={runs} />
         </div>
-        <RunsTable runs={runs} />
-      </section>
+      </details>
 
+      <details className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] sm:mb-6">
+        <summary className="cursor-pointer list-none px-4 py-3 text-step--1 font-medium text-[var(--text)]">Handoffs and delegation <span className="font-normal text-[var(--muted)]">({delegationRows.length})</span></summary>
+        <div className="space-y-4 border-t border-[var(--border-dim)] p-3 sm:p-4">
       {/* Handoffs (delegation) */}
-      <section className="mb-6">
-        <SectionLabel className="mb-2">Handoffs (delegation)</SectionLabel>
+      <section>
+        <SectionLabel className="mb-2">Handoffs</SectionLabel>
         <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
           <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
             <strong className="text-[var(--text)]">Delegate to another bot</strong>
@@ -1242,7 +1275,7 @@ export function TaskDetailView({
       </section>
 
       {/* Delegation tree */}
-      <section className="mb-6">
+      <section>
         <SectionLabel className="mb-2">Delegation tree</SectionLabel>
         <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
           <div className="flex flex-wrap items-center gap-2 text-step--1">
@@ -1297,11 +1330,19 @@ export function TaskDetailView({
           </div>
         </div>
       </section>
+        </div>
+      </details>
 
-      <WorkspacePanel taskId={taskId} />
+      <details className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] sm:mb-6">
+        <summary className="cursor-pointer list-none px-4 py-3 text-step--1 font-medium text-[var(--text)]">Files and checkout</summary>
+        <div className="border-t border-[var(--border-dim)] p-3 sm:p-4"><WorkspacePanel taskId={taskId} /></div>
+      </details>
 
+      <details className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] sm:mb-6">
+        <summary className="cursor-pointer list-none px-4 py-3 text-step--1 font-medium text-[var(--text)]">Artifact records <span className="font-normal text-[var(--muted)]">({artifacts.length})</span></summary>
+        <div className="border-t border-[var(--border-dim)] p-3 sm:p-4">
       {/* Artifacts */}
-      <section className="mb-6">
+      <section>
         <SectionLabel className="mb-2">Artifacts</SectionLabel>
         {artifacts.length > 0 ? (
           <div className={TABLE_SHELL}>
@@ -1334,9 +1375,14 @@ export function TaskDetailView({
           <EmptyState title="No artifacts" hint="Runs produce test-log and transcript artifacts." />
         )}
       </section>
+        </div>
+      </details>
 
+      <details className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] sm:mb-6">
+        <summary className="cursor-pointer list-none px-4 py-3 text-step--1 font-medium text-[var(--text)]">Reviews <span className="font-normal text-[var(--muted)]">({reviews.length})</span></summary>
+        <div className="border-t border-[var(--border-dim)] p-3 sm:p-4">
       {/* Reviews */}
-      <section className="mb-6">
+      <section>
         <SectionLabel className="mb-2">Reviews</SectionLabel>
         {reviews.length > 0 ? (
           <div className="flex flex-col gap-2">
@@ -1361,9 +1407,14 @@ export function TaskDetailView({
           <EmptyState title="No reviews" hint="A distinct reviewer records verdict and risks here." />
         )}
       </section>
+        </div>
+      </details>
 
+      <details className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] sm:mb-6">
+        <summary className="cursor-pointer list-none px-4 py-3 text-step--1 font-medium text-[var(--text)]">PR packages <span className="font-normal text-[var(--muted)]">({pr_packages.length})</span></summary>
+        <div className="border-t border-[var(--border-dim)] p-3 sm:p-4">
       {/* PR packages */}
-      <section className="mb-6">
+      <section>
         <SectionLabel className="mb-2">PR packages</SectionLabel>
         {pr_packages.length > 0 ? (
           <div className="flex flex-col gap-2">
@@ -1381,12 +1432,16 @@ export function TaskDetailView({
           <EmptyState title="No PR packages" hint="Generate a reviewable candidate package." />
         )}
       </section>
+        </div>
+      </details>
 
       {rollup ? (
-        <section className="mb-6">
-          <SectionLabel className="mb-2">Roll-up</SectionLabel>
-          <pre className={LOG_BLOCK}>{JSON.stringify(rollup, null, 2)}</pre>
-        </section>
+        <details className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] sm:mb-6" open>
+          <summary className="cursor-pointer text-step--1 font-medium text-[var(--text-soft)]">Roll-up</summary>
+          <div className="mt-2">
+            <pre className={LOG_BLOCK}>{JSON.stringify(rollup, null, 2)}</pre>
+          </div>
+        </details>
       ) : null}
       <div className="mt-6 text-step--1">
         <a

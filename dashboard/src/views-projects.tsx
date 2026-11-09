@@ -36,13 +36,13 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
   return (
     <Page>
       <PageHeader
-        eyebrow="Portfolio"
-        title="Projects"
-        description="Each project owns its teammates, tasks, files, and model connections."
+        eyebrow="Workspaces"
+        title="Workspaces"
+        description="Where your teammates, conversations, tasks, files, and model connections live."
         actions={
           <>
             <Button variant="primary" onClick={() => setShowCreate("create")}>
-              New project
+              New workspace
             </Button>
             <Button onClick={list.reload}>Refresh</Button>
           </>
@@ -53,8 +53,8 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search projects"
-          aria-label="Search projects"
+          placeholder="Search workspaces"
+          aria-label="Search workspaces"
           className="h-9 w-full max-w-sm rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-step--1 outline-none transition-colors placeholder:text-[var(--faint)] focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
         />
         <label className="flex items-center gap-1.5 text-step--2 text-[var(--faint)]">
@@ -68,9 +68,9 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
         <ErrorState error={list.error} onRetry={list.reload} />
       ) : projects.length === 0 ? (
         <EmptyState
-          title="No projects yet"
-          hint="Create a project to scope sustained work."
-          action={<Button variant="primary" onClick={() => setShowCreate("create")}>New project</Button>}
+          title="No workspaces yet"
+          hint="Create a workspace to organize teammates, tasks, and files."
+          action={<Button variant="primary" onClick={() => setShowCreate("create")}>New workspace</Button>}
         />
       ) : (
         <div className={TABLE_SHELL}>
@@ -131,9 +131,9 @@ export function ProjectsView({ onOpen }: { onOpen: (id: string) => void }) {
       )}
 
       {showCreate ? (
-        <Modal title="New project" onClose={() => setShowCreate("")}>
+        <Modal title="New workspace" onClose={() => setShowCreate("")}>
           <EntityForm
-            submitLabel="Create project"
+            submitLabel="Create workspace"
             fields={[
               { name: "repository", label: "Name", required: true, placeholder: "demo-repo" },
               { name: "owner_note", label: "Note (owner is always your token identity)" },

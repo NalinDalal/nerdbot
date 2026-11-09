@@ -664,8 +664,15 @@ def _execute_chat_tool(
             results = search_mod.web_search(str(args.get("query", "")), transport=transport)
             return search_mod.format_results(results)
         if name == "fetch_url":
-            text = fetch_mod.fetch_url_text(str(args.get("url", "")), transport=None)
-            return str(text)[:4000]
+            doc = fetch_mod.fetch_url_document(str(args.get("url", "")), transport=None)
+            payload = {
+                "url": doc.url,
+                "final_url": doc.final_url,
+                "title": doc.title,
+                "content_type": doc.content_type,
+                "text": (doc.text or "")[:4000],
+            }
+            return json.dumps(payload, ensure_ascii=False)
         if name == "create_task":
             task = store.create_task(
                 conn,

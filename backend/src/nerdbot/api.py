@@ -39,14 +39,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.responses import Response
 
-from . import approval_flow, auth as auth_mod, orchestrator, run_events, schemas, store
+from . import approval_flow, auth as auth_mod, orchestrator, research as research_mod, run_events, schemas, store
 from . import backup as backup_mod
 from . import boards as boards_mod
 from . import capabilities as capabilities_mod
@@ -58,6 +58,7 @@ from . import faces as faces_mod
 from . import fleet as fleet_mod
 from . import gates as gates_mod
 from . import knowledge as knowledge_mod
+from . import library as library_mod
 from . import metrics as metrics_mod
 from . import notify as notify_mod
 from . import permissions as permissions_mod
@@ -2909,6 +2910,266 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"artifact_id": artifact_id, "citations": citations}
 
+    # -- Library ----------------------------------------------------------------
+
+    def _library_error(exc: Exception) -> HTTPException:
+        """Map a library failure to the HTTP status it owes the caller.
+
+        Policy denials are 403, gate results keep their own mapping (403 or
+        409-with-approval), missing rows 404, bad input 400.
+        """
+        if isinstance(exc, library_mod.AccessDenied):
+            return HTTPException(status_code=403, detail=str(exc))
+        if isinstance(exc, (gates_mod.GateDenied, gates_mod.GateApprovalRequired)):
+            return gates_mod.wrap_gate_error(exc)
+        if isinstance(exc, KeyError):
+            return HTTPException(status_code=404, detail=str(exc).strip("'"))
+        if isinstance(exc, ValueError):
+            return HTTPException(status_code=400, detail=str(exc))
+        return HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}")
+
+    _LIBRARY_ERRORS = (
+        library_mod.AccessDenied,
+        gates_mod.GateDenied,
+        gates_mod.GateApprovalRequired,
+        KeyError,
+        ValueError,
+    )
+
+    def _library_doc_or_404(
+        conn: sqlite3.Connection, doc_id: str, principal: str
+    ) -> Any:
+        """Load a document and enforce that the caller owns its project."""
+        doc = store.get_library_doc(conn, doc_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail="document not found")
+        require_project_owner(conn, doc.project_id, principal)
+        return doc
+
+    def _opt_str(body: dict[str, Any], key: str) -> str | None:
+        """A present string field, None when absent/null. Rejects other types."""
+        if key not in body or body[key] is None:
+            return None
+        if not isinstance(body[key], str):
+            raise HTTPException(status_code=400, detail=f"{key} must be a string")
+        return body[key]
+
+    @app.get("/projects/{project_id}/library")
+    def list_library(
+        project_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        """Documents the caller may see: all for the owner, only ACL'd for a bot."""
+        require_project_owner(conn, project_id, principal)
+        try:
+            if acting is not None:
+                gates_mod.require(
+                    conn, acting, "knowledge.read", payload={"project_id": project_id}
+                )
+            docs = library_mod.list_visible(conn, project_id, acting)
+        except _LIBRARY_ERRORS as exc:
+            raise _library_error(exc) from exc
+        return {"docs": [d.model_dump(mode="json") for d in docs]}
+
+    @app.post("/projects/{project_id}/library")
+    def create_library_doc(
+        project_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        try:
+            doc = library_mod.create_doc(
+                conn,
+                project_id,
+                acting,
+                kind=str(body.get("kind", "note") or "note"),
+                title=str(body.get("title", "") or ""),
+                content=str(body.get("content", "") or ""),
+                source=str(body.get("source", "") or ""),
+            )
+        except _LIBRARY_ERRORS as exc:
+            raise _library_error(exc) from exc
+        return doc.model_dump(mode="json")
+
+    @app.post("/projects/{project_id}/library/upload")
+    async def upload_library_doc(
+        project_id: str,
+        request: Request,
+        filename: str = "",
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        """Turn a UTF-8 text file (≤1MiB) into an uploaded document.
+
+        The file arrives as the raw request body (``text/plain``) with its
+        name in ``?filename=`` — no multipart dependency — and is read with
+        a hard cap so an oversized upload is refused while streaming instead
+        of being buffered whole.
+        """
+        require_project_owner(conn, project_id, principal)
+        cap = library_mod.MAX_UPLOAD_BYTES
+        chunks: list[bytes] = []
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > cap:
+                raise HTTPException(status_code=413, detail="file exceeds the 1MiB upload limit")
+            chunks.append(chunk)
+        raw = b"".join(chunks)
+        try:
+            source, content = library_mod.parse_upload(filename, raw)
+            doc = library_mod.create_doc(
+                conn,
+                project_id,
+                acting,
+                kind="upload",
+                title=source[: store.LIBRARY_MAX_TITLE_CHARS],
+                content=content,
+                source=source,
+            )
+        except _LIBRARY_ERRORS as exc:
+            raise _library_error(exc) from exc
+        return doc.model_dump(mode="json")
+
+    @app.get("/library/{doc_id}")
+    def get_library_doc(
+        doc_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        doc = _library_doc_or_404(conn, doc_id, principal)
+        try:
+            library_mod.require_read(conn, doc, acting)
+        except _LIBRARY_ERRORS as exc:
+            raise _library_error(exc) from exc
+        return doc.model_dump(mode="json")
+
+    @app.patch("/library/{doc_id}")
+    def patch_library_doc(
+        doc_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        doc = _library_doc_or_404(conn, doc_id, principal)
+        try:
+            updated = library_mod.save_doc(
+                conn,
+                doc,
+                acting,
+                title=_opt_str(body, "title"),
+                content=_opt_str(body, "content"),
+            )
+        except _LIBRARY_ERRORS as exc:
+            raise _library_error(exc) from exc
+        return updated.model_dump(mode="json")
+
+    @app.delete("/library/{doc_id}")
+    def delete_library_doc(
+        doc_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        doc = _library_doc_or_404(conn, doc_id, principal)
+        try:
+            library_mod.delete_doc(conn, doc_id, acting)
+        except _LIBRARY_ERRORS as exc:
+            raise _library_error(exc) from exc
+        return {"deleted": doc_id}
+
+    @app.get("/library/{doc_id}/versions")
+    def list_library_versions(
+        doc_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        doc = _library_doc_or_404(conn, doc_id, principal)
+        try:
+            library_mod.require_read(conn, doc, acting)
+            versions = store.list_library_doc_versions(conn, doc_id)
+        except _LIBRARY_ERRORS as exc:
+            raise _library_error(exc) from exc
+        return {"versions": [v.model_dump(mode="json") for v in versions]}
+
+    @app.post("/library/{doc_id}/versions/{version}/restore")
+    def restore_library_version(
+        doc_id: str,
+        version: int,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        doc = _library_doc_or_404(conn, doc_id, principal)
+        try:
+            restored = library_mod.restore_version(conn, doc, version, acting)
+        except _LIBRARY_ERRORS as exc:
+            raise _library_error(exc) from exc
+        return restored.model_dump(mode="json")
+
+    @app.get("/library/{doc_id}/access")
+    def get_library_access(
+        doc_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        doc = _library_doc_or_404(conn, doc_id, principal)
+        try:
+            rows = library_mod.list_access(conn, doc_id, acting)
+        except _LIBRARY_ERRORS as exc:
+            raise _library_error(exc) from exc
+        return {"access": [r.model_dump(mode="json") for r in rows]}
+
+    @app.put("/library/{doc_id}/access")
+    def put_library_access(
+        doc_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        doc = _library_doc_or_404(conn, doc_id, principal)
+        _ = doc
+        try:
+            library_mod.set_access(
+                conn,
+                doc_id,
+                acting,
+                str(body.get("teammate_id", "") or ""),
+                str(body.get("access", "read") or "read"),
+            )
+            rows = store.list_library_doc_access(conn, doc_id)
+        except _LIBRARY_ERRORS as exc:
+            raise _library_error(exc) from exc
+        return {"access": [r.model_dump(mode="json") for r in rows]}
+
+    @app.delete("/library/{doc_id}/access/{teammate_id}")
+    def delete_library_access(
+        doc_id: str,
+        teammate_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        doc = _library_doc_or_404(conn, doc_id, principal)
+        _ = doc
+        try:
+            library_mod.clear_access(conn, doc_id, acting, teammate_id)
+            rows = store.list_library_doc_access(conn, doc_id)
+        except _LIBRARY_ERRORS as exc:
+            raise _library_error(exc) from exc
+        return {"access": [r.model_dump(mode="json") for r in rows]}
+
     # -- Phase 4: schedules ----------------------------------------------------
 
     @app.post("/projects/{project_id}/schedules")
@@ -4297,6 +4558,193 @@ def create_app() -> FastAPI:
             )
 
         app.mount("/", _SPAStaticFiles(directory=str(_dist), html=True), name="spa")
+
+    # -- Search providers & deep research (Phase 1) ---------------------------
+
+    @app.get("/search/providers")
+    def search_providers(principal: str = Depends(principal_from_header)) -> dict[str, Any]:
+        _ = principal
+        from . import search as search_mod
+        cfg = search_mod.SearchConfig.from_env()
+        return {"provider": cfg.provider, "providers": search_mod.available_providers(cfg)}
+
+    def _require_research_job(conn: sqlite3.Connection, job_id: str, principal: str):
+        job = store.get_research_job(conn, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="research job not found")
+        require_project_owner(conn, job.project_id, principal)
+        return job
+
+    def _start_job(job_id: str) -> None:
+        db = os.environ.get("NERDBOT_DB", "nerdbot.db")
+        threading.Thread(
+            target=research_mod.run_research_job, args=(job_id,), kwargs={"db_path": db}, daemon=True
+        ).start()
+
+    @app.post("/research/jobs")
+    def create_research_job(
+        body: schemas.ResearchJobCreate,
+        background: BackgroundTasks,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        project_id = (body.project_id or "").strip() or None
+        query = (body.query or "").strip()
+        if not query:
+            raise HTTPException(status_code=400, detail="query is required")
+        if not project_id:
+            projects = store.list_projects(conn, principal)
+            home = next((p for p in projects if p.repository == "Home"), None)
+            if home is None:
+                home = store.create_project(conn, owner=principal, repository="Home", config={})
+            project_id = home.id
+        require_project_owner(conn, project_id, principal)
+        thread_id = (body.thread_id or "").strip()
+        if thread_id:
+            t = store.get_thread(conn, thread_id)
+            if t is None or t.project_id != project_id:
+                raise HTTPException(status_code=400, detail="thread must belong to the same project")
+        job = store.create_research_job(
+            conn, project_id, query=query, owner=principal, thread_id=thread_id,
+            provider=(body.provider or "").strip(),
+        )
+        background.add_task(_start_job, job.id)
+        return {"job": research_mod.research_job_to_dict(job)}
+
+    @app.post("/projects/{project_id}/research/jobs")
+    def create_project_research_job(
+        project_id: str,
+        body: schemas.ResearchJobCreate,
+        background: BackgroundTasks,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        query = (body.query or "").strip()
+        if not query:
+            raise HTTPException(status_code=400, detail="query is required")
+        thread_id = (body.thread_id or "").strip()
+        if thread_id:
+            t = store.get_thread(conn, thread_id)
+            if t is None or t.project_id != project_id:
+                raise HTTPException(status_code=400, detail="thread must belong to the same project")
+        job = store.create_research_job(
+            conn, project_id, query=query, owner=principal, thread_id=thread_id,
+            provider=(body.provider or "").strip(),
+        )
+        background.add_task(_start_job, job.id)
+        return {"job": research_mod.research_job_to_dict(job)}
+
+    @app.get("/research/jobs")
+    def list_research_jobs(
+        project_id: str | None = None,
+        limit: int = 50,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        if project_id:
+            require_project_owner(conn, project_id, principal)
+            jobs = store.list_research_jobs(conn, project_id, limit=limit)
+        else:
+            jobs = store.list_research_jobs_for_owner(conn, principal, limit=limit)
+        return {"jobs": [research_mod.research_job_to_dict(j) for j in jobs]}
+
+    @app.get("/projects/{project_id}/research/jobs")
+    def list_project_research_jobs(
+        project_id: str,
+        limit: int = 50,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        jobs = store.list_research_jobs(conn, project_id, limit=limit)
+        return {"jobs": [research_mod.research_job_to_dict(j) for j in jobs]}
+
+    @app.get("/research/jobs/{job_id}")
+    def get_research_job(
+        job_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        job = _require_research_job(conn, job_id, principal)
+        return {"job": research_mod.research_job_to_dict(job)}
+
+    @app.get("/research/jobs/{job_id}/events")
+    def get_research_job_events(
+        job_id: str,
+        after: int = 0,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        _require_research_job(conn, job_id, principal)
+        events = store.list_research_job_events(conn, job_id, after=after)
+        return {"events": [e.model_dump(mode="json") for e in events]}
+
+    @app.get("/research/jobs/{job_id}/events/stream")
+    def stream_research_job_events(
+        job_id: str,
+        request: Request,
+        after: int = 0,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ):
+        _require_research_job(conn, job_id, principal)
+        import asyncio
+
+        async def generate():
+            next_seq = int(after or 0)
+            while True:
+                if await request.is_disconnected():
+                    return
+                c = store.connect(os.environ.get("NERDBOT_DB", "nerdbot.db"))
+                try:
+                    job = store.get_research_job(c, job_id)
+                    if job is None:
+                        yield f"data: {json.dumps({'kind':'end','reason':'missing'})}\n\n"
+                        return
+                    events = store.list_research_job_events(c, job_id, after=next_seq)
+                    for ev in events:
+                        next_seq = max(next_seq, ev.seq)
+                        yield f"data: {json.dumps({'kind':'event','event': ev.model_dump(mode='json')}, default=str)}\n\n"
+                    terminal = job.status.value in {"done","failed","cancelled"}
+                finally:
+                    c.close()
+                if terminal:
+                    yield f"data: {json.dumps({'kind':'end','status': job.status.value})}\n\n"
+                    return
+                await asyncio.sleep(1.0)
+
+        return StreamingResponse(generate(), media_type="text/event-stream")
+
+    @app.post("/research/jobs/{job_id}/cancel")
+    def cancel_research_job(
+        job_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        job = _require_research_job(conn, job_id, principal)
+        if job.status.value not in {"done","failed","cancelled"}:
+            job = store.request_research_job_cancel(conn, job_id)
+            store.append_research_job_event(conn, job_id, "status", "Cancel requested", {"status": job.status.value})
+        return {"job": research_mod.research_job_to_dict(store.get_research_job(conn, job_id))}
+
+    @app.post("/research/jobs/{job_id}/retry")
+    def retry_research_job(
+        job_id: str,
+        background: BackgroundTasks,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        job = _require_research_job(conn, job_id, principal)
+        if job.status.value not in {"done","failed","cancelled"}:
+            raise HTTPException(status_code=409, detail="job is still running")
+        new_job = store.create_research_job(
+            conn, job.project_id, query=job.query, owner=principal,
+            thread_id=job.thread_id, provider=job.provider,
+        )
+        background.add_task(_start_job, new_job.id)
+        return {"job": research_mod.research_job_to_dict(new_job), "retried_from": job.id}
+
 
     return app
 

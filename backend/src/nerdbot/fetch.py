@@ -22,7 +22,8 @@ import socket
 import ssl
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from html.parser import HTMLParser
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
@@ -65,6 +66,74 @@ class FetchPolicy:
     max_redirects: int = DEFAULT_MAX_REDIRECTS
     max_bytes: int = DEFAULT_MAX_BYTES
     timeout_s: float = DEFAULT_TIMEOUT_S
+
+
+@dataclass
+class FetchDocument:
+    """Fetched content with best-effort metadata for synthesis/provenance."""
+
+    text: str
+    url: str
+    final_url: str
+    content_type: str = ""
+    title: str = ""
+    canonical_url: str = ""
+    bytes_read: int = 0
+
+
+class _HTMLMetaParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.title: list[str] = []
+        self._in_title = False
+        self.canonical = ""
+        self.description = ""
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        data = {(k or "").lower(): (v or "") for k, v in attrs}
+        t = (tag or "").lower()
+        if t == "title":
+            self._in_title = True
+        elif t == "link" and "canonical" in (data.get("rel") or "").lower() and data.get("href"):
+            if not self.canonical:
+                self.canonical = data["href"].strip()
+        elif t == "meta":
+            name = (data.get("name") or data.get("property") or "").lower()
+            content = (data.get("content") or "").strip()
+            if name in ("description", "og:description") and content and not self.description:
+                self.description = content
+
+    def handle_endtag(self, tag: str) -> None:
+        if (tag or "").lower() == "title":
+            self._in_title = False
+
+    def handle_data(self, data: str) -> None:
+        if self._in_title:
+            self.title.append(data)
+
+
+def extract_html_metadata(html: str, base_url: str = "") -> dict[str, str]:
+    """Best-effort title/canonical extraction for HTML/text responses."""
+    if not html:
+        return {"title": "", "canonical_url": "", "description": ""}
+    parser = _HTMLMetaParser()
+    try:
+        parser.feed(html[:200_000])
+        parser.close()
+    except Exception:
+        return {"title": "", "canonical_url": "", "description": ""}
+    title = " ".join("".join(parser.title).split())[:300]
+    canonical = parser.canonical
+    if canonical and base_url:
+        try:
+            canonical = urljoin(base_url, canonical)
+        except Exception:
+            pass
+    return {
+        "title": title,
+        "canonical_url": canonical[:2000],
+        "description": parser.description[:500],
+    }
 
 
 def default_resolver(host: str) -> list[str]:
@@ -154,14 +223,14 @@ def check_url(
     return checked
 
 
-def fetch_url_text(
+def fetch_url_document(
     url: str,
     policy: FetchPolicy | None = None,
     resolver: Callable[[str], list[str]] | None = None,
     transport: httpx.BaseTransport | None = None,
     clock: Callable[[], float] | None = None,
-) -> str:
-    """Fetch a URL as text under policy. No auth, cookies, or credentials."""
+) -> FetchDocument:
+    """Fetch a URL under SSRF policy and return text plus best-effort metadata."""
     active = policy or FetchPolicy()
     tick = clock or time.monotonic
     checked = check_url(url, active, resolver)
@@ -170,8 +239,6 @@ def fetch_url_text(
             resolver=resolver, timeout_s=active.timeout_s, max_bytes=active.max_bytes
         )
     client = httpx.Client(follow_redirects=False, timeout=active.timeout_s, transport=transport)
-    # Whole-fetch wall-clock budget: per-connection timeouts cannot bound a
-    # fetch alone — redirect hops and slow (slowloris) body delivery stack up.
     started = tick()
     budget = active.timeout_s * (active.max_redirects + 1)
     try:
@@ -219,10 +286,40 @@ def fetch_url_text(
                 if total > active.max_bytes:
                     raise FetchTooLargeError(f"response exceeds cap {active.max_bytes} bytes")
                 chunks.append(chunk)
-            return b"".join(chunks).decode("utf-8", errors="replace")
+            raw = b"".join(chunks)
+            text = raw.decode("utf-8", errors="replace")
+            content_type = str(response.headers.get("content-type", "") or "")
+            doc = FetchDocument(
+                text=text,
+                url=str(url),
+                final_url=str(current),
+                content_type=content_type,
+                bytes_read=total,
+            )
+            ctype = content_type.lower()
+            if "html" in ctype or "xml" in ctype or "<html" in text[:500].lower() or "<title" in text[:2000].lower():
+                meta = extract_html_metadata(text, base_url=str(current))
+                doc.title = meta.get("title", "")
+                doc.canonical_url = meta.get("canonical_url", "") or str(current)
+            else:
+                doc.canonical_url = str(current)
+            return doc
         raise FetchProtocolError(f"too many redirects (>{active.max_redirects})")
     finally:
         client.close()
+
+
+def fetch_url_text(
+    url: str,
+    policy: FetchPolicy | None = None,
+    resolver: Callable[[str], list[str]] | None = None,
+    transport: httpx.BaseTransport | None = None,
+    clock: Callable[[], float] | None = None,
+) -> str:
+    """Fetch a URL as text under policy. No auth, cookies, or credentials."""
+    return fetch_url_document(
+        url, policy=policy, resolver=resolver, transport=transport, clock=clock
+    ).text
 
 
 class _HeaderBoundedFile:

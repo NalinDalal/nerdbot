@@ -166,6 +166,45 @@ export interface KnowledgeSource {
   created_at: string;
 }
 
+export interface LibraryDoc {
+  id: string;
+  project_id: string;
+  /** note | doc | upload — how the document arrived. */
+  kind: string;
+  title: string;
+  content: string;
+  /** Where the content came from (upload filename, "note", …). */
+  source: string;
+  /** Teammate that last wrote it ("" = the owner). */
+  teammate_id: string;
+  /** True when a bot has written this content; only an owner edit clears it. */
+  tainted: boolean;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LibraryDocVersion {
+  id: string;
+  doc_id: string;
+  version: number;
+  title: string;
+  content: string;
+  source: string;
+  teammate_id: string;
+  tainted: boolean;
+  created_at: string;
+}
+
+export interface LibraryDocAccess {
+  id: string;
+  doc_id: string;
+  teammate_id: string;
+  /** read | write — a missing row means no access at all. */
+  access: string;
+  created_at: string;
+}
+
 export interface Schedule {
   id: string;
   project_id: string;
@@ -536,6 +575,36 @@ export interface TerminalSessionInfo {
   cols: number;
   rows: number;
   alive: boolean;
+}
+
+export interface ResearchJob {
+  id: string;
+  project_id: string;
+  thread_id?: string;
+  owner?: string;
+  query: string;
+  status: "queued" | "planning" | "searching" | "reading" | "synthesizing" | "done" | "failed" | "cancelled";
+  provider?: string;
+  report_title?: string;
+  report_markdown?: string;
+  sources?: Array<{ title?: string; url?: string; final_url?: string; source?: string; read_ok?: boolean; read_error?: string }>;
+  error?: string;
+  library_doc_id?: string;
+  report_id?: string;
+  cancel_requested?: boolean;
+  created_at?: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  updated_at?: string;
+}
+
+export interface ResearchJobEvent {
+  seq: number;
+  job_id: string;
+  kind: string;
+  content: string;
+  data?: Record<string, unknown>;
+  timestamp?: string;
 }
 
 export interface RunEventPage {

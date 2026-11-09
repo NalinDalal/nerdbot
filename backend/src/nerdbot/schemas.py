@@ -176,3 +176,11 @@ class ApprovalDecision(_Body):
     """The decision value itself is validated in the handler (400, as before)."""
 
     decision: str | None = None
+
+
+class ResearchJobCreate(_Body):
+    project_id: str | None = None
+    query: str | None = None
+    thread_id: str | None = None
+    provider: str | None = None
+    save_to_library: bool | None = True

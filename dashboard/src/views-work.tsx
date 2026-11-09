@@ -11,7 +11,7 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { navigate, notifyError } from "./app";
-import type { ApprovalInboxItem, Project, ProjectCounts, Task, Teammate } from "./types";
+import type { ApprovalInboxItem, Project, ProjectCounts, ResearchJob, Task, Teammate } from "./types";
 import {
   Button,
   ApprovalDecisionButtons,
@@ -55,15 +55,17 @@ interface WorkData {
   tasks: Task[];
   bots: Teammate[];
   decisions: ApprovalInboxItem[];
+  researchJobs: ResearchJob[];
   failedWorkspaces: string[];
 }
 
 export function WorkView() {
   const data = useAsync<WorkData>(async () => {
-    const [projectsRes, botsRes, inbox] = await Promise.all([
+    const [projectsRes, botsRes, inbox, researchRes] = await Promise.all([
       api.listProjects(),
       api.listAllTeammates(),
       api.approvalsInbox("pending").catch(() => ({ approvals: [] })),
+      api.listResearchJobs(undefined, 25).catch(() => ({ jobs: [] })),
     ]);
     const settled = await Promise.allSettled(
       projectsRes.projects.map(async (project) => {
@@ -88,6 +90,7 @@ export function WorkView() {
       tasks,
       bots: botsRes.teammates,
       decisions: inbox.approvals,
+      researchJobs: (researchRes.jobs || []) as ResearchJob[],
       failedWorkspaces,
     };
   }, []);
@@ -159,11 +162,12 @@ export function WorkView() {
     );
   }
 
-  const { projects, tasks, bots, decisions } = data.data;
+  const { projects, tasks, bots, decisions, researchJobs } = data.data;
   const projectName = new Map(
     projects.map((project) => [project.id, project.repository || "Workspace"]),
   );
   const botById = new Map(bots.map((bot) => [bot.id, bot]));
+  const activeResearch = researchJobs.filter((j) => !["done", "failed", "cancelled"].includes(j.status));
   // counts computed inline in filter tabs
   const query = search.trim().toLowerCase();
   const queuedSorted = tasks
@@ -289,6 +293,63 @@ export function WorkView() {
                 View all {decisions.length} approvals →
               </button>
             ) : null}
+          </div>
+        </section>
+      ) : null}
+
+      {researchJobs.length > 0 ? (
+        <section className="mb-6" aria-label="Research jobs">
+          <div className="mb-2 flex items-center justify-between">
+            <h2 className="text-step-0 font-semibold tracking-tight text-[var(--text)]">
+              Research jobs
+            </h2>
+            <span className="text-step--2 text-[var(--faint)]">
+              {activeResearch.length > 0 ? `${activeResearch.length} running · ` : ""}
+              {researchJobs.length} recent
+            </span>
+          </div>
+          <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
+            {researchJobs.slice(0, 8).map((job, index) => (
+              <div
+                key={job.id}
+                className={`flex flex-wrap items-center gap-3 px-4 py-3 ${index > 0 ? "border-t border-[var(--border-dim)]" : ""}`}
+              >
+                <StatusDot status={job.status} />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-step-0 text-[var(--text)]">
+                    {job.report_title || job.query || "Research"}
+                  </div>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-step--2 text-[var(--faint)]">
+                    <span className="truncate">{projectName.get(job.project_id) ?? "Workspace"}</span>
+                    {job.error ? <span className="truncate text-[var(--danger)]">· {job.error}</span> : null}
+                    {job.status === "done" && job.sources?.length ? (
+                      <span>· {job.sources.length} sources</span>
+                    ) : null}
+                  </div>
+                </div>
+                <StatusBadge status={job.status} />
+                <div className="flex items-center gap-2">
+                  {job.library_doc_id ? (
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/library/${job.library_doc_id}`)}
+                      className="text-step--2 font-medium text-[var(--accent)] hover:underline"
+                    >
+                      Open report
+                    </button>
+                  ) : null}
+                  {job.thread_id ? (
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/chat?thread=${job.thread_id}`)}
+                      className="text-step--2 text-[var(--muted)] hover:underline"
+                    >
+                      Conversation
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            ))}
           </div>
         </section>
       ) : null}

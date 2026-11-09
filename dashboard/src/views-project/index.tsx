@@ -82,12 +82,12 @@ export function ProjectDetailView({
         href="/projects"
         className="mb-3 inline-flex items-center gap-1 text-step--1 text-[var(--muted)] transition-colors hover:text-[var(--text)]"
       >
-        <span aria-hidden>←</span> Projects
+        <span aria-hidden>←</span> Workspaces
       </a>
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="mb-1 text-step--2 uppercase tracking-[0.16em] text-[var(--faint)]">
-            Project
+            Workspace
           </div>
           <h1 className="truncate text-step-2 font-semibold tracking-tight text-[var(--text)]">
             {workspaceName}
