@@ -210,13 +210,67 @@ export interface Schedule {
   project_id: string;
   name: string;
   cron: string;
+  timezone?: string;
   task_template: Record<string, unknown>;
+  teammate_id?: string;
+  target_action?: string;
   enabled: boolean;
+  paused?: boolean;
+  overlap_policy?: string;
   next_run_at: string | null;
   last_fired_at: string | null;
+  last_run_status?: string;
+  last_error?: string;
   locked: boolean;
   fire_count: number;
   created_at: string;
+}
+
+export interface ScheduleRun {
+  id: string;
+  schedule_id: string;
+  project_id: string;
+  status: string;
+  task_id?: string;
+  run_id?: string;
+  error?: string;
+  fired_at: string;
+  finished_at?: string | null;
+}
+
+export interface Reminder {
+  id: string;
+  project_id?: string;
+  thread_id?: string;
+  owner?: string;
+  teammate_id?: string;
+  message: string;
+  due_at: string | null;
+  timezone?: string;
+  status: "pending" | "fired" | "cancelled" | "failed" | string;
+  source?: string;
+  notify_channel?: string;
+  notification_id?: string;
+  fired_at?: string | null;
+  created_at: string;
+}
+
+export interface JobItem {
+  id: string;
+  source_type: "task_run" | "research" | "schedule" | "reminder" | string;
+  status: string;
+  title: string;
+  project_id?: string;
+  task_id?: string;
+  thread_id?: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+  due_at?: string | null;
+  next_run_at?: string | null;
+  last_run_status?: string;
+  error?: string;
+  detail?: Record<string, unknown>;
+  actions?: { cancel?: boolean; retry?: boolean; pause?: boolean; resume?: boolean; open?: boolean };
 }
 
 export interface Notification {

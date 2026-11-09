@@ -502,13 +502,33 @@ class Schedule(BaseModel):
     project_id: str
     name: str = ""
     cron: str = "* * * * *"
+    timezone: str = "UTC"
     task_template: dict[str, Any] = Field(default_factory=dict)
+    teammate_id: str = ""
+    target_action: str = "task"  # task | reminder-hook/reserved; task uses task_template
     enabled: bool = True
+    paused: bool = False
+    overlap_policy: str = "skip"  # skip (current lock) | allow
     next_run_at: datetime | None = None
     last_fired_at: datetime | None = None
+    last_run_status: str = ""
+    last_error: str = ""
     locked: bool = False
     fire_count: int = 0
     created_at: datetime = Field(default_factory=_utcnow)
+
+
+class ScheduleRun(BaseModel):
+    id: str
+    schedule_id: str
+    project_id: str
+    status: str = "fired"  # fired | failed | skipped
+    task_id: str = ""
+    run_id: str = ""
+    error: str = ""
+    fired_at: datetime = Field(default_factory=_utcnow)
+    finished_at: datetime | None = None
+
 
 
 class Notification(BaseModel):
@@ -524,6 +544,30 @@ class Notification(BaseModel):
     locked: bool = False
     locked_at: datetime | None = None
     last_error: str = ""
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+class ReminderStatus(StrEnum):
+    PENDING = "pending"
+    FIRED = "fired"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+
+
+class Reminder(BaseModel):
+    id: str
+    project_id: str = ""
+    thread_id: str = ""
+    owner: str = ""
+    teammate_id: str = ""  # who set/requested it
+    message: str = ""
+    due_at: datetime | None = None
+    timezone: str = "UTC"
+    status: ReminderStatus = ReminderStatus.PENDING
+    source: str = "chat"  # chat | teammate | user
+    notify_channel: str = "in_app"
+    notification_id: str = ""
+    fired_at: datetime | None = None
     created_at: datetime = Field(default_factory=_utcnow)
 
 

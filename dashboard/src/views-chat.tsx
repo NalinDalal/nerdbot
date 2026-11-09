@@ -1144,33 +1144,39 @@ function ThreadPane({
                   }}
                 />
               ))}
-              {streamStatus && (
-                <div className="mb-2 text-step--1 text-[var(--muted)]">
-                  {streamStatus}
+              {streaming ? (
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex items-center gap-2 text-step--2 text-[var(--muted)]" aria-live="polite">
+                    <span className="inline-flex gap-1" aria-hidden><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--accent)]" /><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--accent)] [animation-delay:120ms]" /><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--accent)] [animation-delay:240ms]" /></span>
+                    <span>{streamStatus || "Thinking…"}</span>
+                  </div>
+                  <Message
+                    key="streaming"
+                    message={{
+                      id: "streaming",
+                      thread_id: threadId,
+                      role: "assistant",
+                      content: streaming,
+                      created_at: "",
+                    }}
+                    streaming
+                    speaker={
+                      streamSpeaker
+                        ? {
+                            name: streamSpeaker.name || "nerdbot",
+                            face: mateOf(streamSpeaker.teammate_id)?.face,
+                          }
+                        : { name: "NerdBot" }
+                    }
+                    parts={streamParts}
+                  />
                 </div>
-              )}
-              {streaming && (
-                <Message
-                  key="streaming"
-                  message={{
-                    id: "streaming",
-                    thread_id: threadId,
-                    role: "assistant",
-                    content: streaming,
-                    created_at: "",
-                  }}
-                  streaming
-                  speaker={
-                    streamSpeaker
-                      ? {
-                          name: streamSpeaker.name || "nerdbot",
-                          face: mateOf(streamSpeaker.teammate_id)?.face,
-                        }
-                      : null
-                  }
-                  parts={streamParts}
-                />
-              )}
+              ) : busy && !streaming ? (
+                <div className="flex items-center gap-2 rounded-xl border border-[var(--border-dim)] bg-[var(--surface-2)] px-3 py-2 text-step--2 text-[var(--muted)]">
+                  <span className="inline-flex gap-1" aria-hidden><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--accent)]" /><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--accent)] [animation-delay:120ms]" /><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--accent)] [animation-delay:240ms]" /></span>
+                  <span>{streamStatus || "Working…"}</span>
+                </div>
+              ) : null}
             </>
           ) : null}
         </div>
@@ -1598,6 +1604,18 @@ function ResearchJobCard({
   );
 }
 
+function ReminderCard({ part }: { part: any }) {
+  const due = part.due_at ? new Date(part.due_at).toLocaleString() : "unknown time";
+  return (
+    <div className="rounded-lg border border-[var(--info)] bg-[var(--info-dim)] p-3 text-step--1">
+      <div className="font-semibold text-[var(--text)]">Reminder set</div>
+      <div className="mt-1 text-[var(--text-soft)]">{part.message || "Reminder"}</div>
+      <div className="mt-1 text-step--2 text-[var(--muted)]">Due: {due}</div>
+      {part.reminder_id ? <div className="mono mt-1 text-step--2 text-[var(--faint)]">{part.reminder_id}</div> : null}
+    </div>
+  );
+}
+
 function ReportCard({ part }: { part: any }) {
   const [open, setOpen] = useState(false);
   const content = part.content || "";
@@ -1799,6 +1817,8 @@ function Message({
                 <TaskProposalCard proposal={p.proposal} onCreateTask={onCreateTask} />
               ) : p.type === "plan" ? (
                 <PlanCard part={p} threadId={message.thread_id} projectId={projectId} onApproved={onPlanApproved} />
+              ) : p.type === "reminder" ? (
+                <ReminderCard part={p} />
               ) : (
                 <pre className="whitespace-pre-wrap text-[var(--text-soft)]">{JSON.stringify(p)}</pre>
               )}
@@ -1807,8 +1827,8 @@ function Message({
         </div>
       ) : null}
       <div className={`mono mt-1 flex items-center gap-1.5 text-step--2 text-[var(--faint)] ${isUser ? "mr-1" : "ml-1"}`}>
-        {!isUser && speaker?.face ? <BotFace face={speaker.face} size={16} /> : null}
-        <span>{isUser ? "you" : speaker?.name || "nerdbot"}</span>
+        {!isUser ? <BotFace face={speaker?.face ?? null} size={18} animated={streaming} /> : null}
+        <span>{isUser ? "you" : speaker?.name || "NerdBot"}</span>
         {streaming ? " · streaming…" : ""}
       </div>
     </div>
@@ -2025,17 +2045,28 @@ function ContextPanel({
   onAttachFile: (file: { name: string; content: string }) => void;
 }) {
   const bots = useAsync(
-    () =>
-      type === "bots"
-        ? api.listTeammates(projectId)
-        : Promise.resolve({ teammates: [] as Teammate[] }),
+    async () => {
+      if (type !== "bots") return { teammates: [] as Teammate[], scope: "none" as const };
+      try {
+        const res = await api.listTeammates(projectId);
+        if ((res.teammates || []).length > 0) return { teammates: res.teammates, scope: "project" as const };
+      } catch {
+        /* fall through to all teammates */
+      }
+      try {
+        const all = await api.listAllTeammates();
+        return { teammates: all.teammates || [], scope: "all" as const };
+      } catch {
+        return { teammates: [] as Teammate[], scope: "project" as const };
+      }
+    },
     [projectId, type],
   );
   const files = useAsync(
     () =>
       type === "files"
         ? api.projectWorkspaceFiles(projectId)
-        : Promise.resolve({ checkouts: [], file_count: 0 }),
+        : Promise.resolve({ checkouts: [], file_count: 0 } as any),
     [projectId, type],
   );
   const [attaching, setAttaching] = useState<string | null>(null);
@@ -2053,6 +2084,9 @@ function ContextPanel({
       setAttaching(null);
     }
   };
+
+  const mateList = (bots.data as any)?.teammates ?? [];
+  const scope = (bots.data as any)?.scope;
 
   return (
     <div
@@ -2088,22 +2122,31 @@ function ContextPanel({
             <ErrorState error={bots.error} onRetry={bots.reload} />
           ) : (
             <div className="flex flex-1 flex-col gap-2 overflow-y-auto p-4">
-              {(bots.data?.teammates ?? []).length === 0 ? (
-                <EmptyState title="No teammates" hint="Create one from the Teammates page." />
+              {scope === "all" && mateList.length > 0 ? (
+                <div className="rounded-xl bg-[var(--surface-2)] px-3 py-2 text-step--2 text-[var(--muted)]">
+                  Showing teammates from all workspaces (this workspace has none). “Mention” inserts their handle into this chat.
+                </div>
               ) : null}
-              {(bots.data?.teammates ?? []).map((mate: Teammate) => (
+              {mateList.length === 0 ? (
+                <EmptyState
+                  title="No teammates yet"
+                  hint="Create a teammate from Team in the sidebar (or this workspace’s Team tab), connect a model in Settings, then mention them here."
+                  action={<Button onClick={() => navigate("/bots")}>Open Team</Button>}
+                />
+              ) : null}
+              {mateList.map((mate: Teammate) => (
                 <div
                   key={mate.id}
-                  className="flex items-center justify-between gap-2 rounded-lg border border-[var(--border)] px-3 py-2"
+                  className="flex items-center justify-between gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
                 >
                   <div className="flex min-w-0 items-center gap-2.5">
-                    <BotFace face={mate.face} size={32} />
+                    <BotFace face={mate.face} size={34} status={mate.status} animated />
                     <div className="min-w-0">
                       <div className="truncate text-step--1 font-medium text-[var(--text)]">
-                        {mate.name || mate.slug || mate.id}
+                        {mate.name || mate.slug || (mate as any).persona || mate.id}
                       </div>
                       <div className="truncate text-step--2 text-[var(--faint)]">
-                        {mate.persona?.slice(0, 80) || mate.instructions?.slice(0, 80) || ""}
+                        {(mate as any).persona?.slice(0, 80) || (mate as any).instructions?.slice(0, 80) || mate.id}
                       </div>
                     </div>
                   </div>
@@ -2123,11 +2166,12 @@ function ContextPanel({
           <LoadingState lines={3} />
         ) : files.error ? (
           <ErrorState error={files.error} onRetry={files.reload} />
-        ) : (files.data?.checkouts ?? []).length === 0 ? (
+        ) : ((files.data as any)?.checkouts ?? []).length === 0 ? (
           <div className="p-4">
             <EmptyState
-              title="No project files yet"
-              hint="A task writes into its own checkout. Run a task, then its files appear here to attach to the conversation."
+              title="No task files to attach yet"
+              hint="This panel attaches files from task checkouts. To browse or edit workspace files, use the workspace’s Files tab. After a task writes files, you can attach them here."
+              action={<Button onClick={() => navigate(`/p/${projectId}?tab=Files`)}>Open workspace Files</Button>}
             />
           </div>
         ) : (
@@ -2137,7 +2181,8 @@ function ContextPanel({
                 {attachError}
               </div>
             ) : null}
-            {(files.data?.checkouts ?? []).map((checkout) => (
+            <p className="mb-3 text-step--2 text-[var(--muted)]">Files produced by tasks (attach as chat context).</p>
+            {((files.data as any)?.checkouts ?? []).map((checkout: any) => (
               <div key={checkout.task_id} className="mb-4 last:mb-0">
                 <a
                   href={`/p/${projectId}/t/${checkout.task_id}`}
@@ -2149,18 +2194,16 @@ function ContextPanel({
                   {checkout.branch || "checkout"}
                 </div>
                 <div className="flex flex-col gap-0.5">
-                  {checkout.files.map((file) => (
+                  {(checkout.files || []).map((f: any) => (
                     <button
-                      key={file.path}
-                      onClick={() => void attach(checkout.task_id, file.path)}
-                      disabled={attaching === file.path}
-                      className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-step--1 text-[var(--text-soft)] transition-colors hover:bg-[var(--surface-2)] disabled:opacity-50"
-                      title="Attach this file's contents to the next message"
+                      key={f.path}
+                      type="button"
+                      disabled={attaching === f.path}
+                      onClick={() => void attach(checkout.task_id, f.path)}
+                      className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-step--2 hover:bg-[var(--surface-2)] disabled:opacity-50"
                     >
-                      <span className="mono min-w-0 truncate">{file.path}</span>
-                      <span className="shrink-0 text-step--2 text-[var(--faint)]">
-                        {attaching === file.path ? "reading…" : `${file.size} B`}
-                      </span>
+                      <span className="mono truncate text-[var(--text-soft)]">{f.path}</span>
+                      <span className="shrink-0 text-[var(--faint)]">{attaching === f.path ? "Attaching…" : "Attach"}</span>
                     </button>
                   ))}
                 </div>
@@ -2172,8 +2215,6 @@ function ContextPanel({
     </div>
   );
 }
-
-/* --- Command Center (Home landing) --- */
 
 function CommandCenter({
   projectId,

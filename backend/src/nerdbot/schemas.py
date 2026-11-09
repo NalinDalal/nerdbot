@@ -184,3 +184,38 @@ class ResearchJobCreate(_Body):
     thread_id: str | None = None
     provider: str | None = None
     save_to_library: bool | None = True
+
+
+class ScheduleCreate(_Body):
+    name: str | None = None
+    cron: str | None = None
+    timezone: str | None = None
+    task_template: dict[str, Any] | None = None
+    teammate_id: str | None = None
+    target_action: str | None = None
+    enabled: bool | None = None
+    paused: bool | None = None
+    overlap_policy: str | None = None
+
+
+class ScheduleUpdate(_Body):
+    name: str | None = None
+    cron: str | None = None
+    timezone: str | None = None
+    task_template: dict[str, Any] | None = None
+    teammate_id: str | None = None
+    target_action: str | None = None
+    enabled: bool | None = None
+    paused: bool | None = None
+    overlap_policy: str | None = None
+
+
+class ReminderCreate(_Body):
+    project_id: str | None = None
+    thread_id: str | None = None
+    message: str | None = None
+    due_at: str | None = None
+    in_minutes: int | float | None = None
+    timezone: str | None = None
+    source: str | None = None
+    notify_channel: str | None = None

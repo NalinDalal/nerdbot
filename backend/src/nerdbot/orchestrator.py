@@ -1001,21 +1001,39 @@ def create_scheduled(
     cron: str,
     task_template: dict[str, Any],
     now: datetime | None = None,
+    *,
+    timezone: str = "UTC",
+    teammate_id: str = "",
+    target_action: str = "task",
+    enabled: bool = True,
+    paused: bool = False,
+    overlap_policy: str = "skip",
 ) -> Schedule:
     """Validate a schedule and persist it with a computed first firing time."""
     from . import schedules as schedules_mod
 
     moment = now or datetime.now(UTC)
-    next_run = schedules_mod.next_after(cron, moment)
-    template_owner = task_template.get("owner_teammate_id")
-    if template_owner is not None:
-        mate = store.get_teammate(conn, str(template_owner))
+    cron_resolved = schedules_mod.resolve_cron(cron)
+    tz = schedules_mod.normalize_timezone(timezone)
+    next_run = schedules_mod.next_after(cron_resolved, moment, timezone=tz)
+    template = dict(task_template or {})
+    owner = teammate_id or template.get("owner_teammate_id") or ""
+    if owner:
+        mate = store.get_teammate(conn, str(owner))
         project = store.get_project(conn, project_id)
         if project is None:
             raise KeyError(f"unknown project {project_id}")
         if mate is None or mate.project_id != project_id:
             raise ValueError("schedule owner teammate must belong to the same project")
-    return store.create_schedule(conn, project_id, name, cron, task_template, next_run)
+        template.setdefault("owner_teammate_id", str(owner))
+    if target_action == "task":
+        if not template.get("description") or not str(template.get("command", "")).strip():
+            raise ValueError("schedule task_template requires description and command")
+    return store.create_schedule(
+        conn, project_id, name, cron_resolved, template, next_run,
+        timezone=tz, teammate_id=str(owner or ""), target_action=target_action or "task",
+        enabled=enabled, paused=paused, overlap_policy=overlap_policy or "skip",
+    )
 
 
 def fire_due_schedules(
@@ -1037,20 +1055,33 @@ def fire_due_schedules(
     moment = now or datetime.now(UTC)
     fired: list[dict[str, Any]] = []
     for schedule in store.due_schedules(conn, moment):
-        if not store.lock_schedule(conn, schedule.id):
+        if schedule.overlap_policy == "skip" and not store.lock_schedule(conn, schedule.id):
             continue  # overlap: a previous firing is still running
+        if schedule.overlap_policy == "allow":
+            # best-effort lease marker; don't block
+            with contextlib.suppress(Exception):
+                store.lock_schedule(conn, schedule.id)
         try:
-            template = schedule.task_template
+            template = dict(schedule.task_template or {})
+            owner = schedule.teammate_id or template.get("owner_teammate_id")
             task = store.create_task(
                 conn,
                 schedule.project_id,
                 description=str(template.get("description", schedule.name)),
-                owner_teammate_id=template.get("owner_teammate_id"),
+                owner_teammate_id=owner,
                 command=str(template.get("command", "")),
             )
             run, _, artifact_id = schedule_run(
                 conn, task.id, data_dir=data_dir, timeout_s=timeout_s
             )
+            status = run.status.value
+            next_run = schedules_mod.next_after(schedule.cron, moment, timezone=getattr(schedule, "timezone", "UTC"))
+            with contextlib.suppress(Exception):
+                store.create_schedule_run(
+                    conn, schedule.id, schedule.project_id,
+                    status="fired", task_id=task.id, run_id=run.id,
+                    fired_at=moment, finished_at=datetime.now(UTC),
+                )
             notify_mod.send_notification(
                 conn,
                 schedule.project_id,
@@ -1060,33 +1091,42 @@ def fire_due_schedules(
                     "schedule_id": schedule.id,
                     "task_id": task.id,
                     "run_id": run.id,
-                    "status": run.status.value,
+                    "status": status,
                     "artifact_id": artifact_id,
                 },
             )
-            store.record_schedule_fired(
-                conn, schedule.id, moment, schedules_mod.next_after(schedule.cron, moment)
-            )
+            store.record_schedule_fired(conn, schedule.id, moment, next_run, last_run_status=status, last_error="")
             fired.append(
                 {
                     "schedule_id": schedule.id,
                     "task_id": task.id,
                     "run_id": run.id,
-                    "status": run.status.value,
+                    "status": status,
                 }
             )
         except Exception as exc:
-            conn.execute("UPDATE schedules SET locked = 0 WHERE id = ?", (schedule.id,))
-            conn.commit()
+            err = f"{type(exc).__name__}: {exc}"[:500]
+            try:
+                next_run = schedules_mod.next_after(schedule.cron, moment, timezone=getattr(schedule, "timezone", "UTC"))
+            except Exception:
+                next_run = moment
             with contextlib.suppress(Exception):
-                # the error notification must never abort firing the
-                # remaining due schedules in this heartbeat
+                conn.execute(
+                    "UPDATE schedules SET locked = 0, last_fired_at = ?, next_run_at = ?, last_run_status = ?, last_error = ?, fire_count = fire_count + 1 WHERE id = ?",
+                    (moment.isoformat(), next_run.isoformat() if hasattr(next_run, 'isoformat') else None, "error", err, schedule.id),
+                )
+                conn.commit()
+            with contextlib.suppress(Exception):
+                store.create_schedule_run(
+                    conn, schedule.id, schedule.project_id, status="failed", error=err, fired_at=moment,
+                )
+            with contextlib.suppress(Exception):
                 notify_mod.send_notification(
                     conn,
                     schedule.project_id,
                     "outbox",
                     "schedule.error",
-                    {"schedule_id": schedule.id, "error": f"{type(exc).__name__}: {exc}"},
+                    {"schedule_id": schedule.id, "error": err},
                 )
             fired.append(
                 {
@@ -1094,7 +1134,7 @@ def fire_due_schedules(
                     "task_id": None,
                     "run_id": None,
                     "status": "error",
-                    "error": f"{type(exc).__name__}: {exc}",
+                    "error": err,
                 }
             )
     return fired
@@ -1115,3 +1155,45 @@ def ingest_inbound(
     task = store.create_task(conn, project_id, description=f"ingress: {title}", issue_id=issue.id)
     store.record_event(conn, project_id, "ingress", task.id, "ingress.received")
     return issue, task
+
+
+def fire_due_reminders(
+    conn: sqlite3.Connection,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Fire due reminders: create in-app notification + mark fired."""
+    from . import notify as notify_mod
+
+    moment = now or datetime.now(UTC)
+    fired: list[dict[str, Any]] = []
+    for rem in store.due_reminders(conn, moment):
+        try:
+            note_id = ""
+            if rem.project_id:
+                note = notify_mod.send_notification(
+                    conn,
+                    rem.project_id,
+                    "outbox",
+                    "reminder.fired",
+                    {
+                        "reminder_id": rem.id,
+                        "message": rem.message,
+                        "due_at": rem.due_at.isoformat() if rem.due_at else None,
+                        "thread_id": rem.thread_id,
+                        "source": rem.source,
+                        "notify_channel": rem.notify_channel or "in_app",
+                    },
+                )
+                note_id = note.id
+            else:
+                # owner-scoped reminder with no project: best-effort, record without project notification
+                note_id = ""
+            store.mark_reminder_fired(conn, rem.id, notification_id=note_id, fired_at=moment)
+            fired.append({"reminder_id": rem.id, "status": "fired", "notification_id": note_id})
+        except Exception as exc:
+            err = f"{type(exc).__name__}: {exc}"[:500]
+            with contextlib.suppress(Exception):
+                conn.execute("UPDATE reminders SET status = ? WHERE id = ?", ("failed", rem.id))
+                conn.commit()
+            fired.append({"reminder_id": rem.id, "status": "failed", "error": err})
+    return fired

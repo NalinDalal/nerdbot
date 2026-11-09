@@ -36,6 +36,7 @@ import threading
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -3170,7 +3171,13 @@ def create_app() -> FastAPI:
             raise _library_error(exc) from exc
         return {"access": [r.model_dump(mode="json") for r in rows]}
 
-    # -- Phase 4: schedules ----------------------------------------------------
+    # -- Schedules & reminders (Phase 2) --------------------------------------
+
+    @app.get("/schedules/presets")
+    def schedule_presets(principal: str = Depends(principal_from_header)) -> dict[str, Any]:
+        _ = principal
+        from . import schedules as schedules_mod
+        return {"presets": schedules_mod.presets()}
 
     @app.post("/projects/{project_id}/schedules")
     def create_schedule(
@@ -3181,17 +3188,26 @@ def create_app() -> FastAPI:
     ) -> dict[str, Any]:
         require_project_owner(conn, project_id, principal)
         try:
+            from . import schedules as schedules_mod
             schedule = orchestrator.create_scheduled(
                 conn,
                 project_id,
                 name=str(body.get("name", "")),
                 cron=str(body.get("cron", "")),
-                task_template=dict(body.get("task_template", {})),
+                task_template=dict(body.get("task_template", {}) or {}),
+                timezone=str(body.get("timezone") or "UTC"),
+                teammate_id=str(body.get("teammate_id") or body.get("owner_teammate_id") or ""),
+                target_action=str(body.get("target_action") or "task"),
+                enabled=bool(body.get("enabled", True)),
+                paused=bool(body.get("paused", False)),
+                overlap_policy=str(body.get("overlap_policy") or "skip"),
             )
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        created: dict[str, Any] = schedule.model_dump(mode="json")
-        return created
+        data = schedules_mod.schedule_to_dict(schedule)
+        out = dict(data)
+        out["schedule"] = data
+        return out
 
     @app.get("/projects/{project_id}/schedules")
     def list_schedules(
@@ -3200,11 +3216,12 @@ def create_app() -> FastAPI:
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
         require_project_owner(conn, project_id, principal)
-        schedules = [s.model_dump(mode="json") for s in store.list_schedules(conn, project_id)]
+        from . import schedules as schedules_mod
+        schedules = [schedules_mod.schedule_to_dict(s) for s in store.list_schedules(conn, project_id)]
         return {"schedules": schedules}
 
-    @app.post("/schedules/{schedule_id}/fire")
-    def fire_schedule(
+    @app.get("/schedules/{schedule_id}")
+    def get_schedule_endpoint(
         schedule_id: str,
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
@@ -3213,11 +3230,330 @@ def create_app() -> FastAPI:
         if schedule is None:
             raise HTTPException(status_code=404, detail="schedule not found")
         require_project_owner(conn, schedule.project_id, principal)
+        from . import schedules as schedules_mod
+        runs = [r.model_dump(mode="json") for r in store.list_schedule_runs(conn, schedule_id, limit=50)]
+        return {"schedule": schedules_mod.schedule_to_dict(schedule), "runs": runs}
+
+    @app.patch("/schedules/{schedule_id}")
+    def patch_schedule(
+        schedule_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        schedule = store.get_schedule(conn, schedule_id)
+        if schedule is None:
+            raise HTTPException(status_code=404, detail="schedule not found")
+        require_project_owner(conn, schedule.project_id, principal)
+        from . import schedules as schedules_mod
+        try:
+            # Backward compat: enabled-only patch
+            if body.keys() == {"enabled"}:
+                updated = store.set_schedule_enabled(conn, schedule_id, bool(body["enabled"]))
+                data = schedules_mod.schedule_to_dict(updated)
+                out = dict(data)
+                out["schedule"] = data
+                return out
+            cron_res = None
+            tz_res = None
+            next_run = None
+            if "cron" in body or "timezone" in body:
+                cron = body.get("cron", schedule.cron)
+                tz = body.get("timezone", getattr(schedule, "timezone", "UTC"))
+                cron_res = schedules_mod.resolve_cron(str(cron))
+                tz_res = schedules_mod.normalize_timezone(str(tz or "UTC"))
+                next_run = schedules_mod.next_after(cron_res, datetime.now(UTC), timezone=tz_res)
+            updated = store.update_schedule(
+                conn, schedule_id,
+                name=body.get("name"),
+                cron=cron_res,
+                timezone=tz_res,
+                task_template=body.get("task_template"),
+                teammate_id=body.get("teammate_id") if "teammate_id" in body else body.get("owner_teammate_id"),
+                target_action=body.get("target_action"),
+                enabled=body.get("enabled"),
+                paused=body.get("paused"),
+                overlap_policy=body.get("overlap_policy"),
+                next_run_at=next_run,
+            )
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        data = schedules_mod.schedule_to_dict(updated)
+        out = dict(data)
+        out["schedule"] = data
+        return out
+
+    @app.post("/schedules/{schedule_id}/pause")
+    def pause_schedule_endpoint(
+        schedule_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        schedule = store.get_schedule(conn, schedule_id)
+        if schedule is None:
+            raise HTTPException(status_code=404, detail="schedule not found")
+        require_project_owner(conn, schedule.project_id, principal)
+        from . import schedules as schedules_mod
+        return {"schedule": schedules_mod.schedule_to_dict(store.pause_schedule(conn, schedule_id))}
+
+    @app.post("/schedules/{schedule_id}/resume")
+    def resume_schedule_endpoint(
+        schedule_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        schedule = store.get_schedule(conn, schedule_id)
+        if schedule is None:
+            raise HTTPException(status_code=404, detail="schedule not found")
+        require_project_owner(conn, schedule.project_id, principal)
+        from . import schedules as schedules_mod
+        return {"schedule": schedules_mod.schedule_to_dict(store.resume_schedule(conn, schedule_id))}
+
+    @app.delete("/schedules/{schedule_id}")
+    def delete_schedule_endpoint(
+        schedule_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        schedule = store.get_schedule(conn, schedule_id)
+        if schedule is None:
+            raise HTTPException(status_code=404, detail="schedule not found")
+        require_project_owner(conn, schedule.project_id, principal)
+        store.delete_schedule(conn, schedule_id)
+        return {"deleted": True, "id": schedule_id}
+
+    @app.get("/schedules/{schedule_id}/runs")
+    def list_schedule_runs_endpoint(
+        schedule_id: str,
+        limit: int = 50,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        schedule = store.get_schedule(conn, schedule_id)
+        if schedule is None:
+            raise HTTPException(status_code=404, detail="schedule not found")
+        require_project_owner(conn, schedule.project_id, principal)
+        return {"runs": [r.model_dump(mode="json") for r in store.list_schedule_runs(conn, schedule_id, limit=limit)]}
+
+    @app.post("/schedules/{schedule_id}/fire")
+    def fire_schedule(
+        schedule_id: str,
+        force: bool = False,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        schedule = store.get_schedule(conn, schedule_id)
+        if schedule is None:
+            raise HTTPException(status_code=404, detail="schedule not found")
+        require_project_owner(conn, schedule.project_id, principal)
+        if force and not schedule.locked:
+            try:
+                conn.execute("UPDATE schedules SET next_run_at = ? WHERE id = ?", (datetime.now(UTC).isoformat(), schedule_id))
+                conn.commit()
+            except Exception:
+                pass
         fired = orchestrator.fire_due_schedules(conn, data_dir=_data_dir())
-        matches = [f for f in fired if f["schedule_id"] == schedule_id]
+        matches = [f for f in fired if f.get("schedule_id") == schedule_id]
         if not matches:
             raise HTTPException(status_code=400, detail="schedule not due or locked")
-        return matches[0]
+        return {"fired": matches[0], **matches[0]}
+
+    @app.post("/schedules/sweep")
+    def sweep_schedules_endpoint(
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        _ = principal
+        fired = orchestrator.fire_due_schedules(conn, data_dir=_data_dir())
+        reminders = orchestrator.fire_due_reminders(conn)
+        return {"schedules_fired": fired, "reminders_fired": reminders}
+
+    @app.get("/reminders")
+    def list_reminders_endpoint(
+        project_id: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        if project_id:
+            require_project_owner(conn, project_id, principal)
+            reminders = store.list_reminders(conn, project_id=project_id, status=status, limit=limit)
+        else:
+            reminders = store.list_reminders(conn, owner=principal, status=status, limit=limit)
+        return {"reminders": [r.model_dump(mode="json") for r in reminders]}
+
+    @app.post("/reminders")
+    def create_reminder_endpoint(
+        body: schemas.ReminderCreate,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        message = (body.message or "").strip()
+        if not message:
+            raise HTTPException(status_code=400, detail="message is required")
+        project_id = (body.project_id or "").strip()
+        if project_id:
+            require_project_owner(conn, project_id, principal)
+        from datetime import timedelta
+        due = None
+        if body.due_at:
+            try:
+                raw = str(body.due_at).replace("Z", "+00:00")
+                due = datetime.fromisoformat(raw)
+                if due.tzinfo is None:
+                    due = due.replace(tzinfo=UTC)
+                due = due.astimezone(UTC)
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"invalid due_at: {exc}") from exc
+        elif body.in_minutes is not None:
+            due = datetime.now(UTC) + timedelta(minutes=float(body.in_minutes))
+        if due is None:
+            raise HTTPException(status_code=400, detail="due_at or in_minutes is required")
+        rem = store.create_reminder(
+            conn, message=message, due_at=due, owner=principal, project_id=project_id,
+            thread_id=(body.thread_id or "").strip(), timezone=(body.timezone or "UTC"),
+            source=(body.source or "user"), notify_channel=(body.notify_channel or "in_app"),
+        )
+        return {"reminder": rem.model_dump(mode="json"), "confirmation": f"Reminder set for {due.isoformat()}: {rem.message}"}
+
+    @app.post("/reminders/{reminder_id}/cancel")
+    def cancel_reminder_endpoint(
+        reminder_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        rem = store.get_reminder(conn, reminder_id)
+        if rem is None:
+            raise HTTPException(status_code=404, detail="reminder not found")
+        if rem.project_id:
+            require_project_owner(conn, rem.project_id, principal)
+        elif rem.owner and rem.owner != principal:
+            raise HTTPException(status_code=403, detail="not your reminder")
+        return {"reminder": store.cancel_reminder(conn, reminder_id).model_dump(mode="json")}
+
+    @app.post("/reminders/sweep")
+    def sweep_reminders_endpoint(
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        _ = principal
+        return {"fired": orchestrator.fire_due_reminders(conn)}
+
+    @app.get("/jobs")
+    def list_jobs(
+        project_id: str | None = None,
+        source: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """Unified job-like listing (Phase 2): task runs, research jobs, scheduled runs, reminders."""
+        jobs: list[dict[str, Any]] = []
+        lim = max(1, min(int(limit or 100), 300))
+
+        def add(items):
+            for it in items:
+                if source and it.get("source_type") != source:
+                    continue
+                if status and it.get("status") != status:
+                    continue
+                jobs.append(it)
+
+        # research jobs
+        try:
+            rjobs = store.list_research_jobs(conn, project_id, limit=lim) if project_id else store.list_research_jobs_for_owner(conn, principal, limit=lim)
+            if project_id:
+                require_project_owner(conn, project_id, principal)
+            add([{
+                "id": j.id, "source_type": "research", "status": j.status.value,
+                "title": j.report_title or j.query, "project_id": j.project_id,
+                "thread_id": j.thread_id, "created_at": j.created_at.isoformat() if j.created_at else None,
+                "updated_at": j.updated_at.isoformat() if j.updated_at else None,
+                "error": j.error, "detail": {"library_doc_id": j.library_doc_id, "sources": len(j.sources or [])},
+                "actions": {"cancel": j.status.value not in {"done","failed","cancelled"}, "retry": j.status.value in {"done","failed","cancelled"}, "open": True},
+            } for j in rjobs])
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+        # reminders
+        try:
+            if project_id:
+                rems = store.list_reminders(conn, project_id=project_id, limit=lim)
+            else:
+                rems = store.list_reminders(conn, owner=principal, limit=lim)
+            add([{
+                "id": r.id, "source_type": "reminder", "status": r.status.value,
+                "title": r.message, "project_id": r.project_id, "thread_id": r.thread_id,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "updated_at": (r.fired_at or r.created_at).isoformat() if (r.fired_at or r.created_at) else None,
+                "due_at": r.due_at.isoformat() if r.due_at else None,
+                "error": "", "detail": {"notify_channel": r.notify_channel, "source": r.source},
+                "actions": {"cancel": r.status.value == "pending", "retry": False, "open": bool(r.thread_id)},
+            } for r in rems])
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+        # schedules (+ recent runs)
+        try:
+            if project_id:
+                schs = store.list_schedules(conn, project_id)
+            else:
+                schs = store.list_schedules_for_owner(conn, principal)
+            from . import schedules as schedules_mod
+            add([{
+                "id": s.id, "source_type": "schedule", "status": ("paused" if getattr(s, "paused", False) else ("disabled" if not s.enabled else "scheduled")),
+                "title": s.name or s.cron, "project_id": s.project_id,
+                "created_at": s.created_at.isoformat() if s.created_at else None,
+                "updated_at": s.last_fired_at.isoformat() if s.last_fired_at else s.created_at.isoformat(),
+                "next_run_at": s.next_run_at.isoformat() if s.next_run_at else None,
+                "last_run_status": getattr(s, "last_run_status", ""),
+                "error": getattr(s, "last_error", ""), "detail": schedules_mod.schedule_to_dict(s),
+                "actions": {"pause": not getattr(s, "paused", False) and s.enabled, "resume": getattr(s, "paused", False), "open": True},
+            } for s in schs[:lim]])
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+        # task runs (recent)
+        try:
+            if project_id:
+                require_project_owner(conn, project_id, principal)
+                tasks = store.list_tasks(conn, project_id)
+                task_ids = [t.id for t in tasks]
+                runs = []
+                for tid in task_ids[:100]:
+                    runs.extend(store.list_runs(conn, tid)[:5])
+            else:
+                # owner-wide: best-effort recent via projects
+                projs = store.list_projects(conn, principal)
+                runs = []
+                for pr in projs[:20]:
+                    for t in store.list_tasks(conn, pr.id)[:30]:
+                        runs.extend(store.list_runs(conn, t.id)[:3])
+            runs = sorted(runs, key=lambda r: r.started_at.isoformat() if r.started_at else "", reverse=True)[:lim]
+            add([{
+                "id": r.id, "source_type": "task_run", "status": r.status.value,
+                "title": r.command or r.id, "project_id": store.get_task(conn, r.task_id).project_id if store.get_task(conn, r.task_id) else "",
+                "task_id": r.task_id, "created_at": r.started_at.isoformat() if r.started_at else None,
+                "updated_at": r.finished_at.isoformat() if r.finished_at else (r.started_at.isoformat() if r.started_at else None),
+                "error": (r.stderr or "")[:300] if getattr(r, "stderr", "") else "",
+                "detail": {"exit_code": r.exit_code},
+                "actions": {"cancel": r.status.value == "running", "retry": r.status.value in {"failed","cancelled","blocked"}, "open": True},
+            } for r in runs])
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+        jobs.sort(key=lambda j: (j.get("updated_at") or j.get("created_at") or ""), reverse=True)
+        return {"jobs": jobs[:lim], "total": len(jobs)}
 
     # -- Phase 4: ingress and notifications ------------------------------------
 
@@ -4374,25 +4710,6 @@ def create_app() -> FastAPI:
         except Exception as exc:  # git may be absent or repo corrupted
             raise HTTPException(status_code=400, detail=f"diff failed: {exc}") from exc
         return {"diff": diff, "exists": True}
-
-    @app.patch("/schedules/{schedule_id}")
-    def update_schedule_endpoint(
-        schedule_id: str,
-        body: dict[str, Any],
-        conn: sqlite3.Connection = Depends(get_conn),
-        principal: str = Depends(principal_from_header),
-    ) -> dict[str, Any]:
-        schedule = store.get_schedule(conn, schedule_id)
-        if schedule is None:
-            raise HTTPException(status_code=404, detail="schedule not found")
-        require_project_owner(conn, schedule.project_id, principal)
-        if "enabled" not in body:
-            raise HTTPException(status_code=400, detail="enabled is required")
-        try:
-            updated = store.set_schedule_enabled(conn, schedule_id, bool(body["enabled"]))
-        except (KeyError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return updated.model_dump(mode="json")
 
     # Serve the built dashboard (SPA). Registered after every API route so the
     # fallback only answers what no real route claimed (the mount below still

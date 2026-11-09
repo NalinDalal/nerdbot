@@ -622,6 +622,23 @@ CHAT_TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "set_reminder",
+            "description": "Set an in-app reminder for the user. Use when the user asks to be reminded. Provide message and either due_at (ISO 8601 datetime, prefer UTC/Z) or in_minutes. Respond with an explicit confirmation of what was set and when.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {"type": "string", "description": "Reminder message"},
+                    "due_at": {"type": "string", "description": "ISO 8601 datetime, e.g. 2026-11-10T15:30:00Z"},
+                    "in_minutes": {"type": "number", "description": "Minutes from now (>= 0)"},
+                    "timezone": {"type": "string", "description": "IANA timezone label, default UTC"},
+                },
+                "required": ["message"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "propose_plan",
             "description": "Propose a plan (steps with assignees). Does not create anything.",
             "parameters": {
@@ -762,6 +779,71 @@ def _execute_chat_tool(
                     rid = ""
             part = {"type": "report", "title": title, "content": content, "report_id": rid}
             return json.dumps({"ok": True, "title": title, "_part": part})
+        if name == "set_reminder":
+            if not project_id:
+                return json.dumps({"error": "no project context"})
+            message = str(args.get("message", "")).strip()
+            if not message:
+                return json.dumps({"error": "reminder message is required"})
+            from datetime import UTC, datetime, timedelta
+            tz = str(args.get("timezone") or "UTC").strip() or "UTC"
+            due = None
+            if args.get("due_at"):
+                try:
+                    raw = str(args.get("due_at")).replace("Z", "+00:00")
+                    due = datetime.fromisoformat(raw)
+                    if due.tzinfo is None:
+                        due = due.replace(tzinfo=UTC)
+                    due = due.astimezone(UTC)
+                except Exception as exc:
+                    return json.dumps({"error": f"invalid due_at: {exc}"})
+            elif args.get("in_minutes") is not None:
+                try:
+                    mins = float(args.get("in_minutes"))
+                    if mins < 0:
+                        return json.dumps({"error": "in_minutes must be >= 0"})
+                    due = datetime.now(UTC) + timedelta(minutes=mins)
+                except Exception as exc:
+                    return json.dumps({"error": f"invalid in_minutes: {exc}"})
+            if due is None:
+                return json.dumps({"error": "provide due_at (ISO 8601) or in_minutes"})
+            owner = ""
+            try:
+                proj = store.get_project(conn, project_id)
+                owner = proj.owner if proj else ""
+            except Exception:
+                owner = ""
+            rem = store.create_reminder(
+                conn,
+                message=message[:1000],
+                due_at=due,
+                owner=owner,
+                project_id=project_id,
+                thread_id=thread_id or "",
+                timezone=tz,
+                source="chat",
+                notify_channel="in_app",
+            )
+            due_text = rem.due_at.isoformat() if rem.due_at else due.isoformat()
+            return json.dumps(
+                {
+                    "ok": True,
+                    "type": "reminder",
+                    "reminder_id": rem.id,
+                    "message": rem.message,
+                    "due_at": due_text,
+                    "status": rem.status.value,
+                    "confirmation": f"Reminder set (id {rem.id}): \"{rem.message}\" due {due_text} (UTC). It will appear in-app when it fires.",
+                    "_part": {
+                        "type": "reminder",
+                        "reminder_id": rem.id,
+                        "message": rem.message,
+                        "due_at": due_text,
+                        "status": rem.status.value,
+                    },
+                },
+                ensure_ascii=False,
+            )
     except Exception as exc:  # noqa: BLE001 - tool errors are data, not crashes
         return f"error: {exc}"
     return f"unknown tool: {name}"
@@ -863,10 +945,10 @@ def chat_complete_with_tools(
     searched_urls: set[str] = set()
     parts: list[dict[str, Any]] = []
     mode_tools = {
-        "chat": [],
-        "research": ["web_search", "fetch_url", "save_report"],
-        "delegate": ["propose_task", "list_teammates", "create_task"],
-    }.get(mode, [])
+        "chat": ["set_reminder"],
+        "research": ["web_search", "fetch_url", "save_report", "set_reminder"],
+        "delegate": ["propose_task", "list_teammates", "create_task", "set_reminder"],
+    }.get(mode, ["set_reminder"])
     allowed = set(mode_tools)
     for _ in range(max_turns):
         tools = [
@@ -984,10 +1066,10 @@ def chat_stream_with_tools(
     searched_urls: set[str] = set()
     parts: list[dict[str, Any]] = []
     mode_tools = {
-        "chat": [],
-        "research": ["web_search", "fetch_url", "save_report"],
-        "delegate": ["propose_task", "list_teammates", "create_task"],
-    }.get(mode, [])
+        "chat": ["set_reminder"],
+        "research": ["web_search", "fetch_url", "save_report", "set_reminder"],
+        "delegate": ["propose_task", "list_teammates", "create_task", "set_reminder"],
+    }.get(mode, ["set_reminder"])
     allowed = set(mode_tools)
     for _ in range(5):
         tools = [

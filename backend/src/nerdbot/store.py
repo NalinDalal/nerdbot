@@ -61,7 +61,10 @@ from .models import (
     ReviewVerdict,
     Run,
     RunStatus,
+    Reminder,
+    ReminderStatus,
     Schedule,
+    ScheduleRun,
     Task,
     TaskStatus,
     Team,
@@ -180,6 +183,25 @@ CREATE TABLE IF NOT EXISTS notifications (
   last_error TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS reminders (
+  id TEXT PRIMARY KEY, project_id TEXT NOT NULL DEFAULT '',
+  thread_id TEXT NOT NULL DEFAULT '', owner TEXT NOT NULL DEFAULT '',
+  teammate_id TEXT NOT NULL DEFAULT '', message TEXT NOT NULL DEFAULT '',
+  due_at TEXT, timezone TEXT NOT NULL DEFAULT 'UTC',
+  status TEXT NOT NULL DEFAULT 'pending', source TEXT NOT NULL DEFAULT 'chat',
+  notify_channel TEXT NOT NULL DEFAULT 'in_app', notification_id TEXT NOT NULL DEFAULT '',
+  fired_at TEXT, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(status, due_at);
+CREATE INDEX IF NOT EXISTS idx_reminders_owner ON reminders(owner, status);
+CREATE TABLE IF NOT EXISTS schedule_runs (
+  id TEXT PRIMARY KEY, schedule_id TEXT NOT NULL REFERENCES schedules(id),
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  status TEXT NOT NULL DEFAULT 'fired', task_id TEXT NOT NULL DEFAULT '',
+  run_id TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '',
+  fired_at TEXT NOT NULL, finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_schedule_runs_schedule ON schedule_runs(schedule_id, fired_at);
 CREATE TABLE IF NOT EXISTS webhook_targets (
   id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
   url TEXT NOT NULL, created_at TEXT NOT NULL
@@ -653,6 +675,20 @@ _PHASE28_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "chat_messages": [("teammate_id", "TEXT NOT NULL DEFAULT ''")],
 }
 
+_PHASE29_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    # Phase 2: full scheduling (timezone, scope/target, pause, overlap, history)
+    # and reminders. Tables are created in SCHEMA; columns support upgrades.
+    "schedules": [
+        ("timezone", "TEXT NOT NULL DEFAULT 'UTC'"),
+        ("teammate_id", "TEXT NOT NULL DEFAULT ''"),
+        ("target_action", "TEXT NOT NULL DEFAULT 'task'"),
+        ("paused", "INTEGER NOT NULL DEFAULT 0"),
+        ("overlap_policy", "TEXT NOT NULL DEFAULT 'skip'"),
+        ("last_run_status", "TEXT NOT NULL DEFAULT ''"),
+        ("last_error", "TEXT NOT NULL DEFAULT ''"),
+    ],
+}
+
 
 _PHASE20_COLUMNS: dict[str, list[tuple[str, str]]] = {
     # Bot persona files (ai-teammates model): a bot's identity, its active
@@ -685,7 +721,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
                   _PHASE14_COLUMNS, _PHASE15_COLUMNS, _PHASE16_COLUMNS, _PHASE17_COLUMNS,
                   _PHASE18_COLUMNS, _PHASE19_COLUMNS, _PHASE20_COLUMNS,
                   _PHASE21_COLUMNS, _PHASE22_COLUMNS, _PHASE23_COLUMNS, _PHASE24_COLUMNS,
-                  _PHASE25_COLUMNS, _PHASE26_COLUMNS, _PHASE27_COLUMNS, _PHASE28_COLUMNS):
+                  _PHASE25_COLUMNS, _PHASE26_COLUMNS, _PHASE27_COLUMNS, _PHASE28_COLUMNS,
+                  _PHASE29_COLUMNS):
         for table, columns in phase.items():
             phases.setdefault(table, []).extend(columns)
     for table, columns in phases.items():
@@ -4197,17 +4234,25 @@ def list_knowledge_chunks(conn: sqlite3.Connection, project_id: str) -> list[Kno
 
 
 def _schedule_from_row(row: sqlite3.Row) -> Schedule:
+    keys = row.keys()
     return Schedule(
         id=row["id"],
         project_id=row["project_id"],
         name=row["name"] or "",
         cron=row["cron"],
+        timezone=(row["timezone"] if "timezone" in keys and row["timezone"] else "UTC"),
         task_template=json.loads(row["task_template"]),
+        teammate_id=(row["teammate_id"] if "teammate_id" in keys and row["teammate_id"] else ""),
+        target_action=(row["target_action"] if "target_action" in keys and row["target_action"] else "task"),
         enabled=bool(row["enabled"]),
+        paused=bool(row["paused"]) if "paused" in keys and row["paused"] is not None else False,
+        overlap_policy=(row["overlap_policy"] if "overlap_policy" in keys and row["overlap_policy"] else "skip"),
         next_run_at=datetime.fromisoformat(row["next_run_at"]) if row["next_run_at"] else None,
         last_fired_at=datetime.fromisoformat(row["last_fired_at"])
         if row["last_fired_at"]
         else None,
+        last_run_status=(row["last_run_status"] if "last_run_status" in keys and row["last_run_status"] else ""),
+        last_error=(row["last_error"] if "last_error" in keys and row["last_error"] else ""),
         locked=bool(row["locked"]),
         fire_count=row["fire_count"] or 0,
         created_at=datetime.fromisoformat(row["created_at"]),
@@ -4221,35 +4266,59 @@ def create_schedule(
     cron: str,
     task_template: dict[str, Any],
     next_run_at: datetime,
+    *,
+    timezone: str = "UTC",
+    teammate_id: str = "",
+    target_action: str = "task",
+    enabled: bool = True,
+    paused: bool = False,
+    overlap_policy: str = "skip",
 ) -> Schedule:
     if get_project(conn, project_id) is None:
         raise KeyError(f"unknown project {project_id}")
-    if not task_template.get("description") or not task_template.get("command"):
-        raise ValueError("schedule task_template requires description and command")
+    if target_action == "task":
+        if not task_template.get("description") or not task_template.get("command"):
+            raise ValueError("schedule task_template requires description and command")
+    if overlap_policy not in {"skip", "allow"}:
+        raise ValueError("overlap_policy must be 'skip' or 'allow'")
     schedule = Schedule(
         id=new_id("sch"),
         project_id=project_id,
         name=name,
         cron=cron,
+        timezone=timezone or "UTC",
         task_template=task_template,
+        teammate_id=teammate_id or "",
+        target_action=target_action or "task",
+        enabled=enabled,
+        paused=paused,
+        overlap_policy=overlap_policy or "skip",
         next_run_at=next_run_at,
     )
     conn.execute(
         "INSERT INTO schedules (id, project_id, name, cron, task_template, enabled, next_run_at,"
-        " last_fired_at, locked, fire_count, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " last_fired_at, locked, fire_count, created_at, timezone, teammate_id, target_action, paused,"
+        " overlap_policy, last_run_status, last_error)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             schedule.id,
             schedule.project_id,
             schedule.name,
             schedule.cron,
             json.dumps(schedule.task_template),
-            1,
+            1 if schedule.enabled else 0,
             schedule.next_run_at.isoformat() if schedule.next_run_at else None,
             None,
             0,
             0,
             schedule.created_at.isoformat(),
+            schedule.timezone,
+            schedule.teammate_id,
+            schedule.target_action,
+            1 if schedule.paused else 0,
+            schedule.overlap_policy,
+            "",
+            "",
         ),
     )
     conn.commit()
@@ -4303,23 +4372,302 @@ def lock_schedule(conn: sqlite3.Connection, schedule_id: str) -> bool:
 
 
 def record_schedule_fired(
-    conn: sqlite3.Connection, schedule_id: str, fired_at: datetime, next_run_at: datetime
+    conn: sqlite3.Connection,
+    schedule_id: str,
+    fired_at: datetime,
+    next_run_at: datetime,
+    *,
+    last_run_status: str = "ok",
+    last_error: str = "",
 ) -> None:
     conn.execute(
         "UPDATE schedules SET locked = 0, last_fired_at = ?, next_run_at = ?,"
-        " fire_count = fire_count + 1 WHERE id = ?",
-        (fired_at.isoformat(), next_run_at.isoformat(), schedule_id),
+        " fire_count = fire_count + 1, last_run_status = ?, last_error = ? WHERE id = ?",
+        (fired_at.isoformat(), next_run_at.isoformat(), last_run_status, last_error or "", schedule_id),
     )
     conn.commit()
 
 
 def due_schedules(conn: sqlite3.Connection, now: datetime) -> list[Schedule]:
+    # Paused schedules do not fire. overlap_policy=allow schedules are returned
+    # even when locked? No: lock is the runtime lease; allow means don't skip
+    # on lock in a future enhancement, but for safety keep lock semantics and
+    # let orchestrator decide. We include paused check.
     rows = conn.execute(
-        "SELECT * FROM schedules WHERE enabled = 1 AND locked = 0 AND next_run_at <= ?"
+        "SELECT * FROM schedules WHERE enabled = 1"
+        " AND COALESCE(paused, 0) = 0"
+        " AND locked = 0 AND next_run_at <= ?"
         " ORDER BY next_run_at, rowid",
         (now.isoformat(),),
     ).fetchall()
     return [_schedule_from_row(r) for r in rows]
+
+
+def update_schedule(
+    conn: sqlite3.Connection,
+    schedule_id: str,
+    *,
+    name: str | None = None,
+    cron: str | None = None,
+    timezone: str | None = None,
+    task_template: dict[str, Any] | None = None,
+    teammate_id: str | None = None,
+    target_action: str | None = None,
+    enabled: bool | None = None,
+    paused: bool | None = None,
+    overlap_policy: str | None = None,
+    next_run_at: datetime | None = None,
+) -> Schedule:
+    schedule = get_schedule(conn, schedule_id)
+    if schedule is None:
+        raise KeyError(f"unknown schedule {schedule_id}")
+    fields: list[str] = []
+    vals: list[Any] = []
+    if name is not None:
+        fields.append("name = ?"); vals.append(name)
+    if cron is not None:
+        fields.append("cron = ?"); vals.append(cron)
+    if timezone is not None:
+        fields.append("timezone = ?"); vals.append(timezone or "UTC")
+    if task_template is not None:
+        if schedule.target_action == "task" and not task_template.get("description"):
+            raise ValueError("schedule task_template requires description")
+        fields.append("task_template = ?"); vals.append(json.dumps(task_template))
+    if teammate_id is not None:
+        fields.append("teammate_id = ?"); vals.append(teammate_id)
+    if target_action is not None:
+        fields.append("target_action = ?"); vals.append(target_action)
+    if enabled is not None:
+        fields.append("enabled = ?"); vals.append(1 if enabled else 0)
+    if paused is not None:
+        fields.append("paused = ?"); vals.append(1 if paused else 0)
+    if overlap_policy is not None:
+        if overlap_policy not in {"skip", "allow"}:
+            raise ValueError("overlap_policy must be 'skip' or 'allow'")
+        fields.append("overlap_policy = ?"); vals.append(overlap_policy)
+    if next_run_at is not None:
+        fields.append("next_run_at = ?"); vals.append(next_run_at.isoformat())
+    if fields:
+        vals.append(schedule_id)
+        conn.execute(f"UPDATE schedules SET {', '.join(fields)} WHERE id = ?", vals)
+        conn.commit()
+        record_event(conn, schedule.project_id, "schedule", schedule_id, "schedule.updated")
+    return get_schedule(conn, schedule_id)  # type: ignore[return-value]
+
+
+def pause_schedule(conn: sqlite3.Connection, schedule_id: str) -> Schedule:
+    return update_schedule(conn, schedule_id, paused=True)
+
+
+def resume_schedule(conn: sqlite3.Connection, schedule_id: str) -> Schedule:
+    return update_schedule(conn, schedule_id, paused=False)
+
+
+def delete_schedule(conn: sqlite3.Connection, schedule_id: str) -> None:
+    schedule = get_schedule(conn, schedule_id)
+    if schedule is None:
+        raise KeyError(f"unknown schedule {schedule_id}")
+    conn.execute("DELETE FROM schedule_runs WHERE schedule_id = ?", (schedule_id,))
+    conn.execute("DELETE FROM schedules WHERE id = ?", (schedule_id,))
+    conn.commit()
+    record_event(conn, schedule.project_id, "schedule", schedule_id, "schedule.deleted")
+
+
+def list_schedules_for_owner(conn: sqlite3.Connection, owner: str) -> list[Schedule]:
+    rows = conn.execute(
+        "SELECT schedules.* FROM schedules JOIN projects ON schedules.project_id = projects.id"
+        " WHERE projects.owner = ? ORDER BY schedules.next_run_at IS NULL, schedules.next_run_at, schedules.rowid",
+        (owner,),
+    ).fetchall()
+    return [_schedule_from_row(r) for r in rows]
+
+
+def create_schedule_run(
+    conn: sqlite3.Connection,
+    schedule_id: str,
+    project_id: str,
+    *,
+    status: str = "fired",
+    task_id: str = "",
+    run_id: str = "",
+    error: str = "",
+    fired_at: datetime | None = None,
+    finished_at: datetime | None = None,
+) -> ScheduleRun:
+    fired = fired_at or datetime.now(UTC)
+    sr = ScheduleRun(
+        id=new_id("scr"),
+        schedule_id=schedule_id,
+        project_id=project_id,
+        status=status,
+        task_id=task_id,
+        run_id=run_id,
+        error=error or "",
+        fired_at=fired,
+        finished_at=finished_at,
+    )
+    conn.execute(
+        "INSERT INTO schedule_runs (id, schedule_id, project_id, status, task_id, run_id, error, fired_at, finished_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?)",
+        (sr.id, sr.schedule_id, sr.project_id, sr.status, sr.task_id, sr.run_id, sr.error,
+         sr.fired_at.isoformat(), sr.finished_at.isoformat() if sr.finished_at else None),
+    )
+    conn.commit()
+    return sr
+
+
+def list_schedule_runs(conn: sqlite3.Connection, schedule_id: str, limit: int = 50) -> list[ScheduleRun]:
+    rows = conn.execute(
+        "SELECT * FROM schedule_runs WHERE schedule_id = ? ORDER BY fired_at DESC, rowid DESC LIMIT ?",
+        (schedule_id, max(1, min(int(limit or 50), 200))),
+    ).fetchall()
+    return [
+        ScheduleRun(
+            id=r["id"], schedule_id=r["schedule_id"], project_id=r["project_id"],
+            status=r["status"] or "fired", task_id=r["task_id"] or "", run_id=r["run_id"] or "",
+            error=r["error"] or "", fired_at=datetime.fromisoformat(r["fired_at"]),
+            finished_at=datetime.fromisoformat(r["finished_at"]) if r["finished_at"] else None,
+        )
+        for r in rows
+    ]
+
+
+# -- Reminders (Phase 2) -------------------------------------------------------
+
+
+def _reminder_from_row(row: sqlite3.Row) -> Reminder:
+    keys = row.keys()
+    return Reminder(
+        id=row["id"],
+        project_id=row["project_id"] or "",
+        thread_id=row["thread_id"] or "",
+        owner=row["owner"] or "",
+        teammate_id=row["teammate_id"] or "",
+        message=row["message"] or "",
+        due_at=datetime.fromisoformat(row["due_at"]) if row["due_at"] else None,
+        timezone=(row["timezone"] if "timezone" in keys and row["timezone"] else "UTC"),
+        status=ReminderStatus(row["status"]) if row["status"] else ReminderStatus.PENDING,
+        source=row["source"] or "chat",
+        notify_channel=row["notify_channel"] or "in_app",
+        notification_id=row["notification_id"] or "",
+        fired_at=datetime.fromisoformat(row["fired_at"]) if row["fired_at"] else None,
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def create_reminder(
+    conn: sqlite3.Connection,
+    *,
+    message: str,
+    due_at: datetime,
+    owner: str = "",
+    project_id: str = "",
+    thread_id: str = "",
+    teammate_id: str = "",
+    timezone: str = "UTC",
+    source: str = "chat",
+    notify_channel: str = "in_app",
+) -> Reminder:
+    if project_id and get_project(conn, project_id) is None:
+        raise KeyError(f"unknown project {project_id}")
+    if not (message or "").strip():
+        raise ValueError("reminder message is required")
+    rem = Reminder(
+        id=new_id("rem"),
+        project_id=project_id or "",
+        thread_id=thread_id or "",
+        owner=owner or "",
+        teammate_id=teammate_id or "",
+        message=message.strip(),
+        due_at=due_at,
+        timezone=timezone or "UTC",
+        status=ReminderStatus.PENDING,
+        source=source or "chat",
+        notify_channel=notify_channel or "in_app",
+        created_at=datetime.now(UTC),
+    )
+    conn.execute(
+        "INSERT INTO reminders (id, project_id, thread_id, owner, teammate_id, message, due_at, timezone,"
+        " status, source, notify_channel, notification_id, fired_at, created_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            rem.id, rem.project_id, rem.thread_id, rem.owner, rem.teammate_id, rem.message,
+            rem.due_at.isoformat() if rem.due_at else None, rem.timezone, rem.status.value,
+            rem.source, rem.notify_channel, "", None, rem.created_at.isoformat(),
+        ),
+    )
+    conn.commit()
+    if project_id:
+        record_event(conn, project_id, "reminder", rem.id, "reminder.created")
+    return rem
+
+
+def get_reminder(conn: sqlite3.Connection, reminder_id: str) -> Reminder | None:
+    row = conn.execute("SELECT * FROM reminders WHERE id = ?", (reminder_id,)).fetchone()
+    return _reminder_from_row(row) if row else None
+
+
+def list_reminders(
+    conn: sqlite3.Connection,
+    *,
+    owner: str | None = None,
+    project_id: str | None = None,
+    status: str | None = None,
+    limit: int = 100,
+) -> list[Reminder]:
+    clauses = []
+    vals: list[Any] = []
+    if owner is not None:
+        clauses.append("owner = ?"); vals.append(owner)
+    if project_id is not None:
+        clauses.append("project_id = ?"); vals.append(project_id)
+    if status is not None:
+        clauses.append("status = ?"); vals.append(status)
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    vals.append(max(1, min(int(limit or 100), 500)))
+    rows = conn.execute(
+        f"SELECT * FROM reminders {where} ORDER BY due_at IS NULL, due_at, rowid DESC LIMIT ?",
+        vals,
+    ).fetchall()
+    return [_reminder_from_row(r) for r in rows]
+
+
+def cancel_reminder(conn: sqlite3.Connection, reminder_id: str) -> Reminder:
+    rem = get_reminder(conn, reminder_id)
+    if rem is None:
+        raise KeyError(f"unknown reminder {reminder_id}")
+    if rem.status != ReminderStatus.PENDING:
+        return rem
+    conn.execute("UPDATE reminders SET status = ? WHERE id = ?", (ReminderStatus.CANCELLED.value, reminder_id))
+    conn.commit()
+    if rem.project_id:
+        record_event(conn, rem.project_id, "reminder", reminder_id, "reminder.cancelled")
+    return get_reminder(conn, reminder_id)  # type: ignore[return-value]
+
+
+def due_reminders(conn: sqlite3.Connection, now: datetime) -> list[Reminder]:
+    rows = conn.execute(
+        "SELECT * FROM reminders WHERE status = ? AND due_at <= ? ORDER BY due_at, rowid",
+        (ReminderStatus.PENDING.value, now.isoformat()),
+    ).fetchall()
+    return [_reminder_from_row(r) for r in rows]
+
+
+def mark_reminder_fired(
+    conn: sqlite3.Connection, reminder_id: str, *, notification_id: str = "", fired_at: datetime | None = None
+) -> Reminder:
+    rem = get_reminder(conn, reminder_id)
+    if rem is None:
+        raise KeyError(f"unknown reminder {reminder_id}")
+    ts = (fired_at or datetime.now(UTC)).isoformat()
+    conn.execute(
+        "UPDATE reminders SET status = ?, fired_at = ?, notification_id = ? WHERE id = ?",
+        (ReminderStatus.FIRED.value, ts, notification_id or "", reminder_id),
+    )
+    conn.commit()
+    if rem.project_id:
+        record_event(conn, rem.project_id, "reminder", reminder_id, "reminder.fired")
+    return get_reminder(conn, reminder_id)  # type: ignore[return-value]
 
 
 # -- Notifications ---------------------------------------------------------------

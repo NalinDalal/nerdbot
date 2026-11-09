@@ -1,20 +1,16 @@
-/** The work inbox.
+/** The work inbox / Jobs & Activity (Phase 2).
  *
- *  One list of every task the fleet owns, across every workspace. The old
- *  product buried tasks inside a workspace tab, so the owner had to remember
- *  where a piece of work lived before they could look at it. This page is the
- *  spine: needs you, running, queued, done.
- *
- *  It is read-mostly on purpose. A row opens the task workbench, where the
- *  output and the actions live. The only write here is starting new work.
+ *  Unified background job management: task runs, research jobs, schedules,
+ *  reminders — with filters (running/queued/scheduled/failed/done), source
+ *  type, open detail, and valid cancel/retry/pause/resume actions.
+ *  Also keeps the task inbox for day-to-day work.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
 import { navigate, notifyError } from "./app";
-import type { ApprovalInboxItem, Project, ProjectCounts, ResearchJob, Task, Teammate } from "./types";
+import type { ApprovalInboxItem, JobItem, Project, ProjectCounts, ResearchJob, Task, Teammate } from "./types";
 import {
   Button,
-  ApprovalDecisionButtons,
   EmptyState,
   ErrorState,
   FORM_INPUT,
@@ -37,8 +33,6 @@ const BUCKETS: Array<{ id: Bucket; label: string; hint: string }> = [
   { id: "done", label: "Done", hint: "Finished, failed, or cancelled." },
 ];
 
-/** Which bucket a task belongs to. Unknown statuses are treated as queued so
- *  they stay visible instead of disappearing from every filter. */
 export function bucketOf(status: string): Bucket {
   if (status === "blocked" || status === "awaiting_approval") return "needs";
   if (status === "running") return "running";
@@ -48,6 +42,16 @@ export function bucketOf(status: string): Bucket {
 
 const titleOf = (task: Task): string =>
   task.description?.trim() || task.command?.trim() || "Untitled work";
+
+function jobStateBucket(status: string): "running" | "queued" | "scheduled" | "failed" | "done" | "other" {
+  const s = (status || "").toLowerCase();
+  if (["running", "planning", "searching", "reading", "synthesizing"].includes(s)) return "running";
+  if (["queued", "pending", "ready", "awaiting_approval", "blocked"].includes(s)) return "queued";
+  if (["scheduled", "paused", "disabled"].includes(s)) return "scheduled";
+  if (["failed", "error", "cancelled", "canceled"].includes(s)) return "failed";
+  if (["done", "fired", "completed", "succeeded", "success"].includes(s)) return "done";
+  return "other";
+}
 
 interface WorkData {
   projects: Project[];
@@ -76,13 +80,8 @@ export function WorkView() {
     const tasks: Task[] = [];
     const failedWorkspaces: string[] = [];
     for (const [index, result] of settled.entries()) {
-      if (result.status === "fulfilled") {
-        tasks.push(...result.value.tasks);
-      } else {
-        failedWorkspaces.push(
-          projectsRes.projects[index]?.repository || "one workspace",
-        );
-      }
+      if (result.status === "fulfilled") tasks.push(...result.value.tasks);
+      else failedWorkspaces.push(projectsRes.projects[index]?.repository || "one workspace");
     }
     return {
       projects: projectsRes.projects,
@@ -95,33 +94,19 @@ export function WorkView() {
     };
   }, []);
 
+  const jobs = useAsync(async () => api.listJobs({ limit: 150 }), []);
+  const [jobState, setJobState] = useState<"all" | "running" | "queued" | "scheduled" | "failed" | "done">("all");
+  const [jobSource, setJobSource] = useState<"all" | "task_run" | "research" | "schedule" | "reminder">("all");
+  const [jobBusy, setJobBusy] = useState<string | null>(null);
+
   const [filter, setFilter] = useState<"all" | "running" | "queued" | "completed" | "failed" | "needs">("all");
   const [search, setSearch] = useState("");
   const [workspace, setWorkspace] = useState("all");
   const [agent, setAgent] = useState("all");
   const [showNew, setShowNew] = useState(false);
-  const [decideBusy, setDecideBusy] = useState(false);
 
-  const decideApproval = async (
-    approvalId: string,
-    decision: "approved" | "approved_forever" | "denied",
-  ) => {
-    setDecideBusy(true);
-    try {
-      await api.decideApproval(approvalId, decision);
-    } catch (err) {
-      notifyError(err);
-    } finally {
-      setDecideBusy(false);
-      reload();
-    }
-  };
+  const reload = () => { data.reload(); jobs.reload(); };
 
-  const reload = () => {
-    data.reload();
-  };
-
-  // Live refresh: poll while visible, pause when hidden. (Phase 5)
   useEffect(() => {
     let timer: ReturnType<typeof setInterval> | null = setInterval(() => {
       if (document.visibilityState === "visible") reload();
@@ -129,50 +114,23 @@ export function WorkView() {
     const onVis = () => {
       if (document.visibilityState === "visible") {
         reload();
-        if (!timer) {
-          timer = setInterval(() => {
-            if (document.visibilityState === "visible") reload();
-          }, 5000);
-        }
-      } else if (timer) {
-        clearInterval(timer);
-        timer = null;
-      }
+        if (!timer) timer = setInterval(() => { if (document.visibilityState === "visible") reload(); }, 5000);
+      } else if (timer) { clearInterval(timer); timer = null; }
     };
     document.addEventListener("visibilitychange", onVis);
-    return () => {
-      if (timer) clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVis);
-    };
+    return () => { if (timer) clearInterval(timer); document.removeEventListener("visibilitychange", onVis); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (data.loading) {
-    return (
-      <Page width="data">
-        <LoadingState lines={6} />
-      </Page>
-    );
-  }
-  if (data.error || !data.data) {
-    return (
-      <Page>
-        <ErrorState error={data.error ?? "Work could not be loaded"} onRetry={data.reload} />
-      </Page>
-    );
-  }
+  const projectName = useMemo(() => new Map((data.data?.projects || []).map((p) => [p.id, p.repository || "Workspace"])), [data.data?.projects]);
+  const botById = useMemo(() => new Map((data.data?.bots || []).map((b) => [b.id, b])), [data.data?.bots]);
 
-  const { projects, tasks, bots, decisions, researchJobs } = data.data;
-  const projectName = new Map(
-    projects.map((project) => [project.id, project.repository || "Workspace"]),
-  );
-  const botById = new Map(bots.map((bot) => [bot.id, bot]));
-  const activeResearch = researchJobs.filter((j) => !["done", "failed", "cancelled"].includes(j.status));
-  // counts computed inline in filter tabs
+  if (data.loading) return <Page width="data"><LoadingState lines={6} /></Page>;
+  if (data.error || !data.data) return <Page><ErrorState error={data.error ?? "Work could not be loaded"} onRetry={data.reload} /></Page>;
+
+  const { projects, tasks, bots, decisions } = data.data;
   const query = search.trim().toLowerCase();
-  const queuedSorted = tasks
-    .filter((t) => t.status === "pending" || t.status === "ready")
-    .sort((a, b) => a.id.localeCompare(b.id));
+  const queuedSorted = tasks.filter((t) => t.status === "pending" || t.status === "ready").sort((a, b) => a.id.localeCompare(b.id));
   const queuePos = new Map(queuedSorted.map((t, i) => [t.id, i + 1]));
   const matchesFilter = (task: Task): boolean => {
     if (filter === "all") return true;
@@ -186,331 +144,173 @@ export function WorkView() {
   const visible = tasks.filter((task) => {
     if (workspace !== "all" && task.project_id !== workspace) return false;
     if (agent !== "all" && task.owner_teammate_id !== agent) return false;
-    if (filter !== "all" && !matchesFilter(task)) return false;
+    if (!matchesFilter(task)) return false;
     if (!query) return true;
     const owner = task.owner_teammate_id ? botById.get(task.owner_teammate_id)?.persona : "";
-    return [titleOf(task), projectName.get(task.project_id), owner, task.blocked_reason]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase()
-      .includes(query);
+    return [titleOf(task), projectName.get(task.project_id), owner, task.blocked_reason].filter(Boolean).join(" ").toLowerCase().includes(query);
   });
-  const FILTER_LABEL: Record<string, string> = {
-    running: "Running",
-    queued: "Queued",
-    completed: "Completed",
-    failed: "Failed",
-    needs: "Needs attention",
+  const FILTER_LABEL: Record<string, string> = { running: "Running", queued: "Queued", completed: "Completed", failed: "Failed", needs: "Needs attention" };
+  const groups = filter === "all"
+    ? BUCKETS.map((bucket) => ({ ...bucket, rows: visible.filter((task) => bucketOf(task.status) === bucket.id) })).filter((g) => g.rows.length > 0)
+    : [{ id: filter, label: FILTER_LABEL[filter] ?? filter, hint: "", rows: visible }].filter((g) => g.rows.length > 0);
+
+  const allJobs = (jobs.data?.jobs || []) as JobItem[];
+  const filteredJobs = allJobs.filter((j) => {
+    if (jobSource !== "all" && j.source_type !== jobSource) return false;
+    if (jobState === "all") return true;
+    return jobStateBucket(j.status) === jobState;
+  });
+
+  const openJob = (j: JobItem) => {
+    if (j.source_type === "task_run" && j.project_id && j.task_id) return navigate(`/p/${j.project_id}/t/${j.task_id}`);
+    if (j.source_type === "research") {
+      const lib = (j.detail as any)?.library_doc_id;
+      if (lib) return navigate(`/library/${lib}`);
+      if (j.thread_id) return navigate(`/chat?thread=${j.thread_id}`);
+    }
+    if (j.source_type === "reminder" && j.thread_id) return navigate(`/chat?thread=${j.thread_id}`);
+    if (j.source_type === "schedule" && j.project_id) return navigate(`/p/${j.project_id}?tab=Schedules`);
   };
-  const groups =
-    filter === "all"
-      ? BUCKETS.map((bucket) => ({
-          ...bucket,
-          rows: visible.filter((task) => bucketOf(task.status) === bucket.id),
-        })).filter((group) => group.rows.length > 0)
-      : [
-          {
-            id: filter,
-            label: FILTER_LABEL[filter] ?? filter,
-            hint: "",
-            rows: visible,
-          },
-        ].filter((group) => group.rows.length > 0);
+
+  const jobAction = async (j: JobItem, action: "cancel" | "retry" | "pause" | "resume") => {
+    setJobBusy(j.id + action);
+    try {
+      if (j.source_type === "research") {
+        if (action === "cancel") await api.cancelResearchJob(j.id);
+        if (action === "retry") await api.retryResearchJob(j.id);
+      } else if (j.source_type === "reminder" && action === "cancel") {
+        await api.cancelReminder(j.id);
+      } else if (j.source_type === "schedule") {
+        if (action === "pause") await api.pauseSchedule(j.id);
+        if (action === "resume") await api.resumeSchedule(j.id);
+      } else if (j.source_type === "task_run" && action === "retry" && j.task_id) {
+        await api.retryTask(j.task_id);
+      }
+      reload();
+    } catch (err) { notifyError(err); } finally { setJobBusy(null); }
+  };
 
   return (
     <Page>
       <PageHeader
         title="Activity"
-        description="Everything your team is doing, in one place."
-        actions={
-          <>
-            <Button onClick={reload}>Refresh</Button>
-            <Button variant="primary" onClick={() => setShowNew(true)}>
-              New task
-            </Button>
-          </>
-        }
+        description="Jobs, schedules, reminders, and task work in one place."
+        actions={<><Button onClick={reload}>Refresh</Button><Button variant="primary" onClick={() => setShowNew(true)}>New task</Button></>}
       />
 
       {decisions.length > 0 ? (
-        <button
-          onClick={() => navigate("/approvals")}
-          className="mb-5 flex w-full flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--warn)] bg-[var(--warn-dim)] px-4 py-3 text-left"
-        >
-          <span className="text-step--1 text-[var(--text)]">
-            <strong>{decisions.length}</strong>{" "}
-            {decisions.length === 1 ? "decision is" : "decisions are"} waiting for you
-          </span>
-          <span className="text-step--1 font-medium text-[var(--warn)]">
-            Review →
-          </span>
+        <button onClick={() => navigate("/approvals")} className="mb-5 flex w-full flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--warn)] bg-[var(--warn-dim)] px-4 py-3 text-left">
+          <span className="text-step--1 text-[var(--text)]"><strong>{decisions.length}</strong> {decisions.length === 1 ? "decision is" : "decisions are"} waiting for you</span>
+          <span className="text-step--1 font-medium text-[var(--warn)]">Review →</span>
         </button>
       ) : null}
 
-      {data.data.failedWorkspaces.length > 0 ? (
-        <div className="mb-5 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-2.5 text-step--1 text-[var(--muted)]">
-          Could not read tasks from {data.data.failedWorkspaces.join(", ")}. The rest of the
-          list is current.
+      <section className="mb-8" aria-label="Background jobs">
+        <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 className="text-step-0 font-semibold tracking-tight text-[var(--text)]">Jobs</h2>
+            <p className="text-step--2 text-[var(--faint)]">Task runs, research, schedules, and reminders.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <select value={jobState} onChange={(e) => setJobState(e.target.value as any)} className={`${FORM_SELECT} h-9`} aria-label="Job status filter">
+              <option value="all">All states</option>
+              <option value="running">Running</option>
+              <option value="queued">Queued</option>
+              <option value="scheduled">Scheduled</option>
+              <option value="failed">Failed</option>
+              <option value="done">Done</option>
+            </select>
+            <select value={jobSource} onChange={(e) => setJobSource(e.target.value as any)} className={`${FORM_SELECT} h-9`} aria-label="Job source filter">
+              <option value="all">All sources</option>
+              <option value="task_run">Task runs</option>
+              <option value="research">Research</option>
+              <option value="schedule">Schedules</option>
+              <option value="reminder">Reminders</option>
+            </select>
+          </div>
         </div>
-      ) : null}
-
-      {decisions.length > 0 ? (
-        <section className="mb-6">
-          <div className="mb-2 flex items-center justify-between">
-            <h2 className="text-step-0 font-semibold tracking-tight text-[var(--text)]">
-              Needs your decision
-            </h2>
-            <span className="text-step--2 text-[var(--faint)]">{decisions.length}</span>
-          </div>
-          <div className="flex flex-col gap-3">
-            {decisions.slice(0, 10).map((approval) => (
-              <div
-                key={approval.id}
-                className="rounded-xl border border-[var(--warn)] bg-[var(--warn-dim)] px-4 py-3"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-step--1 font-medium text-[var(--text)]">
-                      {approval.action || "approval requested"}
-                    </div>
-                    <div className="mt-0.5 text-step--2 text-[var(--muted)]">
-                      {approval.task_description ? `${approval.task_description} · ` : ""}
-                      {approval.project_id ? "project" : ""}
-                    </div>
-                  </div>
-                  <ApprovalDecisionButtons
-                    busy={decideBusy}
-                    onDecide={(decision) => void decideApproval(approval.id, decision)}
-                  />
-                </div>
-              </div>
-            ))}
-            {decisions.length > 10 ? (
-              <button
-                onClick={() => navigate("/approvals")}
-                className="text-step--1 text-[var(--accent)] hover:underline"
-              >
-                View all {decisions.length} approvals →
-              </button>
-            ) : null}
-          </div>
-        </section>
-      ) : null}
-
-      {researchJobs.length > 0 ? (
-        <section className="mb-6" aria-label="Research jobs">
-          <div className="mb-2 flex items-center justify-between">
-            <h2 className="text-step-0 font-semibold tracking-tight text-[var(--text)]">
-              Research jobs
-            </h2>
-            <span className="text-step--2 text-[var(--faint)]">
-              {activeResearch.length > 0 ? `${activeResearch.length} running · ` : ""}
-              {researchJobs.length} recent
-            </span>
-          </div>
+        {jobs.loading ? <LoadingState lines={4} /> : jobs.error ? <ErrorState error={jobs.error} onRetry={jobs.reload} /> : filteredJobs.length === 0 ? (
+          <EmptyState title="No jobs match" hint="Background work, research, schedules, and reminders will appear here." />
+        ) : (
           <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
-            {researchJobs.slice(0, 8).map((job, index) => (
-              <div
-                key={job.id}
-                className={`flex flex-wrap items-center gap-3 px-4 py-3 ${index > 0 ? "border-t border-[var(--border-dim)]" : ""}`}
-              >
-                <StatusDot status={job.status} />
+            {filteredJobs.slice(0, 60).map((j, i) => (
+              <div key={`${j.source_type}-${j.id}`} className={`flex flex-wrap items-center gap-3 px-4 py-3 ${i > 0 ? "border-t border-[var(--border-dim)]" : ""}`}>
+                <StatusDot status={j.status} />
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-step-0 text-[var(--text)]">
-                    {job.report_title || job.query || "Research"}
-                  </div>
+                  <div className="truncate text-step-0 text-[var(--text)]">{j.title || j.id}</div>
                   <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-step--2 text-[var(--faint)]">
-                    <span className="truncate">{projectName.get(job.project_id) ?? "Workspace"}</span>
-                    {job.error ? <span className="truncate text-[var(--danger)]">· {job.error}</span> : null}
-                    {job.status === "done" && job.sources?.length ? (
-                      <span>· {job.sources.length} sources</span>
-                    ) : null}
+                    <span className="rounded bg-[var(--surface-3)] px-1.5 py-0.5">{j.source_type.replace("_", " ")}</span>
+                    {j.project_id ? <span>{projectName.get(j.project_id) || "Workspace"}</span> : null}
+                    {j.next_run_at ? <span>· next {new Date(j.next_run_at).toLocaleString()}</span> : null}
+                    {j.due_at ? <span>· due {new Date(j.due_at).toLocaleString()}</span> : null}
+                    {j.error ? <span className="truncate text-[var(--danger)]">· {j.error}</span> : null}
                   </div>
                 </div>
-                <StatusBadge status={job.status} />
-                <div className="flex items-center gap-2">
-                  {job.library_doc_id ? (
-                    <button
-                      type="button"
-                      onClick={() => navigate(`/library/${job.library_doc_id}`)}
-                      className="text-step--2 font-medium text-[var(--accent)] hover:underline"
-                    >
-                      Open report
-                    </button>
-                  ) : null}
-                  {job.thread_id ? (
-                    <button
-                      type="button"
-                      onClick={() => navigate(`/chat?thread=${job.thread_id}`)}
-                      className="text-step--2 text-[var(--muted)] hover:underline"
-                    >
-                      Conversation
-                    </button>
-                  ) : null}
+                <StatusBadge status={j.status} />
+                <div className="flex flex-wrap items-center gap-2">
+                  {j.actions?.open ? <button type="button" className="text-step--2 font-medium text-[var(--accent)] hover:underline" onClick={() => openJob(j)}>Open</button> : null}
+                  {j.actions?.cancel ? <Button disabled={jobBusy === j.id + "cancel"} onClick={() => void jobAction(j, "cancel")}>Cancel</Button> : null}
+                  {j.actions?.retry ? <Button disabled={jobBusy === j.id + "retry"} onClick={() => void jobAction(j, "retry")}>Retry</Button> : null}
+                  {j.actions?.pause ? <Button disabled={jobBusy === j.id + "pause"} onClick={() => void jobAction(j, "pause")}>Pause</Button> : null}
+                  {j.actions?.resume ? <Button disabled={jobBusy === j.id + "resume"} onClick={() => void jobAction(j, "resume")}>Resume</Button> : null}
                 </div>
               </div>
             ))}
           </div>
-        </section>
-      ) : null}
+        )}
+      </section>
 
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-1" role="tablist" aria-label="Activity state">
-          <FilterTab
-            label="All"
-            count={tasks.length}
-            active={filter === "all"}
-            onClick={() => setFilter("all")}
-          />
-          <FilterTab
-            label="Running"
-            count={tasks.filter((t) => t.status === "running").length}
-            active={filter === "running"}
-            onClick={() => setFilter("running")}
-          />
-          <FilterTab
-            label="Queued"
-            count={tasks.filter((t) => bucketOf(t.status) === "queued").length}
-            active={filter === "queued"}
-            onClick={() => setFilter("queued")}
-          />
-          <FilterTab
-            label="Completed"
-            count={tasks.filter((t) => t.status === "done").length}
-            active={filter === "completed"}
-            onClick={() => setFilter("completed")}
-          />
-          <FilterTab
-            label="Failed"
-            count={tasks.filter((t) => t.status === "failed").length}
-            active={filter === "failed"}
-            onClick={() => setFilter("failed")}
-          />
-          <FilterTab
-            label="Needs attention"
-            count={tasks.filter((t) => t.status === "blocked" || t.status === "awaiting_approval").length}
-            active={filter === "needs"}
-            onClick={() => setFilter("needs")}
-          />
+        <div className="flex flex-wrap items-center gap-1" role="tablist" aria-label="Task state">
+          <FilterTab label="All" count={tasks.length} active={filter === "all"} onClick={() => setFilter("all")} />
+          <FilterTab label="Running" count={tasks.filter((t) => t.status === "running").length} active={filter === "running"} onClick={() => setFilter("running")} />
+          <FilterTab label="Queued" count={tasks.filter((t) => bucketOf(t.status) === "queued").length} active={filter === "queued"} onClick={() => setFilter("queued")} />
+          <FilterTab label="Completed" count={tasks.filter((t) => t.status === "done").length} active={filter === "completed"} onClick={() => setFilter("completed")} />
+          <FilterTab label="Failed" count={tasks.filter((t) => t.status === "failed").length} active={filter === "failed"} onClick={() => setFilter("failed")} />
+          <FilterTab label="Needs attention" count={tasks.filter((t) => t.status === "blocked" || t.status === "awaiting_approval").length} active={filter === "needs"} onClick={() => setFilter("needs")} />
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <div className="w-56 shrink-0">
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Find work"
-              aria-label="Find work"
-              className={`${FORM_INPUT} h-9`}
-            />
-          </div>
-          <select
-            value={workspace}
-            onChange={(event) => setWorkspace(event.target.value)}
-            aria-label="Filter by project"
-            className={`${FORM_SELECT} h-9`}
-          >
+          <div className="w-56 shrink-0"><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Find task" aria-label="Find task" className={`${FORM_INPUT} h-9`} /></div>
+          <select value={workspace} onChange={(e) => setWorkspace(e.target.value)} aria-label="Filter by project" className={`${FORM_SELECT} h-9`}>
             <option value="all">All projects</option>
-            {projects.map((project) => (
-              <option key={project.id} value={project.id}>
-                {project.repository || "Workspace"}
-              </option>
-            ))}
+            {projects.map((p) => <option key={p.id} value={p.id}>{p.repository || "Workspace"}</option>)}
           </select>
-          <select
-            value={agent}
-            onChange={(event) => setAgent(event.target.value)}
-            aria-label="Filter by agent"
-            className={`${FORM_SELECT} h-9`}
-          >
+          <select value={agent} onChange={(e) => setAgent(e.target.value)} aria-label="Filter by agent" className={`${FORM_SELECT} h-9`}>
             <option value="all">All agents</option>
-            {bots.map((bot) => (
-              <option key={bot.id} value={bot.id}>
-                {bot.persona || bot.id}
-              </option>
-            ))}
+            {bots.map((b) => <option key={b.id} value={b.id}>{b.persona || b.id}</option>)}
           </select>
         </div>
       </div>
 
       {tasks.length === 0 ? (
-        <EmptyState
-          title="No work yet"
-          hint="Start a task and a teammate will pick it up."
-          action={
-            <Button variant="primary" onClick={() => setShowNew(true)}>
-              New task
-            </Button>
-          }
-        />
+        <EmptyState title="No work yet" hint="Start a task and a teammate will pick it up." action={<Button variant="primary" onClick={() => setShowNew(true)}>New task</Button>} />
       ) : visible.length === 0 ? (
-        <EmptyState
-          title="Nothing matches"
-          hint="Try a different filter, project, or search."
-        />
+        <EmptyState title="Nothing matches" hint="Try a different filter, project, or search." />
       ) : (
         <div className="flex flex-col gap-6">
           {groups.map((group) => (
             <section key={group.id}>
               <div className="mb-2 flex flex-wrap items-baseline gap-2">
-                <h2 className="text-step-0 font-semibold tracking-tight text-[var(--text)]">
-                  {group.label}
-                </h2>
-                <span className="text-step--2 text-[var(--faint)]">
-                  {group.rows.length} · {group.hint}
-                </span>
+                <h2 className="text-step-0 font-semibold tracking-tight text-[var(--text)]">{group.label}</h2>
+                <span className="text-step--2 text-[var(--faint)]">{group.rows.length}</span>
               </div>
               <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
                 {group.rows.map((task, index) => {
-                  const owner = task.owner_teammate_id
-                    ? botById.get(task.owner_teammate_id)
-                    : undefined;
+                  const owner = task.owner_teammate_id ? botById.get(task.owner_teammate_id) : undefined;
                   return (
-                    <button
-                      key={task.id}
-                      onClick={() => navigate(`/p/${task.project_id}/t/${task.id}`)}
-                      className={`flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--surface-2)] ${
-                        index > 0 ? "border-t border-[var(--border-dim)]" : ""
-                      }`}
-                    >
+                    <button key={task.id} onClick={() => navigate(`/p/${task.project_id}/t/${task.id}`)} className={`flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--surface-2)] ${index > 0 ? "border-t border-[var(--border-dim)]" : ""}`}>
                       <StatusDot status={task.status} />
                       <div className="min-w-0 flex-1">
-                        <div className="truncate text-step-0 text-[var(--text)]">
-                          {titleOf(task)}
-                        </div>
+                        <div className="truncate text-step-0 text-[var(--text)]">{titleOf(task)}</div>
                         <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-step--2 text-[var(--faint)]">
-                          <span className="min-w-0 truncate">
-                            {projectName.get(task.project_id) ?? "Workspace"}
-                          </span>
-                          <span aria-hidden>·</span>
-                          <span className="min-w-0 truncate">{owner?.persona || "Unassigned"}</span>
-                          {queuePos.has(task.id) ? (
-                            <>
-                              <span aria-hidden>·</span>
-                              <span className="min-w-0 truncate text-[var(--info)]">
-                                queue #{queuePos.get(task.id)}
-                              </span>
-                            </>
-                          ) : null}
-                          {task.blocked_reason ? (
-                            <>
-                              {/* On a phone the reason takes its own line rather
-                                  than squeezing the workspace and owner to one
-                                  letter each. */}
-                              <span aria-hidden className="hidden sm:inline">·</span>
-                              <span
-                                className="min-w-0 basis-full truncate text-[var(--warn)] sm:basis-auto"
-                                title={task.blocked_reason}
-                              >
-                                {task.blocked_reason}
-                              </span>
-                            </>
-                          ) : null}
+                          <span className="min-w-0 truncate">{projectName.get(task.project_id) ?? "Workspace"}</span>
+                          <span aria-hidden>·</span><span className="min-w-0 truncate">{owner?.persona || "Unassigned"}</span>
+                          {queuePos.has(task.id) ? <><span aria-hidden>·</span><span className="text-[var(--info)]">queue #{queuePos.get(task.id)}</span></> : null}
+                          {task.blocked_reason ? <><span aria-hidden className="hidden sm:inline">·</span><span className="min-w-0 basis-full truncate text-[var(--warn)] sm:basis-auto" title={task.blocked_reason}>{task.blocked_reason}</span></> : null}
                         </div>
                       </div>
                       <StatusBadge status={task.status} />
-                      <span aria-hidden className="text-[var(--faint)]">
-                        →
-                      </span>
+                      <span aria-hidden className="text-[var(--faint)]">→</span>
                     </button>
                   );
                 })}
@@ -521,148 +321,58 @@ export function WorkView() {
       )}
 
       {showNew ? (
-        <NewTaskModal
-          projects={projects}
-          bots={bots}
-          onClose={() => setShowNew(false)}
-          onCreated={(projectId, taskId) => {
-            setShowNew(false);
-            reload();
-            navigate(`/p/${projectId}/t/${taskId}`);
-          }}
-        />
+        <NewTaskModal projects={projects} bots={bots} onClose={() => setShowNew(false)} onCreated={(projectId, taskId) => { setShowNew(false); reload(); navigate(`/p/${projectId}/t/${taskId}`); }} />
       ) : null}
     </Page>
   );
 }
 
-function FilterTab({
-  label,
-  count,
-  active,
-  onClick,
-}: {
-  label: string;
-  count: number;
-  active: boolean;
-  onClick: () => void;
-}) {
+function FilterTab({ label, count, active, onClick }: { label: string; count: number; active: boolean; onClick: () => void; }) {
   return (
-    <button
-      role="tab"
-      aria-selected={active}
-      onClick={onClick}
-      className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-step--1 transition-colors ${
-        active
-          ? "bg-[var(--surface-3)] text-[var(--text)]"
-          : "text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text-soft)]"
-      }`}
-    >
-      {label}
-      <span className="text-step--2 text-[var(--faint)]">{count}</span>
+    <button role="tab" aria-selected={active} onClick={onClick} className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-step--1 transition-colors ${active ? "bg-[var(--surface-3)] text-[var(--text)]" : "text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text-soft)]"}`}>
+      {label}{count > 0 ? <span className={active ? "text-[var(--muted)]" : "text-[var(--faint)]"}>{count}</span> : null}
     </button>
   );
 }
 
-function NewTaskModal({
-  projects,
-  bots,
-  onClose,
-  onCreated,
-}: {
-  projects: Project[];
-  bots: Teammate[];
-  onClose: () => void;
-  onCreated: (projectId: string, taskId: string) => void;
-}) {
-  const first = projects.find((project) => project.repository === "my-project") ?? projects[0];
-  const [projectId, setProjectId] = useState(first?.id ?? "");
+function NewTaskModal({ projects, bots, onClose, onCreated }: { projects: Project[]; bots: Teammate[]; onClose: () => void; onCreated: (projectId: string, taskId: string) => void; }) {
   const [description, setDescription] = useState("");
-  const [owner, setOwner] = useState("");
+  const [command, setCommand] = useState("");
+  const [projectId, setProjectId] = useState(projects[0]?.id ?? "");
+  const [ownerId, setOwnerId] = useState("");
   const [busy, setBusy] = useState(false);
-
-  const available = bots.filter(
-    (bot) => bot.project_id === projectId && bot.status !== "archived",
-  );
-
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!projectId || !description.trim()) return;
-    setBusy(true);
-    try {
-      const task = await api.createTask(projectId, {
-        description: description.trim(),
-        ...(owner ? { owner_teammate_id: owner } : {}),
-      });
-      onCreated(projectId, task.id);
-    } catch (err) {
-      notifyError(err);
-    } finally {
-      setBusy(false);
-    }
-  };
-
+  const projectBots = bots.filter((b) => b.project_id === projectId);
   return (
     <Modal title="New task" onClose={onClose}>
-      <form onSubmit={submit} className="flex flex-col gap-4">
-        <label className="flex flex-col gap-1.5">
-          <span className="text-step--1 text-[var(--muted)]">Project</span>
-          <select
-            value={projectId}
-            onChange={(event) => {
-              setProjectId(event.target.value);
-              setOwner("");
-            }}
-            className={FORM_SELECT}
-            required
-          >
-            {projects.map((project) => (
-              <option key={project.id} value={project.id}>
-                {project.repository || "Workspace"}
-              </option>
-            ))}
+      <div className="flex flex-col gap-3">
+        <label className="text-step--1"><div className="mb-1 font-medium">Project</div>
+          <select className={FORM_SELECT} value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+            {projects.map((p) => <option key={p.id} value={p.id}>{p.repository || "Workspace"}</option>)}
           </select>
         </label>
-        <label className="flex flex-col gap-1.5">
-          <span className="text-step--1 text-[var(--muted)]">What needs doing</span>
-          <textarea
-            value={description}
-            onChange={(event) => setDescription(event.target.value)}
-            rows={5}
-            autoFocus
-            required
-            placeholder="Describe the work. A teammate reads this as its prompt."
-            className={FORM_INPUT}
-          />
+        <label className="text-step--1"><div className="mb-1 font-medium">What needs doing</div>
+          <textarea className={FORM_INPUT} value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
         </label>
-        <label className="flex flex-col gap-1.5">
-          <span className="text-step--1 text-[var(--muted)]">Teammate</span>
-          <select
-            value={owner}
-            onChange={(event) => setOwner(event.target.value)}
-            className={FORM_SELECT}
-          >
+        <label className="text-step--1"><div className="mb-1 font-medium">Command (optional)</div>
+          <input className={`${FORM_INPUT} mono`} value={command} onChange={(e) => setCommand(e.target.value)} />
+        </label>
+        <label className="text-step--1"><div className="mb-1 font-medium">Assign to (optional)</div>
+          <select className={FORM_SELECT} value={ownerId} onChange={(e) => setOwnerId(e.target.value)}>
             <option value="">Unassigned</option>
-            {available.map((bot) => (
-              <option key={bot.id} value={bot.id}>
-                {bot.persona || "Unnamed teammate"}
-              </option>
-            ))}
+            {projectBots.map((b) => <option key={b.id} value={b.id}>{b.persona || b.id}</option>)}
           </select>
         </label>
-        <div className="flex items-center justify-end gap-2">
-          <Button type="button" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            variant="primary"
-            disabled={busy || !description.trim() || !projectId}
-          >
-            {busy ? "Creating…" : "Create task"}
-          </Button>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" disabled={busy || !description.trim() || !projectId} onClick={async () => {
+            setBusy(true);
+            try {
+              const task = await api.createTask(projectId, { description, command: command || undefined, owner_teammate_id: ownerId || undefined });
+              onCreated(projectId, task.id);
+            } catch (err) { notifyError(err); } finally { setBusy(false); }
+          }}>Create task</Button>
         </div>
-      </form>
+      </div>
     </Modal>
   );
 }

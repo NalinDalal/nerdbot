@@ -28,6 +28,7 @@ import type {
   ProjectCounts,
   ProjectMessage,
   Provider,
+  Reminder,
   Review,
   Run,
   RunEvent,
@@ -551,13 +552,42 @@ export const api = {
       method: "DELETE",
     }),
 
+  schedulePresets: () => req<{ presets: Array<{ id: string; cron: string; label: string }> }>("/schedules/presets"),
   listSchedules: (projectId: string) =>
     req<{ schedules: Schedule[] }>(`/projects/${projectId}/schedules`),
+  getSchedule: (id: string) => req<{ schedule: Schedule; runs: any[] }>(`/schedules/${id}`),
   createSchedule: (projectId: string, body: Record<string, unknown>) =>
-    post<Schedule>(`/projects/${projectId}/schedules`, body),
+    post<{ schedule: Schedule }>(`/projects/${projectId}/schedules`, body),
+  updateSchedule: (id: string, body: Record<string, unknown>) =>
+    patch<{ schedule: Schedule }>(`/schedules/${id}`, body),
+  pauseSchedule: (id: string) => post<{ schedule: Schedule }>(`/schedules/${id}/pause`, {}),
+  resumeSchedule: (id: string) => post<{ schedule: Schedule }>(`/schedules/${id}/resume`, {}),
+  deleteSchedule: (id: string) => req<{ deleted: boolean }>(`/schedules/${id}`, { method: "DELETE" }),
   fireSchedule: (id: string) => post<Record<string, unknown>>(`/schedules/${id}/fire`),
+  listScheduleRuns: (id: string, limit = 50) =>
+    req<{ runs: any[] }>(`/schedules/${id}/runs?limit=${limit}`),
   setScheduleEnabled: (id: string, enabled: boolean) =>
-    patch<Schedule>(`/schedules/${id}`, { enabled }),
+    patch<{ schedule: Schedule }>(`/schedules/${id}`, { enabled }),
+  // -- Reminders & jobs (Phase 2) --------------------------------------------
+  listReminders: (projectId?: string, status?: string, limit = 100) => {
+    const q = new URLSearchParams();
+    if (projectId) q.set("project_id", projectId);
+    if (status) q.set("status", status);
+    q.set("limit", String(limit));
+    return req<{ reminders: Reminder[] }>(`/reminders?${q.toString()}`);
+  },
+  createReminder: (body: { project_id?: string; thread_id?: string; message: string; due_at?: string; in_minutes?: number; timezone?: string }) =>
+    post<{ reminder: Reminder; confirmation?: string }>("/reminders", body),
+  cancelReminder: (id: string) => post<{ reminder: Reminder }>(`/reminders/${id}/cancel`, {}),
+  listJobs: (params?: { project_id?: string; source?: string; status?: string; limit?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.project_id) q.set("project_id", params.project_id);
+    if (params?.source) q.set("source", params.source);
+    if (params?.status) q.set("status", params.status);
+    if (params?.limit) q.set("limit", String(params.limit));
+    const s = q.toString();
+    return req<{ jobs: any[]; total: number }>(`/jobs${s ? `?${s}` : ""}`);
+  },
 
   sendNotification: (projectId: string, body: Record<string, unknown>) =>
     post<Notification>(`/projects/${projectId}/notify`, body),

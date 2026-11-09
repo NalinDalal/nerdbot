@@ -37,7 +37,17 @@ CAPABILITIES: list[dict[str, Any]] = [
     {
         "id": "scheduler.cron",
         "status": "ready",
-        "description": "Persisted schedules with validated cron subset and overlap lock.",
+        "description": "Persisted schedules: cron/presets, timezone, pause/resume, run history & errors, scoped targets, overlap policy.",
+    },
+    {
+        "id": "reminders",
+        "status": "ready",
+        "description": "Durable reminders set from chat/tools or UI; fired by scheduler into in-app/outbox notifications.",
+    },
+    {
+        "id": "jobs.unified",
+        "status": "ready",
+        "description": "Unified jobs/activity view for task runs, research jobs, schedules, and reminders with manage actions.",
     },
     {
         "id": "scheduler.nl-to-cron",

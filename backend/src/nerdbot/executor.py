@@ -166,6 +166,23 @@ def sweep(
         }
         for task in requeued
     ]
+    # Phase 2: fire due schedules and reminders (best-effort; never blocks task sweep).
+    try:
+        for f in orchestrator.fire_due_schedules(
+            conn, data_dir=data_dir, timeout_s=_run_timeout_s(timeout_s)
+        ):
+            requeue_notes.append({"phase": "schedule", **f})
+    except Exception as exc:
+        requeue_notes.append(
+            {"phase": "schedule", "status": "sweep_error", "reason": f"{type(exc).__name__}: {exc}"}
+        )
+    try:
+        for f in orchestrator.fire_due_reminders(conn):
+            requeue_notes.append({"phase": "reminder", **f})
+    except Exception as exc:
+        requeue_notes.append(
+            {"phase": "reminder", "status": "sweep_error", "reason": f"{type(exc).__name__}: {exc}"}
+        )
     # A decision that landed but was never carried out, or a run a crash left
     # unsettled. The sweep is the background heartbeat, so it is where the
     # recovery belongs: a server that is left running recovers without

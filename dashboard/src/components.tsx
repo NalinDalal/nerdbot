@@ -466,6 +466,7 @@ export function BotChip({
   face,
   size = "sm",
   href,
+  animated,
 }: {
   persona: string;
   id: string;
@@ -474,12 +475,13 @@ export function BotChip({
   size?: "sm" | "md";
   /** Where the name goes. Omit for a chip that is only a label. */
   href?: string;
+  animated?: boolean;
 }) {
   const name = persona || "Unnamed";
   const nameClass = "truncate text-step--1 text-[var(--text-soft)]";
   return (
     <span className="inline-flex min-w-0 items-center gap-2">
-      <BotFace face={face} size={size === "md" ? 36 : 28} status={status} />
+      <BotFace face={face} size={size === "md" ? 36 : 28} status={status} animated={animated ?? size === "md"} />
       {href ? (
         <a
           href={href}
