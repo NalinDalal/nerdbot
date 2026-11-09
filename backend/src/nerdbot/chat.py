@@ -631,6 +631,9 @@ def _execute_chat_tool(
                     return _j.dumps({"error": f"step {i} missing title"})
                 if len(title) > 200:
                     return _j.dumps({"error": f"step {i} title too long"})
+                low = (title + " " + str(st.get("body", ""))).lower()
+                if any(k in low for k in ("scrape", "download", "browser", "crawl")):
+                    return _j.dumps({"error": f"step {i} requires unavailable capability (browser/scrape/download)"})
                 assignee = str(st.get("assignee_slug", "")).strip()
                 if assignee and assignee not in mates:
                     return _j.dumps({"error": f"unknown assignee {assignee!r}"})

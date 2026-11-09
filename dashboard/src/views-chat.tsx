@@ -998,14 +998,13 @@ function ThreadPane({
               onClick={async () => {
                 setPlanBusy(true);
                 try {
-                  const res = await api.createObjective(projectId!, {
+                  await api.createObjective(projectId!, {
                     objective: planPreview.objective,
                     plan: planPreview.plan,
                     create_board: true,
                   });
-                  const boardId = (res as { board?: { id?: string } }).board?.id;
                   setPlanPreview(null);
-                  if (boardId) navigate(`/board/${boardId}`);
+                  toast.success("Plan approved; tasks created.");
                 } catch (err) {
                   notifyError(err);
                 } finally {
