@@ -4756,3 +4756,28 @@ def list_messages(
         ).fetchall()
         rows = list(reversed(rows))
     return [_message_from_row(r) for r in rows]
+
+
+def rollup_objective(conn, objective_id, thread_id) -> "Report":
+    """Build a markdown rollup of an objective's child tasks. Idempotent via caller."""
+    from .models import Report
+    import json as _j
+
+    tasks = list_tasks_for_objective(conn, objective_id)
+    lines = [f"# Rollup: objective {objective_id}", ""]
+    failed = [t for t in tasks if t.status in ("failed", "blocked", "cancelled")]
+    done = [t for t in tasks if t.status == "done"]
+    if failed:
+        lines.append(f"**Status: partly_failed** ({len(done)}/{len(tasks)} done)")
+    elif len(done) == len(tasks) and tasks:
+        lines.append(f"**Status: done** ({len(done)}/{len(tasks)})")
+    else:
+        lines.append(f"**Status: running** ({len(done)}/{len(tasks)} done)")
+    lines.append("")
+    for t in tasks:
+        lines.append(f"- [{t.status}] {t.description}")
+        if t.status in ("failed", "blocked"):
+            lines.append(f"  reason: {t.blocked_reason or 'unknown'}")
+    markdown = "\n".join(lines)
+    report = create_report(conn, thread_id, "", f"Rollup {objective_id}", markdown)
+    return report

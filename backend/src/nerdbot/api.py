@@ -4098,6 +4098,60 @@ def create_app() -> FastAPI:
                 require_project_owner(conn, thread.project_id, principal)
             return report.model_dump(mode="json")
 
+        @app.get("/team/activity")
+        def team_activity(
+            objective_id: str = "",
+            conn: sqlite3.Connection = Depends(get_conn),
+            principal: str = Depends(principal_from_header),
+        ) -> dict[str, Any]:
+            obj = store.get_objective(conn, objective_id) if objective_id else None
+            tasks = store.list_tasks_for_objective(conn, objective_id) if objective_id else []
+            done = sum(1 for t in tasks if t.status == "done")
+            total = len(tasks)
+            status = store.derive_objective_status(conn, objective_id) if objective_id else "planning"
+            failures = []
+            for t in tasks:
+                if t.status in ("failed", "blocked", "cancelled"):
+                    failures.append({"task_id": t.id, "title": t.description, "reason_text": t.blocked_reason or "failed"})
+            members = []
+            for m in (store.list_teammates(conn, obj.thread_id and store.get_thread(conn, obj.thread_id).project_id if obj else "") if obj else []):
+                current = None
+                queued = 0
+                failed = 0
+                for t in tasks:
+                    if t.owner_teammate_id == m.id:
+                        if t.status in ("pending", "ready"):
+                            queued += 1
+                        if t.status in ("failed", "blocked", "cancelled"):
+                            failed += 1
+                # current running task
+                running = [t for t in tasks if t.owner_teammate_id == m.id and t.status == "running"]
+                if running:
+                    rt = running[0]
+                    current = {"task_id": rt.id, "title": rt.description, "status": rt.status, "last_event": "", "updated_at": ""}
+                members.append({"teammate": {"slug": m.slug, "name": m.persona or m.id, "face": m.face.model_dump(mode="json")}, "current": current, "queued": queued, "failed": failed})
+            return {
+                "objective": {"id": objective_id, "title": obj.title if obj else "", "status": status, "done": done, "total": total},
+                "members": members,
+                "failures": failures,
+            }
+
+        @app.post("/objectives/{objective_id}/rollup")
+        def rollup_endpoint(
+            objective_id: str,
+            conn: sqlite3.Connection = Depends(get_conn),
+            principal: str = Depends(principal_from_header),
+        ) -> dict[str, Any]:
+            obj = store.get_objective(conn, objective_id)
+            if obj is None:
+                raise HTTPException(status_code=404, detail="objective not found")
+            thread = store.get_thread(conn, obj.thread_id)
+            if thread is None:
+                raise HTTPException(status_code=404, detail="thread not found")
+            require_project_owner(conn, thread.project_id, principal)
+            report = store.rollup_objective(conn, objective_id, obj.thread_id)
+            return report.model_dump(mode="json")
+
         @app.get("/{spa_path:path}", include_in_schema=False)
         async def _spa_fallback(spa_path: str, request: Request) -> Response:
             if spa_path:
