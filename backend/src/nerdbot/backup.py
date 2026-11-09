@@ -38,7 +38,14 @@ EXPORT_TABLES = (
     "chat_threads",
     "chat_messages",
     "reports",
+    "library_docs",
+    "library_doc_versions",
+    "library_doc_access",
 )
+
+# Tables an older manifest may lack: they were added after those manifests
+# were exported. Missing means "no library rows", never an invalid backup.
+OPTIONAL_TABLES = frozenset({"library_docs", "library_doc_versions", "library_doc_access"})
 
 
 def redact_provider_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -65,6 +72,7 @@ def build_manifest(conn: sqlite3.Connection, project_id: str) -> dict[str, Any]:
             "knowledge_sources",
             "events",
             "chat_threads",
+            "library_docs",
         ):
             if table == "runs":
                 rows = conn.execute(
@@ -96,6 +104,18 @@ def build_manifest(conn: sqlite3.Connection, project_id: str) -> dict[str, Any]:
                 "SELECT reports.* FROM reports JOIN chat_threads "
                 "ON reports.thread_id = chat_threads.id "
                 "WHERE chat_threads.project_id = ?", (project_id,)
+            ).fetchall()
+        elif table == "library_doc_versions":
+            rows = conn.execute(
+                "SELECT library_doc_versions.* FROM library_doc_versions"
+                " JOIN library_docs ON library_doc_versions.doc_id = library_docs.id"
+                " WHERE library_docs.project_id = ?", (project_id,)
+            ).fetchall()
+        elif table == "library_doc_access":
+            rows = conn.execute(
+                "SELECT library_doc_access.* FROM library_doc_access"
+                " JOIN library_docs ON library_doc_access.doc_id = library_docs.id"
+                " WHERE library_docs.project_id = ?", (project_id,)
             ).fetchall()
         elif table == "approvals":
             rows = conn.execute(
@@ -150,6 +170,8 @@ def validate_manifest(manifest: dict[str, Any]) -> list[str]:
     if isinstance(tables, dict):
         for table in EXPORT_TABLES:
             if table not in tables:
+                if table in OPTIONAL_TABLES:
+                    continue  # exported before the Library existed
                 errors.append(f"missing table {table!r}")
             elif not isinstance(tables[table], list):
                 errors.append(f"table {table!r} must be a list")
@@ -343,6 +365,37 @@ _IMPORT_COLUMNS: dict[str, frozenset[str]] = {
     "reports": frozenset(
         {"id", "thread_id", "message_id", "title", "markdown", "created_at"}
     ),
+    "library_docs": frozenset(
+        {
+            "id",
+            "project_id",
+            "kind",
+            "title",
+            "content",
+            "source",
+            "teammate_id",
+            "tainted",
+            "version",
+            "created_at",
+            "updated_at",
+        }
+    ),
+    "library_doc_versions": frozenset(
+        {
+            "id",
+            "doc_id",
+            "version",
+            "title",
+            "content",
+            "source",
+            "teammate_id",
+            "tainted",
+            "created_at",
+        }
+    ),
+    "library_doc_access": frozenset(
+        {"id", "doc_id", "teammate_id", "access", "created_at"}
+    ),
 }
 
 # Manifest-wide bounds: refuses oversized imports before any row is processed.
@@ -372,6 +425,7 @@ def import_manifest(
         Issue,
         KnowledgeChunk,
         KnowledgeSource,
+        LibraryDoc,
         MemoryEntry,
         Notification,
         Provider,
@@ -415,6 +469,7 @@ def import_manifest(
             "schedules": store.get_schedule,
             "providers": store.get_provider,
             "chat_threads": store.get_thread,
+            "library_docs": store.get_library_doc,
         }
         getter = exists_map.get(table)
         return getter is not None and getter(conn, row_id) is not None
@@ -461,6 +516,7 @@ def import_manifest(
         ("notifications", Notification),
         ("memories", MemoryEntry),
         ("providers", Provider),
+        ("library_docs", LibraryDoc),
     ):
         for raw in tables.get(table, []):
             if not isinstance(raw, dict):
@@ -665,6 +721,59 @@ def import_manifest(
         if not dry_run:
             _insert("reports", raw)
         _note("reports", row_id)
+
+    # Library children after their parent doc: history and ACL rows hang off
+    # a doc that must exist (or have been imported in this manifest).
+    for raw in tables.get("library_doc_versions", []):
+        row_id = str(raw.get("id", "")) if isinstance(raw, dict) else ""
+        if not isinstance(raw, dict):
+            rejected.append({"table": "library_doc_versions", "id": "", "reason": "row is not an object"})
+            continue
+        bad_columns = _bad_columns("library_doc_versions", raw)
+        if bad_columns is not None:
+            rejected.append({"table": "library_doc_versions", "id": row_id, "reason": bad_columns})
+            continue
+        if not _exists("library_docs", str(raw.get("doc_id", ""))):
+            rejected.append({"table": "library_doc_versions", "id": row_id, "reason": "unknown doc"})
+            continue
+        if len(str(raw.get("content", ""))) > 1_048_576:
+            rejected.append({"table": "library_doc_versions", "id": row_id, "reason": "content exceeds 1MiB"})
+            continue
+        try:
+            version_no = int(raw.get("version") or 0)
+        except (TypeError, ValueError):
+            rejected.append({"table": "library_doc_versions", "id": row_id, "reason": "bad version"})
+            continue
+        if store.get_library_doc_version(conn, str(raw.get("doc_id", "")), version_no) is not None:
+            skipped.append({"table": "library_doc_versions", "id": row_id, "reason": "already exists"})
+            continue
+        if not dry_run:
+            _insert("library_doc_versions", raw)
+        _note("library_doc_versions", row_id)
+
+    for raw in tables.get("library_doc_access", []):
+        row_id = str(raw.get("id", "")) if isinstance(raw, dict) else ""
+        if not isinstance(raw, dict):
+            rejected.append({"table": "library_doc_access", "id": "", "reason": "row is not an object"})
+            continue
+        bad_columns = _bad_columns("library_doc_access", raw)
+        if bad_columns is not None:
+            rejected.append({"table": "library_doc_access", "id": row_id, "reason": bad_columns})
+            continue
+        if not _exists("library_docs", str(raw.get("doc_id", ""))):
+            rejected.append({"table": "library_doc_access", "id": row_id, "reason": "unknown doc"})
+            continue
+        if not _exists("teammates", str(raw.get("teammate_id", ""))):
+            rejected.append({"table": "library_doc_access", "id": row_id, "reason": "unknown teammate"})
+            continue
+        if store.get_library_doc_access(
+            conn, str(raw.get("doc_id", "")), str(raw.get("teammate_id", ""))
+        ) is not None:
+            skipped.append({"table": "library_doc_access", "id": row_id, "reason": "already exists"})
+            continue
+        if not dry_run:
+            _insert("library_doc_access", raw)
+        _note("library_doc_access", row_id)
 
     for table in sorted(HISTORY_TABLES):
         for raw in tables.get(table, []):
