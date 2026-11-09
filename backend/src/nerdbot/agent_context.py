@@ -176,6 +176,15 @@ def _system_message(
                 sections.append(framed)
         except KeyError:
             pass  # the bot does not exist; nothing to load
+        # Active skills: reusable instructions attached to this teammate.
+        # UNTRUSTED context; they NEVER grant tools or permissions.
+        try:
+            skills = store.resolve_skills_for_teammate(conn, mate.id)
+            rendered = store.render_skills_for_prompt(skills)
+            if rendered:
+                sections.append("## Active skills\n" + rendered)
+        except Exception:
+            pass  # fail-closed: do not inject partial/unknown skill instructions
     else:
         sections.append(
             "You are an unowned NerdBot task worker. Complete the task with the "

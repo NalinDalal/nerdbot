@@ -34,6 +34,7 @@ import type {
   RunEvent,
   RunEventPage,
   Schedule,
+  Skill,
   Task,
   TaskView,
   Team,
@@ -617,10 +618,47 @@ export const api = {
   ingestInbound: (projectId: string, body: Record<string, unknown>) =>
     post<{ issue: Issue; task: TaskView["task"] }>(`/projects/${projectId}/ingress`, body),
 
-  projectMemory: (projectId: string) =>
-    req<{ entries: MemoryEntry[] }>(`/projects/${projectId}/memory`),
+  projectMemory: (projectId: string, params?: { q?: string; tier?: string; pinned?: boolean; limit?: number; offset?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.q) q.set("q", params.q);
+    if (params?.tier) q.set("tier", params.tier);
+    if (params?.pinned !== undefined) q.set("pinned", String(params.pinned));
+    if (params?.limit) q.set("limit", String(params.limit));
+    if (params?.offset) q.set("offset", String(params.offset));
+    const s = q.toString();
+    return req<{ entries: MemoryEntry[]; total?: number; limit?: number; offset?: number }>(`/projects/${projectId}/memory${s ? `?${s}` : ""}`);
+  },
   writeProjectMemory: (projectId: string, body: Record<string, unknown>) =>
     post<MemoryEntry>(`/projects/${projectId}/memory`, body),
+  patchMemory: (memoryId: string, body: Record<string, unknown>) =>
+    patch<MemoryEntry>(`/memory/${memoryId}`, body),
+  deleteMemory: (memoryId: string) =>
+    req<{ deleted: boolean }>(`/memory/${memoryId}`, { method: "DELETE" }),
+  pruneMemory: (scope: string, body?: { keep?: number; older_than_days?: number }) => {
+    const q = new URLSearchParams({ scope });
+    if (body?.keep != null) q.set("keep", String(body.keep));
+    if (body?.older_than_days != null) q.set("older_than_days", String(body.older_than_days));
+    return post<{ deleted: number }>(`/memory/prune?${q.toString()}`, {});
+  },
+  // -- Skills (Phase 3) ------------------------------------------------------
+  listSkills: (params?: { project_id?: string; teammate_id?: string; scope?: string; q?: string; limit?: number; offset?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.project_id) q.set("project_id", params.project_id);
+    if (params?.teammate_id) q.set("teammate_id", params.teammate_id);
+    if (params?.scope) q.set("scope", params.scope);
+    if (params?.q) q.set("q", params.q);
+    if (params?.limit) q.set("limit", String(params.limit));
+    if (params?.offset) q.set("offset", String(params.offset));
+    const s = q.toString();
+    return req<{ skills: Skill[]; total: number }>(`/skills${s ? `?${s}` : ""}`);
+  },
+  createSkill: (body: Record<string, unknown>) => post<Skill>("/skills", body),
+  getSkill: (id: string) => req<Skill>(`/skills/${id}`),
+  patchSkill: (id: string, body: Record<string, unknown>) => patch<Skill>(`/skills/${id}`, body),
+  deleteSkill: (id: string) => req<{ deleted: boolean }>(`/skills/${id}`, { method: "DELETE" }),
+  teammateSkills: (teammateId: string) => req<{ skills: any[]; resolved: any[] }>(`/teammates/${teammateId}/skills`),
+  attachSkill: (teammateId: string, skillId: string) => post<any>(`/teammates/${teammateId}/skills/${skillId}`, {}),
+  detachSkill: (teammateId: string, skillId: string) => req<any>(`/teammates/${teammateId}/skills/${skillId}`, { method: "DELETE" }),
 
   projectEvents: (projectId: string, entity?: string) =>
     req<{ events: Event[] }>(
@@ -694,6 +732,7 @@ export const api = {
       signal?: AbortSignal;
       /** Which teammate the backend says is answering this reply. */
       onSpeaker?: (speaker: { teammate_id: string; name: string }) => void;
+      onMemoryUsed?: (items: MemoryProvenance[]) => void;
     },
   ): Promise<string> =>
     streamChat(threadId, content, onChunk, onStatus, onParts, mode, opts),
@@ -886,6 +925,7 @@ async function streamChat(
   opts?: {
     signal?: AbortSignal;
     onSpeaker?: (speaker: { teammate_id: string; name: string }) => void;
+    onMemoryUsed?: (items: MemoryProvenance[]) => void;
   },
 ): Promise<string> {
   const current = getSession();
@@ -963,17 +1003,11 @@ async function streamChat(
           parts?: unknown;
           teammate_id?: unknown;
           name?: unknown;
+          memory_used?: unknown;
+          count?: unknown;
         };
         try {
-          data = JSON.parse(payload) as {
-            kind?: unknown;
-            text?: unknown;
-            error?: unknown;
-            mock?: unknown;
-            parts?: unknown;
-            teammate_id?: unknown;
-            name?: unknown;
-          };
+          data = JSON.parse(payload) as typeof data;
         } catch {
           throw new ApiError(502, "Unreadable stream payload");
         }
@@ -986,6 +1020,8 @@ async function streamChat(
           typeof data.name === "string"
         ) {
           opts?.onSpeaker?.({ teammate_id: data.teammate_id, name: data.name });
+        } else if (data.kind === "memory_used" && Array.isArray((data as any).memory_used)) {
+          opts?.onMemoryUsed?.((data as any).memory_used as MemoryProvenance[]);
         } else if (data.kind === "status" && typeof data.text === "string" && data.text) {
           onStatus?.(data.text);
         } else if (data.kind === "parts" && Array.isArray(data.parts)) {

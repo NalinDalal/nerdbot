@@ -30,6 +30,16 @@ CAPABILITIES: list[dict[str, Any]] = [
         "description": "Offline chunk/cite/retrieve with token-overlap scoring (no vectors).",
     },
     {
+        "id": "memory.product",
+        "status": "ready",
+        "description": "Scoped memory with search/paginate/manage (pin/correct/delete), provenance/retention, and recalled-in-turn transparency hooks; fail-closed isolation.",
+    },
+    {
+        "id": "skills.reusable",
+        "status": "ready",
+        "description": "Reusable skills (CRUD/versioning/scope/attach-detach) resolved into prompt context; governed, never widens permissions.",
+    },
+    {
         "id": "knowledge.vectors",
         "status": "rejected",
         "description": "No corpus justifies embeddings; overlap retrieval suffices.",

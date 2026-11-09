@@ -44,7 +44,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.responses import Response
 
 from . import approval_flow, auth as auth_mod, orchestrator, research as research_mod, run_events, schemas, store
@@ -210,6 +210,44 @@ class MemoryBody(BaseModel):
     source: str
     confidence: float = 0.5
     tier: str = MemoryTier.RAW
+    pinned: bool = False
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class MemoryPatch(BaseModel):
+    content: str | None = None
+    source: str | None = None
+    confidence: float | None = None
+    tier: str | None = None
+    pinned: bool | None = None
+    corrected: bool | None = None
+    provenance: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
+
+
+class SkillBody(BaseModel):
+    name: str
+    instructions: str
+    description: str = ""
+    scope: str = "owner"
+    project_id: str = ""
+    teammate_id: str = ""
+    tool_policy: dict[str, Any] = Field(default_factory=dict)
+    required_permissions: list[str] = Field(default_factory=list)
+    enabled: bool = True
+
+
+class SkillPatch(BaseModel):
+    name: str | None = None
+    instructions: str | None = None
+    description: str | None = None
+    scope: str | None = None
+    project_id: str | None = None
+    teammate_id: str | None = None
+    tool_policy: dict[str, Any] | None = None
+    required_permissions: list[str] | None = None
+    enabled: bool | None = None
 
 
 def _enforce_memory_scope(
@@ -2316,13 +2354,19 @@ def create_app() -> FastAPI:
         _ = principal
         _enforce_memory_scope(conn, acting, body.scope)
         entry = store.write_memory(
-            conn, body.scope, body.content, body.source, body.confidence, tier=body.tier
+            conn, body.scope, body.content, body.source, body.confidence, tier=body.tier,
+            provenance=body.provenance or {}, metadata=body.metadata or {}, pinned=body.pinned,
         )
         return entry.model_dump(mode="json")
 
     @app.get("/memory")
-    def recall_memory(
+    def list_memory(
         scope: str,
+        q: str | None = None,
+        tier: str | None = None,
+        pinned: bool | None = None,
+        limit: int = 50,
+        offset: int = 0,
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
         acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
@@ -2330,10 +2374,72 @@ def create_app() -> FastAPI:
         _ = principal
         _enforce_memory_scope(conn, acting, scope)
         try:
-            entries = store.recall_memory(conn, scope)
+            entries, total = store.list_memories(conn, scope, limit=limit, offset=offset, tier=tier, q=q, pinned=pinned)
         except store.MemoryReadError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
-        return {"entries": [e.model_dump(mode="json") for e in entries]}
+        return {"entries": [e.model_dump(mode="json") for e in entries], "total": total, "limit": limit, "offset": offset}
+
+    @app.get("/memory/{memory_id}")
+    def get_memory_entry(
+        memory_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        _ = principal
+        entry = store.get_memory(conn, memory_id)
+        if entry is None:
+            raise HTTPException(status_code=404, detail="memory not found")
+        _enforce_memory_scope(conn, acting, entry.scope)
+        return entry.model_dump(mode="json")
+
+    @app.patch("/memory/{memory_id}")
+    def patch_memory_entry(
+        memory_id: str,
+        body: MemoryPatch,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        _ = principal
+        entry = store.get_memory(conn, memory_id)
+        if entry is None:
+            raise HTTPException(status_code=404, detail="memory not found")
+        _enforce_memory_scope(conn, acting, entry.scope)
+        try:
+            updated = store.update_memory(conn, memory_id, **body.model_dump(exclude_none=True))
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return updated.model_dump(mode="json")
+
+    @app.delete("/memory/{memory_id}")
+    def delete_memory_entry(
+        memory_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        _ = principal
+        entry = store.get_memory(conn, memory_id)
+        if entry is None:
+            raise HTTPException(status_code=404, detail="memory not found")
+        _enforce_memory_scope(conn, acting, entry.scope)
+        store.delete_memory(conn, memory_id)
+        return {"deleted": True, "id": memory_id}
+
+    @app.post("/memory/prune")
+    def prune_memory_endpoint(
+        scope: str,
+        keep: int = 500,
+        older_than_days: int | None = None,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        _ = principal
+        _enforce_memory_scope(conn, acting, scope)
+        deleted = store.prune_memories(conn, scope, keep=keep, older_than_days=older_than_days)
+        return {"deleted": deleted, "scope": scope}
 
     @app.post("/projects/{project_id}/memory")
     def write_project_memory(
@@ -2350,29 +2456,32 @@ def create_app() -> FastAPI:
                 detail="acting teammate has no project memory scope",
             )
         entry = store.write_memory(
-            conn, f"project:{project_id}", body.content, body.source, body.confidence
+            conn, f"project:{project_id}", body.content, body.source, body.confidence, tier=body.tier,
+            provenance=body.provenance or {}, metadata=body.metadata or {}, pinned=body.pinned,
         )
         store.record_event(conn, project_id, "memory", entry.id, "memory.stored")
         return entry.model_dump(mode="json")
 
     @app.get("/projects/{project_id}/memory")
-    def recall_project_memory(
+    def list_project_memory(
         project_id: str,
+        q: str | None = None,
+        tier: str | None = None,
+        pinned: bool | None = None,
+        limit: int = 50,
+        offset: int = 0,
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
         acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
     ) -> dict[str, Any]:
         require_project_owner(conn, project_id, principal)
         if acting is not None and acting.memory_scope != "project":
-            raise HTTPException(
-                status_code=403,
-                detail="acting teammate has no project memory scope",
-            )
+            raise HTTPException(status_code=403, detail="acting teammate has no project memory scope")
         try:
-            entries = store.recall_memory(conn, f"project:{project_id}")
+            entries, total = store.list_memories(conn, f"project:{project_id}", limit=limit, offset=offset, tier=tier, q=q, pinned=pinned)
         except store.MemoryReadError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
-        return {"entries": [e.model_dump(mode="json") for e in entries]}
+        return {"entries": [e.model_dump(mode="json") for e in entries], "total": total, "limit": limit, "offset": offset}
 
     @app.post("/runs/{run_id}/approvals")
     def request_approval(
@@ -3170,6 +3279,97 @@ def create_app() -> FastAPI:
         except _LIBRARY_ERRORS as exc:
             raise _library_error(exc) from exc
         return {"access": [r.model_dump(mode="json") for r in rows]}
+
+
+    # -- Skills (Phase 3) ------------------------------------------------------
+
+    @app.get("/skills")
+    def list_skills(
+        project_id: str | None = None,
+        teammate_id: str | None = None,
+        scope: str | None = None,
+        q: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        if project_id:
+            require_project_owner(conn, project_id, principal)
+        skills, total = store.list_skills(conn, owner=principal, project_id=project_id, teammate_id=teammate_id, scope=scope, q=q, limit=limit, offset=offset)
+        return {"skills": [x.model_dump(mode="json") for x in skills], "total": total}
+
+    @app.post("/skills")
+    def create_skill(
+        body: SkillBody,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        if body.project_id:
+            require_project_owner(conn, body.project_id, principal)
+        try:
+            skill = store.create_skill(
+                conn, name=body.name, instructions=body.instructions, description=body.description,
+                scope=body.scope, owner=principal, project_id=body.project_id, teammate_id=body.teammate_id,
+                tool_policy=body.tool_policy, required_permissions=body.required_permissions, enabled=body.enabled,
+            )
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return skill.model_dump(mode="json")
+
+    @app.get("/skills/{skill_id}")
+    def get_skill(skill_id: str, conn: sqlite3.Connection = Depends(get_conn), principal: str = Depends(principal_from_header)) -> dict[str, Any]:
+        _ = principal
+        skill = store.get_skill(conn, skill_id)
+        if skill is None: raise HTTPException(status_code=404, detail="skill not found")
+        return skill.model_dump(mode="json")
+
+    @app.patch("/skills/{skill_id}")
+    def patch_skill(skill_id: str, body: SkillPatch, conn: sqlite3.Connection = Depends(get_conn), principal: str = Depends(principal_from_header)) -> dict[str, Any]:
+        skill = store.get_skill(conn, skill_id)
+        if skill is None: raise HTTPException(status_code=404, detail="skill not found")
+        if skill.owner and skill.owner != principal:
+            raise HTTPException(status_code=403, detail="not your skill")
+        try:
+            updated = store.update_skill(conn, skill_id, **body.model_dump(exclude_none=True))
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return updated.model_dump(mode="json")
+
+    @app.delete("/skills/{skill_id}")
+    def delete_skill(skill_id: str, conn: sqlite3.Connection = Depends(get_conn), principal: str = Depends(principal_from_header)) -> dict[str, Any]:
+        skill = store.get_skill(conn, skill_id)
+        if skill is None: raise HTTPException(status_code=404, detail="skill not found")
+        if skill.owner and skill.owner != principal:
+            raise HTTPException(status_code=403, detail="not your skill")
+        store.delete_skill(conn, skill_id)
+        return {"deleted": True, "id": skill_id}
+
+    @app.get("/teammates/{teammate_id}/skills")
+    def list_teammate_skills(teammate_id: str, conn: sqlite3.Connection = Depends(get_conn), principal: str = Depends(principal_from_header)) -> dict[str, Any]:
+        mate = store.get_teammate(conn, teammate_id)
+        if mate is None: raise HTTPException(status_code=404, detail="teammate not found")
+        require_project_owner(conn, mate.project_id, principal)
+        return {"skills": store.list_teammate_skills(conn, teammate_id), "resolved": store.resolve_skills_for_teammate(conn, teammate_id)}
+
+    @app.post("/teammates/{teammate_id}/skills/{skill_id}")
+    def attach_skill(teammate_id: str, skill_id: str, conn: sqlite3.Connection = Depends(get_conn), principal: str = Depends(principal_from_header)) -> dict[str, Any]:
+        mate = store.get_teammate(conn, teammate_id)
+        if mate is None: raise HTTPException(status_code=404, detail="teammate not found")
+        require_project_owner(conn, mate.project_id, principal)
+        try:
+            att = store.attach_skill(conn, teammate_id, skill_id)
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"attached": True, "attachment": att.model_dump(mode="json")}
+
+    @app.delete("/teammates/{teammate_id}/skills/{skill_id}")
+    def detach_skill(teammate_id: str, skill_id: str, conn: sqlite3.Connection = Depends(get_conn), principal: str = Depends(principal_from_header)) -> dict[str, Any]:
+        mate = store.get_teammate(conn, teammate_id)
+        if mate is None: raise HTTPException(status_code=404, detail="teammate not found")
+        require_project_owner(conn, mate.project_id, principal)
+        ok = store.detach_skill(conn, teammate_id, skill_id)
+        return {"detached": ok}
 
     # -- Schedules & reminders (Phase 2) --------------------------------------
 
@@ -4196,7 +4396,7 @@ def create_app() -> FastAPI:
         thread, provider, messages, provenance, speaker = _prepare_chat(
             conn, thread_id, content
         )
-        _ = (thread, provenance)
+        _ = thread
 
         def generate() -> Any:
             import json as _json
@@ -4211,6 +4411,8 @@ def create_app() -> FastAPI:
             # the interface is told, so it can label the reply.
             if provider and provider.kind == ProviderKind.MOCK:
                 yield f"data: {_json.dumps({'mock': True})}\n\n"
+            if provenance:
+                yield f"data: {_json.dumps({'kind': 'memory_used', 'memory_used': provenance, 'count': len(provenance)})}\n\n"
             try:
                 for event in chat_mod.chat_stream_with_tools(
                     provider, messages, conn=conn, project_id=thread.project_id,

@@ -305,6 +305,30 @@ export interface MemoryEntry {
   source: string;
   confidence: number;
   timestamp: string;
+  tier?: string;
+  pinned?: boolean;
+  corrected?: boolean;
+  provenance?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  updated_at?: string | null;
+}
+
+export interface Skill {
+  id: string;
+  name: string;
+  slug?: string;
+  description?: string;
+  instructions: string;
+  version: number;
+  scope: "owner" | "project" | "teammate" | string;
+  owner?: string;
+  project_id?: string;
+  teammate_id?: string;
+  tool_policy?: Record<string, unknown>;
+  required_permissions?: string[];
+  enabled: boolean;
+  created_at: string;
+  updated_at?: string | null;
 }
 
 export interface Team {
@@ -524,6 +548,10 @@ export interface MemoryProvenance {
   id: string;
   source: string;
   confidence: number;
+  scope?: string;
+  tier?: string;
+  pinned?: boolean;
+  provenance?: Record<string, unknown>;
 }
 
 /** Config keys whose values must never be rendered. Server redacts these,

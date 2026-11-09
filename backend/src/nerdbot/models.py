@@ -247,6 +247,43 @@ class MemoryEntry(BaseModel):
     confidence: float = 0.5
     timestamp: datetime = Field(default_factory=_utcnow)
     tier: str = MemoryTier.RAW
+    pinned: bool = False
+    corrected: bool = False
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    updated_at: datetime | None = None
+
+
+class SkillScope(StrEnum):
+    OWNER = "owner"
+    PROJECT = "project"
+    TEAMMATE = "teammate"
+
+
+class Skill(BaseModel):
+    id: str
+    name: str
+    slug: str = ""
+    description: str = ""
+    instructions: str = ""
+    version: int = 1
+    scope: str = SkillScope.OWNER.value
+    owner: str = ""
+    project_id: str = ""
+    teammate_id: str = ""
+    tool_policy: dict[str, Any] = Field(default_factory=dict)
+    required_permissions: list[str] = Field(default_factory=list)
+    enabled: bool = True
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime | None = None
+
+
+class TeammateSkill(BaseModel):
+    id: str
+    teammate_id: str
+    skill_id: str
+    enabled: bool = True
+    created_at: datetime = Field(default_factory=_utcnow)
 
 
 class Artifact(BaseModel):

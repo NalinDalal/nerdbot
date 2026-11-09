@@ -199,7 +199,8 @@ def build_messages(
     Project context (name, task and teammate counts) is prepended so the
     assistant can answer questions about the workspace instead of claiming it
     cannot see it. Recalled memory and thread summaries follow as untrusted
-    context with provenance.
+    context with provenance. Active teammate skills are appended as UNTRUSTED
+    instructions and never widen permissions.
     """
     if speaker is not None:
         base_prompt = speaker_prompt(speaker)
@@ -210,6 +211,16 @@ def build_messages(
     project_ctx = _project_context(conn, project_id)
     if project_ctx:
         messages.append({"role": "system", "content": project_ctx})
+    if speaker is not None:
+        try:
+            skills = store.resolve_skills_for_teammate(conn, speaker.id)
+            rendered = store.render_skills_for_prompt(skills)
+            if rendered:
+                messages.append({"role": "system", "content": rendered})
+        except Exception:
+            # Fail-closed for safety: skill resolution errors do not block chat,
+            # but they also do not inject partial/unknown instructions.
+            pass
     messages, provenance = _frame_recalled(conn, project_id, messages, exclude_id=thread.id)
     history = store.list_messages(conn, thread.id, limit=HISTORY_WINDOW)
     for message in history:
@@ -268,10 +279,18 @@ def _frame_recalled(
     provenance: list[dict[str, Any]] = []
     lines: list[str] = []
     for entry in memories:
-        provenance.append({"id": entry.id, "source": entry.source, "confidence": entry.confidence})
-        lines.append(f"[{entry.source} · confidence {entry.confidence}] {entry.content}")
+        provenance.append({
+            "id": entry.id,
+            "source": entry.source,
+            "confidence": entry.confidence,
+            "scope": entry.scope,
+            "tier": getattr(entry, "tier", "raw"),
+            "pinned": bool(getattr(entry, "pinned", False)),
+            "kind": "memory",
+        })
+        lines.append(f"[memory {entry.id} · {entry.source} · {getattr(entry, 'tier', 'raw')} · confidence {entry.confidence}] {entry.content}")
     for other in store.list_thread_summaries(conn, project_id, exclude_id=exclude_id):
-        provenance.append({"id": other.id, "source": "thread-summary", "confidence": 1.0})
+        provenance.append({"id": other.id, "source": "thread-summary", "confidence": 1.0, "kind": "thread-summary"})
         title = other.title or other.id
         lines.append(f"[thread-summary {title}] {other.summary}")
     if lines:

@@ -46,6 +46,8 @@ export function BotDetailView({
   const runs = useAsync(() => api.teammateRuns(teammateId), [teammateId]);
   const memory = useAsync(() => api.teammateMemory(teammateId), [teammateId]);
   const persona = useAsync(() => api.getPersona(teammateId), [teammateId]);
+  const skills = useAsync(() => api.teammateSkills(teammateId), [teammateId]);
+  const allSkills = useAsync(() => api.listSkills({ limit: 100 }), [teammateId]);
   const boards = useAsync(() => api.listBoards(), [teammateId]);
   /* Resolve the model name rather than printing "model connected": the owner
      needs to know which model a bot will think with. */
@@ -79,7 +81,7 @@ export function BotDetailView({
   const [editBusy, setEditBusy] = useState(false);
   const [confirmStatus, setConfirmStatus] = useState<"disable" | "archive" | null>(null);
   const [statusBusy, setStatusBusy] = useState(false);
-  const [section, setSection] = useState<"overview" | "configuration" | "capabilities" | "memory" | "work" | "activity">("overview");
+  const [section, setSection] = useState<"overview" | "configuration" | "capabilities" | "memory" | "skills" | "work" | "activity">("overview");
 
   const openEditor = () => {
     if (!mate) return;
@@ -337,6 +339,7 @@ export function BotDetailView({
             ["configuration", "Configuration"],
             ["capabilities", "Capabilities"],
             ["memory", "Memory"],
+            ["skills", "Skills"],
             ["work", "Work"],
             ["activity", "Activity"],
           ] as const
@@ -600,6 +603,61 @@ export function BotDetailView({
           </div>
         ) : (
           <EmptyState title="No memories" hint="Save a note this bot will recall in future runs." />
+        )}
+      </section>
+      )}
+
+      {/* Skills (Phase 3) */}
+      {(section === "skills" || section === "overview") && (
+      <section>
+        <div className="mb-2 flex items-center justify-between">
+          <SectionLabel>Skills</SectionLabel>
+        </div>
+        <p className="mb-3 max-w-[72ch] text-step--1 text-[var(--muted)]">
+          Reusable instruction packs attached to this teammate. Skills add context/instructions when resolved; they never widen permissions (gates and tool policy still apply).
+        </p>
+        {skills.loading ? <LoadingState lines={2} /> : skills.error ? <ErrorState error={skills.error} onRetry={skills.reload} /> : (
+          <>
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <select
+                className={`${FORM_INPUT} max-w-sm`}
+                defaultValue=""
+                aria-label="Attach skill"
+                onChange={async (e) => {
+                  const skillId = e.target.value;
+                  if (!skillId) return;
+                  try { await api.attachSkill(teammateId, skillId); skills.reload(); toast.success("Skill attached"); } catch (err) { notifyError(err); }
+                  e.target.value = "";
+                }}
+              >
+                <option value="">Attach a skill…</option>
+                {(allSkills.data?.skills || []).filter((sk: any) => !(skills.data?.skills || []).some((a: any) => a.skill_id === sk.id)).map((sk: any) => (
+                  <option key={sk.id} value={sk.id}>{sk.name} (v{sk.version})</option>
+                ))}
+              </select>
+              <Button onClick={() => { const name = prompt("Skill name"); if (!name) return; const instructions = prompt("Instructions (what this skill teaches the teammate)"); if (!instructions) return; void api.createSkill({ name, instructions, description: "", scope: "owner" }).then(() => { allSkills.reload(); toast.success("Skill created"); }).catch(notifyError); }}>New skill</Button>
+            </div>
+            {(skills.data?.skills || []).length === 0 ? (
+              <EmptyState title="No skills attached" hint="Create or attach a skill to give this teammate reusable instructions." />
+            ) : (
+              <div className="flex flex-col gap-2">
+                {(skills.data?.skills || []).map((s: any) => (
+                  <div key={s.skill_id || s.attachment_id} className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="font-medium text-[var(--text)]">{s.name} <span className="text-step--2 font-normal text-[var(--faint)]">v{s.version} · {s.scope}</span></div>
+                        {s.description ? <div className="mt-0.5 text-step--1 text-[var(--muted)]">{s.description}</div> : null}
+                        <div className="mt-1 text-step--2 text-[var(--faint)]">Active when attached and enabled. Required permissions (enforced, not granted): {(s.required_permissions || []).join(", ") || "none"}</div>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button variant="danger" onClick={() => void api.detachSkill(teammateId, s.skill_id).then(() => { skills.reload(); toast.success("Detached"); }).catch(notifyError)}>Detach</Button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
         )}
       </section>
       )}

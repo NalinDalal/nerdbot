@@ -728,6 +728,7 @@ function ThreadPane({
     teammate_id: string;
     name: string;
   } | null>(null);
+  const [recalledThisTurn, setRecalledThisTurn] = useState<any[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -811,6 +812,7 @@ function ThreadPane({
     setBusy(true);
     setStreaming("");
     setStreamSpeaker(null);
+    setRecalledThisTurn([]);
     setRetryFrom(null);
     let stopped = false;
     try {
@@ -830,9 +832,11 @@ function ThreadPane({
         }, (status) => setStreamStatus(status), (parts) => setStreamParts(parts), mode, {
           signal: controller.signal,
           onSpeaker: setStreamSpeaker,
+          onMemoryUsed: setRecalledThisTurn,
         });
       } else {
-        await api.sendChat(threadId, fullContent, mode);
+        const res = await api.sendChat(threadId, fullContent, mode);
+        setRecalledThisTurn(res?.memory_used || []);
       }
       setDraft("");
       await view.reload();
@@ -864,6 +868,7 @@ function ThreadPane({
     setBusy(true);
     setStreaming("");
     setStreamSpeaker(null);
+    setRecalledThisTurn([]);
     let stopped = false;
     try {
       const content =
@@ -876,9 +881,11 @@ function ThreadPane({
         }, (status) => setStreamStatus(status), (parts) => setStreamParts(parts), mode, {
           signal: controller.signal,
           onSpeaker: setStreamSpeaker,
+          onMemoryUsed: setRecalledThisTurn,
         });
       } else {
-        await api.sendChat(threadId, content, mode);
+        const res = await api.sendChat(threadId, content, mode);
+        setRecalledThisTurn(res?.memory_used || []);
       }
       setRetryFrom(null);
       await view.reload();
@@ -1146,6 +1153,11 @@ function ThreadPane({
               ))}
               {streaming ? (
                 <div className="flex flex-col gap-1.5">
+                  {recalledThisTurn.length > 0 ? (
+                    <div className="text-step--2 text-[var(--faint)]" title={recalledThisTurn.map((m:any)=>`${m.kind||'memory'}:${m.source||m.id}`).join(', ')}>
+                      Recalled this turn: {recalledThisTurn.length} item{recalledThisTurn.length===1?'':'s'} (untrusted context)
+                    </div>
+                  ) : null}
                   <div className="flex items-center gap-2 text-step--2 text-[var(--muted)]" aria-live="polite">
                     <span className="inline-flex gap-1" aria-hidden><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--accent)]" /><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--accent)] [animation-delay:120ms]" /><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--accent)] [animation-delay:240ms]" /></span>
                     <span>{streamStatus || "Thinking…"}</span>
