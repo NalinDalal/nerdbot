@@ -3,6 +3,7 @@ import { api } from "../api";
 import { navigate } from "../app";
 import { Button, EmptyState, ErrorState, LoadingState, Page, useAsync } from "../components";
 import { ConversationView } from "../views-chat";
+import { ProjectOperatingOverview } from "./overview";
 import { TasksTab } from "./tasks";
 import { TeammatesTab } from "./teammates";
 import { ProvidersTab } from "./providers";
@@ -18,11 +19,20 @@ import { BackupTab } from "./backup";
 import { MetricsTab } from "./metrics";
 import { EventsTab } from "./events";
 
-const PRIMARY_TABS = ["Overview", "Chat", "Work", "Team", "Files", "Knowledge"] as const;
+const PRIMARY_TABS = ["Overview", "Work", "Agents", "Chat", "Knowledge", "Files"] as const;
+const PRIMARY_TAB_LABELS: Record<(typeof PRIMARY_TABS)[number], string> = {
+  Overview: "Overview",
+  Work: "Work",
+  Agents: "Agents",
+  Chat: "Chat",
+  Knowledge: "Knowledge",
+  Files: "Files & tools",
+};
 // Backward-compatible aliases: keep old tab names working for deep links.
 const TAB_ALIASES: Record<string, string> = {
   Tasks: "Work",
-  Teammates: "Team",
+  Teammates: "Agents",
+  Team: "Agents",
 };
 const ADVANCED_TABS = [
   "Providers",
@@ -84,7 +94,7 @@ export function ProjectDetailView({
       >
         <span aria-hidden>←</span> Workspaces
       </a>
-      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="mb-1 text-step--2 uppercase tracking-[0.16em] text-[var(--faint)]">
             Workspace
@@ -94,23 +104,22 @@ export function ProjectDetailView({
           </h1>
           <p className="mt-1 text-step--1 text-[var(--muted)]">
             {counts
-              ? `${counts.bots} teammate${counts.bots === 1 ? "" : "s"} · ${counts.tasks} task${
+              ? `${counts.bots} agent${counts.bots === 1 ? "" : "s"} · ${counts.tasks} task${
                   counts.tasks === 1 ? "" : "s"
                 } · ${counts.running} running`
-              : "\u00a0"}
+              : "Operating overview for this workspace"}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button onClick={() => selectTab("Chat")}>Open chat</Button>
-          <Button onClick={() => navigate(`/workbench?project=${projectId}`)}>
-            Workbench
-          </Button>
+          <Button variant="primary" onClick={() => selectTab("Work")}>Open work</Button>
         </div>
       </div>
+
       <div
         role="tablist"
-        aria-label="Project sections"
-        className="mb-6 flex flex-nowrap items-center gap-1 overflow-x-auto rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 md:flex-wrap md:overflow-visible"
+        aria-label="Workspace sections"
+        className="mb-6 flex flex-nowrap items-center gap-1 overflow-x-auto rounded-lg border border-[var(--border-dim)] bg-[var(--surface)] p-1 md:flex-wrap md:overflow-visible"
       >
         {PRIMARY_TABS.map((name) => (
           <button
@@ -126,10 +135,10 @@ export function ProjectDetailView({
                 : "text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text-soft)]"
             }`}
           >
-            {name}
+            {PRIMARY_TAB_LABELS[name]}
           </button>
         ))}
-        <div className="relative">
+        <div className="relative ml-auto">
           <button
             type="button"
             aria-haspopup="menu"
@@ -145,14 +154,10 @@ export function ProjectDetailView({
           </button>
           {advancedOpen ? (
             <>
-              <div
-                aria-hidden
-                className="fixed inset-0 z-20"
-                onClick={() => setAdvancedOpen(false)}
-              />
+              <div aria-hidden className="fixed inset-0 z-20" onClick={() => setAdvancedOpen(false)} />
               <div
                 role="menu"
-                className="absolute left-0 top-full z-30 mt-1 w-44 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 shadow-lg"
+                className="absolute right-0 top-full z-30 mt-1 w-48 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 shadow-lg"
               >
                 {ADVANCED_TABS.map((name) => (
                   <button
@@ -175,10 +180,17 @@ export function ProjectDetailView({
         </div>
       </div>
       <div role="tabpanel" id="project-tab-panel" aria-labelledby={`project-tab-${tab}`} className="min-h-0">
-        {tab === "Overview" && <ProjectOverviewTab projectId={projectId} onOpenTask={onOpenTask} />}
+        {tab === "Overview" && (
+          <ProjectOperatingOverview
+            projectId={projectId}
+            workspaceName={workspaceName}
+            onOpenTask={onOpenTask}
+            onSelectTab={(t) => selectTab(resolveTab(t))}
+          />
+        )}
         {tab === "Chat" && <ConversationView projectId={projectId} />}
         {tab === "Work" && <TasksTab projectId={projectId} onOpenTask={onOpenTask} />}
-        {tab === "Team" && <TeammatesTab projectId={projectId} />}
+        {tab === "Agents" && <TeammatesTab projectId={projectId} />}
         {tab === "Providers" && <ProvidersTab projectId={projectId} />}
         {tab === "Issues" && <IssuesTab projectId={projectId} />}
         {tab === "Knowledge" && <KnowledgeTab projectId={projectId} />}
@@ -198,191 +210,8 @@ export function ProjectDetailView({
   );
 }
 
-function ProjectOverviewTab({
-  projectId,
-  onOpenTask,
-}: {
-  projectId: string;
-  onOpenTask: (taskId: string) => void;
-}) {
-  const project = useAsync(() => api.listProjects(), []);
-  const tasks = useAsync(() => api.projectTasks(projectId), [projectId]);
-  const teammates = useAsync(() => api.listTeammates(projectId), [projectId]);
-  const approvals = useAsync(() => api.projectApprovals(projectId).catch(() => ({ approvals: [] })), [projectId]);
-
-  const p = project.data?.projects.find((x) => x.id === projectId);
-  const counts = project.data?.counts?.[projectId];
-  const taskList = tasks.data?.tasks ?? [];
-  const team = teammates.data?.teammates ?? [];
-  const approvalList = approvals.data?.approvals ?? [];
-  const running = taskList.filter((t) => t.status === "running");
-  const queued = taskList.filter((t) => t.status === "pending" || t.status === "ready");
-  const blocked = taskList.filter((t) => t.status === "blocked" || t.status === "awaiting_approval");
-  const done = taskList.filter((t) => t.status === "done").slice(-5).reverse();
-  const failed = taskList.filter((t) => t.status === "failed").slice(-5).reverse();
-
-  if (project.loading || tasks.loading) return <LoadingState lines={4} />;
-  if (project.error || tasks.error) {
-    return <ErrorState error={project.error ?? tasks.error ?? "Failed to load"} onRetry={() => { project.reload(); tasks.reload(); }} />;
-  }
-
-  return (
-    <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className="text-step-1 font-semibold tracking-tight text-[var(--text)]">
-            {p?.repository || "Workspace"}
-          </h2>
-          <p className="mt-1 text-step--1 text-[var(--muted)]">
-            {counts
-              ? `${counts.bots} teammate${counts.bots === 1 ? "" : "s"} · ${counts.tasks} task${
-                  counts.tasks === 1 ? "" : "s"
-                } · ${counts.running} running`
-              : "Loading…"}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button onClick={() => navigate(`/p/${projectId}?tab=Chat`)}>Open chat</Button>
-          <Button onClick={() => navigate(`/p/${projectId}?tab=Work`)}>Tasks</Button>
-          <Button onClick={() => navigate(`/p/${projectId}?tab=Files`)}>Files</Button>
-        </div>
-      </div>
-
-      <section>
-        <h3 className="mb-2 text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--faint)]">
-          AI team
-        </h3>
-        {team.length === 0 ? (
-          <EmptyState title="No teammates yet" hint="Add a bot to this workspace." action={<Button onClick={() => navigate(`/p/${projectId}?tab=Team`)}>Add teammate</Button>} />
-        ) : (
-          <div className="flex flex-wrap gap-2">
-            {team.map((m) => (
-              <button
-                key={m.id}
-                onClick={() => navigate(`/bot/${m.id}`)}
-                className="flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step--1 transition-colors hover:border-[var(--faint)]"
-              >
-                <span className="font-medium text-[var(--text)]">{m.persona || m.id}</span>
-                <span className="text-step--2 text-[var(--faint)]">{m.status}</span>
-              </button>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {approvalList.length > 0 ? (
-        <section>
-          <h3 className="mb-2 text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--warn)]">
-            Needs attention ({approvalList.length})
-          </h3>
-          <div className="flex flex-col gap-2">
-            {approvalList.slice(0, 5).map((a) => (
-              <div key={a.id} className="rounded-lg border border-[var(--warn)] bg-[var(--warn-dim)] px-3 py-2 text-step--1">
-                <div className="font-medium text-[var(--text)]">{a.action || "approval requested"}</div>
-                {a.task_id ? (
-                  <button
-                    onClick={() => onOpenTask(a.task_id!)}
-                    className="mt-1 text-step--2 text-[var(--accent)] hover:underline"
-                  >
-                    Open task →
-                  </button>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        </section>
-      ) : null}
-
-      {running.length > 0 ? (
-        <section>
-          <h3 className="mb-2 text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--faint)]">
-            Running now ({running.length})
-          </h3>
-          <ul className="flex flex-col gap-1.5">
-            {running.map((t) => (
-              <li key={t.id} className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2">
-                <button onClick={() => onOpenTask(t.id)} className="text-step--1 text-[var(--text)] hover:underline">
-                  {t.description || t.id}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-
-      {queued.length > 0 ? (
-        <div className="text-step--1 text-[var(--muted)]">
-          {queued.length} task{queued.length === 1 ? "" : "s"} queued
-        </div>
-      ) : null}
-
-      {blocked.length > 0 ? (
-        <section>
-          <h3 className="mb-2 text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--danger)]">
-            Blocked ({blocked.length})
-          </h3>
-          <ul className="flex flex-col gap-1.5">
-            {blocked.map((t) => (
-              <li key={t.id} className="rounded-lg border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-step--1 text-[var(--danger)]">
-                <button onClick={() => onOpenTask(t.id)} className="text-[var(--danger)] hover:underline">
-                  {t.description || t.id}
-                </button>
-                {t.blocked_reason ? <div className="mt-0.5 text-step--2 opacity-80">{t.blocked_reason}</div> : null}
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-
-      {done.length > 0 ? (
-        <section>
-          <h3 className="mb-2 text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--faint)]">
-            Recently completed
-          </h3>
-          <ul className="flex flex-col gap-1.5">
-            {done.map((t) => (
-              <li key={t.id} className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2">
-                <button onClick={() => onOpenTask(t.id)} className="text-step--1 text-[var(--text)] hover:underline">
-                  {t.description || t.id}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-
-      {failed.length > 0 ? (
-        <section>
-          <h3 className="mb-2 text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--danger)]">
-            Failed
-          </h3>
-          <ul className="flex flex-col gap-1.5">
-            {failed.map((t) => (
-              <li key={t.id} className="rounded-lg border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-step--1 text-[var(--danger)]">
-                <button onClick={() => onOpenTask(t.id)} className="text-[var(--danger)] hover:underline">
-                  {t.description || t.id}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-
-      <section>
-        <h3 className="mb-2 text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--faint)]">
-          Deliverables
-        </h3>
-        <p className="text-step--1 text-[var(--muted)]">
-          Files, patches and PR packages live in Files and task detail.
-        </p>
-        <div className="mt-2 flex flex-wrap gap-2">
-          <Button onClick={() => navigate(`/p/${projectId}?tab=Files`)}>Open files</Button>
-          <Button onClick={() => navigate(`/p/${projectId}?tab=Work`)}>All tasks</Button>
-        </div>
-      </section>
-    </div>
-  );
-}
+/* ProjectOperatingOverview (R3) replaces the previous tabbed-admin overview.
+   Legacy capabilities remain available via existing tabs/sections. */
 
 function ProjectBoardsTab({ projectId }: { projectId: string }) {
   const boards = useAsync(() => api.listBoards(), [projectId]);
