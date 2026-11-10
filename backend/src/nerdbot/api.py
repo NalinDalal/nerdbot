@@ -40,7 +40,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -3146,16 +3146,49 @@ def create_app() -> FastAPI:
     @app.get("/library/{doc_id}")
     def get_library_doc(
         doc_id: str,
-        conn: sqlite3.Connection = Depends(get_conn),
-        principal: str = Depends(principal_from_header),
-        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
-    ) -> dict[str, Any]:
-        doc = _library_doc_or_404(conn, doc_id, principal)
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ) -> Any:
+        # Same-origin SPA deep links share this path with the API. A browser
+        # document navigation/refresh must receive the SPA entry document, while
+        # authenticated API consumers must keep the existing JSON behavior.
+        accept = request.headers.get("accept", "")
+        sec_fetch_mode = request.headers.get("sec-fetch-mode", "")
+        sec_fetch_dest = request.headers.get("sec-fetch-dest", "")
+        is_browser_nav = (
+            "text/html" in accept
+            and "application/json" not in accept
+            and (sec_fetch_mode == "navigate" or sec_fetch_dest == "document" or accept.startswith("text/html"))
+        )
+        if request.method == "GET" and is_browser_nav:
+            dist = Path(__file__).resolve().parents[3] / "dashboard" / "dist"
+            index = dist / "index.html"
+            if index.is_file():
+                return Response(
+                    content=index.read_bytes(),
+                    media_type="text/html",
+                    headers={"Cache-Control": "no-cache"},
+                )
+
+        principal = principal_from_header(authorization)
+        conn = store.connect(_db_path())
         try:
-            library_mod.require_read(conn, doc, acting)
-        except _LIBRARY_ERRORS as exc:
-            raise _library_error(exc) from exc
-        return doc.model_dump(mode="json")
+            acting: Teammate | None = None
+            x_acting = request.headers.get("x-acting-teammate")
+            if x_acting:
+                acting = store.get_teammate(conn, x_acting)
+                if acting is None:
+                    raise HTTPException(status_code=404, detail="acting teammate not found")
+                if acting.status != TeammateStatus.ACTIVE:
+                    raise HTTPException(status_code=403, detail="acting teammate is not active")
+            doc = _library_doc_or_404(conn, doc_id, principal)
+            try:
+                library_mod.require_read(conn, doc, acting)
+            except _LIBRARY_ERRORS as exc:
+                raise _library_error(exc) from exc
+            return doc.model_dump(mode="json")
+        finally:
+            conn.close()
 
     @app.patch("/library/{doc_id}")
     def patch_library_doc(

@@ -93,3 +93,30 @@ def test_unknown_paths_stay_404_for_non_browser_clients(client) -> None:
     assert r.status_code == 404, r.text
     detail = r.json()
     assert "detail" in detail, f"error lost its shape: {detail!r}"
+
+
+def test_library_doc_browser_navigation_serves_spa(client) -> None:
+    """A same-origin browser refresh/deep-link to a library doc must land the SPA.
+
+    The path collides with the authenticated JSON API; browser document
+    navigation is distinguished and served the entry document instead of 401.
+    """
+    if _dist_index_html() is None:
+        pytest.skip("the dashboard is not built")
+    r = client.get("/library/doc_nonexistent", headers={"Accept": "text/html,*/*", "Sec-Fetch-Mode": "navigate"})
+    assert r.status_code == 200, r.text
+    assert "text/html" in r.headers.get("content-type", "")
+    cache = r.headers.get("cache-control", "")
+    assert "no-cache" in cache, f"entry document must be revalidated: {cache!r}"
+
+
+def test_library_doc_api_request_preserves_authenticated_json_behavior(client) -> None:
+    """Existing API consumers must still receive JSON from the library endpoint."""
+    # unauthenticated API-style request remains protected (no browser navigation intent)
+    r = client.get("/library/doc_nonexistent")
+    assert r.status_code == 401, r.text
+
+    # authenticated API request keeps existing not-found behavior
+    r = client.get("/library/doc_nonexistent", headers=AUTH)
+    assert r.status_code == 404, r.text
+    assert "detail" in r.json()
