@@ -1704,6 +1704,7 @@ export function BotsView() {
                     id={mate.id}
                     status={liveStatus}
                     face={mate.face}
+                    animated
                   />
                   <StatusDot
                     status={liveStatus}
@@ -1773,7 +1774,7 @@ export function BotsView() {
                     className="align-top transition-colors hover:bg-[var(--surface-2)]"
                   >
                     <td className={TABLE_TD}>
-                      <BotChip href={`/bot/${mate.id}`} persona={mate.name || mate.persona || "Unnamed teammate"} id={mate.id} status={liveStatus} face={mate.face} />
+                      <BotChip href={`/bot/${mate.id}`} persona={mate.name || mate.persona || "Unnamed teammate"} id={mate.id} status={liveStatus} face={mate.face} animated />
                       <div
                         className="mt-0.5 truncate text-step--2 text-[var(--faint)]"
                         title={`${projectOf(mate.project_id)} · ${tasks.length} tasks`}
