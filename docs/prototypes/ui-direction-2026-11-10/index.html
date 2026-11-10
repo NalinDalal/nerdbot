@@ -1,0 +1,597 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Nerdbot UI Direction Prototype (isolated fixtures)</title>
+  <style>
+    :root {
+      --bg: #f6f7f8;
+      --surface: #ffffff;
+      --surface-2: #f0f2f4;
+      --text: #111418;
+      --muted: #5f6b76;
+      --border: #dde3e8;
+      --accent: #0a84ff;
+      --accent-ink: #ffffff;
+      --success: #1f8b4c;
+      --warn: #9a6700;
+      --danger: #c0352b;
+      --focus: #0a84ff;
+      --shadow: 0 1px 2px rgba(17,20,24,.04);
+      --radius: 12px;
+      --radius-sm: 8px;
+      --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 24px; --space-6: 32px;
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    [data-theme="dark"] {
+      --bg: #0f1113;
+      --surface: #171a1d;
+      --surface-2: #1f2328;
+      --text: #eef2f6;
+      --muted: #a4adb7;
+      --border: #2a3036;
+      --accent: #4da3ff;
+      --accent-ink: #08111a;
+      --success: #4cc38a;
+      --warn: #e0b14a;
+      --danger: #ff7a70;
+      --focus: #7ab8ff;
+      --shadow: none;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: var(--font); line-height: 1.45; }
+    a { color: var(--accent); }
+    button, input, select { font: inherit; color: inherit; }
+    button { cursor: pointer; }
+    .app { max-width: 1200px; margin: 0 auto; padding: var(--space-5); }
+    .banner { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--space-3) var(--space-4); margin-bottom: var(--space-4); color: var(--muted); font-size: 14px; }
+    .banner strong { color: var(--text); }
+    .controls { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; margin-bottom: var(--space-4); }
+    .chip-btn { border: 1px solid var(--border); background: var(--surface); padding: 6px 10px; border-radius: 999px; font-size: 13px; }
+    .chip-btn[aria-pressed="true"] { background: var(--text); color: var(--bg); border-color: var(--text); }
+    .chip-btn:focus-visible, .btn:focus-visible, .link-btn:focus-visible, summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+    .layout { display: grid; grid-template-columns: 220px 1fr; gap: var(--space-5); align-items: start; }
+    .nav { position: sticky; top: 16px; display: flex; flex-direction: column; gap: 2px; }
+    .nav a { text-decoration: none; color: var(--muted); padding: 8px 10px; border-radius: 8px; font-size: 14px; }
+    .nav a.active { color: var(--text); background: var(--surface-2); }
+    .page { min-width: 0; }
+    .page-header { display: flex; flex-wrap: wrap; gap: var(--space-3); justify-content: space-between; align-items: flex-start; margin-bottom: var(--space-5); }
+    .eyebrow { font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin: 0 0 4px; }
+    h1 { font-size: 28px; line-height: 1.15; margin: 0; font-weight: 620; letter-spacing: -0.02em; }
+    h2 { font-size: 16px; margin: 0 0 var(--space-2); font-weight: 600; }
+    h3 { font-size: 15px; margin: 0 0 4px; font-weight: 600; }
+    p { margin: 0 0 var(--space-3); color: var(--muted); }
+    .subtle { color: var(--muted); font-size: 14px; margin: 4px 0 0; }
+    .header-actions { display: flex; gap: var(--space-2); align-items: center; }
+    .btn { border: 1px solid var(--border); background: var(--surface); color: var(--text); padding: 8px 12px; border-radius: 8px; font-size: 14px; }
+    .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 550; }
+    .btn.quiet { background: transparent; }
+    .link-btn { background: none; border: none; padding: 0; color: var(--accent); text-decoration: underline; font-size: 14px; }
+    .grid { display: grid; gap: var(--space-5); }
+    .section { padding: 0; }
+    .section-head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-3); margin-bottom: var(--space-3); }
+    .section-head p { margin: 0; font-size: 14px; }
+    .divider { border-top: 1px solid var(--border); margin: var(--space-5) 0; }
+    .queue { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0; border-top: 1px solid var(--border); }
+    .queue-item { display: grid; grid-template-columns: 1fr auto; gap: var(--space-3); padding: 14px 0; border-bottom: 1px solid var(--border); align-items: start; }
+    .queue-title { font-weight: 550; color: var(--text); margin: 0 0 2px; font-size: 15px; }
+    .meta { font-size: 13px; color: var(--muted); }
+    .status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); white-space: nowrap; }
+    .status.blocked { color: var(--warn); }
+    .status.running { color: var(--accent); }
+    .status.ready { color: var(--success); }
+    .status.unavailable { color: var(--danger); }
+    .split { display: grid; grid-template-columns: 1.2fr .8fr; gap: var(--space-5); }
+    .list { display: flex; flex-direction: column; }
+    .row { display: grid; grid-template-columns: auto 1fr auto; gap: var(--space-3); padding: 14px 0; border-bottom: 1px solid var(--border); align-items: start; }
+    .avatar { width: 36px; height: 36px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); display: grid; place-items: center; font-weight: 600; font-size: 13px; color: var(--text); }
+    .avatar.tri { border-radius: 10px 10px 4px 4px; }
+    .row-main { min-width: 0; }
+    .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+    .tag { font-size: 12px; color: var(--muted); background: var(--surface-2); padding: 2px 8px; border-radius: 999px; }
+    .outcome { font-size: 14px; color: var(--text); margin: 6px 0 0; }
+    .outcome span { color: var(--muted); }
+    .deliverables { display: flex; flex-direction: column; gap: 0; border-top: 1px solid var(--border); }
+    .deliverable { padding: 14px 0; border-bottom: 1px solid var(--border); display: grid; grid-template-columns: 1fr auto; gap: var(--space-3); }
+    .type { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+    .empty { padding: var(--space-4) 0; color: var(--muted); font-size: 14px; border-top: 1px solid var(--border); }
+    .empty strong { color: var(--text); font-weight: 550; display: block; margin-bottom: 4px; }
+    details { border-top: 1px solid var(--border); padding: 10px 0; }
+    details:last-child { border-bottom: 1px solid var(--border); }
+    summary { cursor: pointer; color: var(--text); font-size: 14px; font-weight: 500; list-style: none; }
+    summary::-webkit-details-marker { display: none; }
+    .detail-body { margin-top: 8px; color: var(--muted); font-size: 13px; }
+    .kv { display: grid; grid-template-columns: 140px 1fr; gap: 4px 12px; }
+    .kv div:nth-child(odd) { color: var(--muted); }
+    code { font-family: var(--mono); font-size: 12px; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+    .panel-note { font-size: 13px; color: var(--muted); margin-top: var(--space-3); }
+    .agent-detail { display: grid; gap: var(--space-4); }
+    .identity { display: grid; grid-template-columns: auto 1fr; gap: var(--space-3); align-items: start; }
+    .identity .avatar { width: 48px; height: 48px; font-size: 16px; }
+    .assign { border: 1px solid var(--border); border-radius: var(--radius); padding: var(--space-4); background: var(--surface); }
+    label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+    textarea, input[type="text"] { width: 100%; border: 1px solid var(--border); background: var(--bg); border-radius: 8px; padding: 10px; }
+    textarea { min-height: 88px; resize: vertical; }
+    .form-row { margin-bottom: var(--space-3); }
+    .inline { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; }
+    .notice { font-size: 13px; padding: 10px 12px; border-radius: 8px; background: var(--surface-2); color: var(--muted); margin: var(--space-3) 0 0; }
+    .notice strong { color: var(--text); }
+    .result { border-left: 3px solid var(--success); padding: 12px 14px; background: var(--surface-2); border-radius: 0 8px 8px 0; }
+    .result h3 { margin-bottom: 4px; }
+    .progress { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 0; padding: 0; list-style: none; }
+    .progress li { font-size: 14px; color: var(--muted); }
+    .progress li.done { color: var(--text); }
+    .screen { display: none; }
+    .screen.active { display: block; }
+    .mobile-frame { border: 1px solid var(--border); border-radius: 24px; padding: 12px; max-width: 390px; background: var(--surface); }
+    .mobile-frame .layout { grid-template-columns: 1fr; gap: var(--space-4); }
+    .mobile-frame .nav { position: static; flex-direction: row; overflow-x: auto; padding-bottom: 4px; }
+    .mobile-frame .split { grid-template-columns: 1fr; }
+    .mobile-frame .queue-item, .mobile-frame .deliverable { grid-template-columns: 1fr; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
+    @media (max-width: 900px) {
+      .layout { grid-template-columns: 1fr; }
+      .nav { position: static; flex-direction: row; flex-wrap: wrap; }
+      .split { grid-template-columns: 1fr; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app" id="app" data-theme="light">
+    <div class="banner">
+      <strong>Isolated visual prototype (clearly labeled fixtures).</strong>
+      Separate from production routes and backend contracts. Shows direction only: populated/empty workspace, agent identity/detail with assignment interaction, result/deliverable presentation, and representative mobile and dark states. No production data, no secrets, no fabricated live execution.
+    </div>
+
+    <div class="controls" role="group" aria-label="Prototype controls">
+      <span class="meta">View:</span>
+      <button class="chip-btn" data-view="workspace-populated" aria-pressed="true">Populated workspace</button>
+      <button class="chip-btn" data-view="workspace-empty" aria-pressed="false">Empty workspace</button>
+      <button class="chip-btn" data-view="agent" aria-pressed="false">Agent + assignment</button>
+      <button class="chip-btn" data-view="outcome" aria-pressed="false">Execution outcome</button>
+      <button class="chip-btn" data-view="mobile" aria-pressed="false">Mobile</button>
+      <span class="meta" style="margin-left:8px">Theme:</span>
+      <button class="chip-btn" data-theme-set="light" aria-pressed="true">Light</button>
+      <button class="chip-btn" data-theme-set="dark" aria-pressed="false">Dark</button>
+    </div>
+
+    <!-- Populated workspace -->
+    <section class="screen active" id="workspace-populated" aria-label="Populated workspace">
+      <div class="layout">
+        <nav class="nav" aria-label="Workspace">
+          <a href="#" class="active">Overview</a>
+          <a href="#">Work</a>
+          <a href="#">Agents</a>
+          <a href="#">Deliverables</a>
+          <a href="#">Chat</a>
+          <a href="#">Settings</a>
+        </nav>
+        <main class="page">
+          <header class="page-header">
+            <div>
+              <p class="eyebrow">Workspace</p>
+              <h1>DriftLock Launch</h1>
+              <p class="subtle">Prepare launch materials, outreach, and a reviewable rollout plan. <span class="meta">Fixture objective</span></p>
+            </div>
+            <div class="header-actions">
+              <button class="btn quiet" type="button">Open chat</button>
+              <button class="btn primary" type="button">Assign work</button>
+            </div>
+          </header>
+
+          <section class="section" aria-labelledby="attn-h">
+            <div class="section-head">
+              <h2 id="attn-h">Attention</h2>
+              <p>One queue for decisions, blockers, and work ready to review.</p>
+            </div>
+            <ul class="queue">
+              <li class="queue-item">
+                <div>
+                  <p class="queue-title">Approval needed: publish outreach draft</p>
+                  <div class="meta">Maya · Outreach sequence v2 · Waiting for owner decision</div>
+                </div>
+                <div class="inline"><span class="status blocked">Blocked</span><button class="btn" type="button">Review</button></div>
+              </li>
+              <li class="queue-item">
+                <div>
+                  <p class="queue-title">Research brief ready to open</p>
+                  <div class="meta">Arjun · Completed 12 min ago · Saved to Library</div>
+                </div>
+                <div class="inline"><span class="status ready">Ready</span><button class="btn" type="button">Open result</button></div>
+              </li>
+              <li class="queue-item">
+                <div>
+                  <p class="queue-title">Competitor scan running</p>
+                  <div class="meta">Arjun · Started 4 min ago · Gathering sources and notes</div>
+                </div>
+                <div class="inline"><span class="status running">Running</span><button class="btn quiet" type="button">View</button></div>
+              </li>
+            </ul>
+          </section>
+
+          <div class="divider"></div>
+
+          <div class="split">
+            <section class="section" aria-labelledby="agents-h">
+              <div class="section-head"><h2 id="agents-h">Agents</h2><p>Identity, readiness, and current work.</p></div>
+              <div class="list">
+                <div class="row">
+                  <div class="avatar tri" aria-hidden="true">A</div>
+                  <div class="row-main">
+                    <h3>Arjun <span class="status ready">Ready</span></h3>
+                    <div class="meta">Research lead · Finds sources, compares options, drafts briefs</div>
+                    <div class="tags"><span class="tag">Web research</span><span class="tag">Summaries</span><span class="tag">Library drafts</span></div>
+                    <p class="outcome"><span>Now:</span> Scanning API monitoring competitors. <span>Last outcome:</span> “ICP shortlist” saved 1 hour ago.</p>
+                  </div>
+                  <div><button class="btn" type="button">Assign</button></div>
+                </div>
+                <div class="row">
+                  <div class="avatar" aria-hidden="true">M</div>
+                  <div class="row-main">
+                    <h3>Maya <span class="status blocked">Waiting on approval</span></h3>
+                    <div class="meta">Outreach writer · Turns positioning into clear messages</div>
+                    <div class="tags"><span class="tag">Email drafts</span><span class="tag">Positioning</span></div>
+                    <p class="outcome"><span>Now:</span> Outreach sequence paused for approval. <span>Last outcome:</span> Draft sequence v2 ready to review.</p>
+                  </div>
+                  <div><button class="btn" type="button">Review</button></div>
+                </div>
+                <div class="row">
+                  <div class="avatar" aria-hidden="true">R</div>
+                  <div class="row-main">
+                    <h3>Ravi <span class="status unavailable">Unavailable</span></h3>
+                    <div class="meta">Builder · Prepares implementation tasks and technical notes</div>
+                    <div class="tags"><span class="tag">Planning</span><span class="tag">Code tasks</span></div>
+                    <p class="outcome"><span>Why unavailable:</span> No model configured. <span>Configured:</span> role and permissions saved, not ready to run.</p>
+                  </div>
+                  <div><button class="btn quiet" type="button">Details</button></div>
+                </div>
+              </div>
+              <p class="panel-note">Readiness is explicit: <strong>configured</strong> (saved) is not the same as <strong>ready</strong>, <strong>running</strong>, <strong>blocked</strong>, or <strong>unavailable</strong>.</p>
+            </section>
+
+            <section class="section" aria-labelledby="deliv-h">
+              <div class="section-head"><h2 id="deliv-h">Deliverables</h2><p>Recent outcomes you can open.</p></div>
+              <div class="deliverables">
+                <div class="deliverable">
+                  <div>
+                    <div class="type">Library · Report</div>
+                    <h3>ICP shortlist for DriftLock</h3>
+                    <div class="meta">Arjun · Today 14:20 · Based on 8 sources reviewed</div>
+                  </div>
+                  <div><button class="btn" type="button">Open</button></div>
+                </div>
+                <div class="deliverable">
+                  <div>
+                    <div class="type">Library · Draft</div>
+                    <h3>Outreach sequence v2</h3>
+                    <div class="meta">Maya · Today 13:05 · Waiting for approval before send</div>
+                  </div>
+                  <div><button class="btn" type="button">Open</button></div>
+                </div>
+                <div class="deliverable">
+                  <div>
+                    <div class="type">Gallery · Image</div>
+                    <h3>Launch visual concept</h3>
+                    <div class="meta">Maya · Yesterday · Exported for review</div>
+                  </div>
+                  <div><button class="btn" type="button">Open</button></div>
+                </div>
+              </div>
+
+              <div style="margin-top: var(--space-4)">
+                <details>
+                  <summary>Technical details and diagnostics</summary>
+                  <div class="detail-body">
+                    <div class="kv">
+                      <div>Workspace ID</div><div><code>prj_fixture_launch</code></div>
+                      <div>Recent run IDs</div><div><code>run_fixture_102</code>, <code>run_fixture_101</code></div>
+                      <div>Exports</div><div><button class="link-btn" type="button">Export workspace summary (JSON)</button></div>
+                      <div>Access</div><div>Owner access; member access managed in Settings.</div>
+                    </div>
+                  </div>
+                </details>
+              </div>
+            </section>
+          </div>
+        </main>
+      </div>
+    </section>
+
+    <!-- Empty workspace -->
+    <section class="screen" id="workspace-empty" aria-label="Empty workspace">
+      <div class="layout">
+        <nav class="nav" aria-label="Workspace">
+          <a href="#" class="active">Overview</a>
+          <a href="#">Work</a>
+          <a href="#">Agents</a>
+          <a href="#">Deliverables</a>
+          <a href="#">Chat</a>
+          <a href="#">Settings</a>
+        </nav>
+        <main class="page">
+          <header class="page-header">
+            <div>
+              <p class="eyebrow">Workspace</p>
+              <h1>New Product Research</h1>
+              <p class="subtle">No objective saved yet. Add one sentence so agents know what success looks like.</p>
+            </div>
+            <div class="header-actions">
+              <button class="btn primary" type="button">Set objective</button>
+            </div>
+          </header>
+
+          <section class="section">
+            <div class="section-head"><h2>Start with one clear step</h2><p>No empty dashboard panels, no zero-value counters.</p></div>
+            <div class="empty" style="border-top:none; padding-top:0">
+              <strong>Nothing is in motion yet.</strong>
+              Choose one of these to begin. You can add more agents, work, and deliverables as the workspace grows.
+            </div>
+            <div class="list" style="margin-top: 8px; border-top: 1px solid var(--border)">
+              <div class="row" style="grid-template-columns: 1fr auto;">
+                <div>
+                  <h3>Create an agent for this workspace</h3>
+                  <div class="meta">Give it a role, capabilities, and a model so it can be ready to take work.</div>
+                </div>
+                <div><button class="btn" type="button">Create agent</button></div>
+              </div>
+              <div class="row" style="grid-template-columns: 1fr auto;">
+                <div>
+                  <h3>Describe the first assignment</h3>
+                  <div class="meta">Example: “Research 5 competitors and summarize pricing and positioning.”</div>
+                </div>
+                <div><button class="btn quiet" type="button">Write assignment</button></div>
+              </div>
+              <div class="row" style="grid-template-columns: 1fr auto; border-bottom:none">
+                <div>
+                  <h3>Open chat for planning</h3>
+                  <div class="meta">Use chat to shape the objective; turn decisions into assignments when ready.</div>
+                </div>
+                <div><button class="btn quiet" type="button">Open chat</button></div>
+              </div>
+            </div>
+          </section>
+
+          <div style="margin-top: var(--space-5)">
+            <details>
+              <summary>Advanced setup (IDs, access, diagnostics)</summary>
+              <div class="detail-body">Progressively disclosed. Raw identifiers, access administration, exports, and diagnostics stay available but do not compete with onboarding.</div>
+            </details>
+          </div>
+        </main>
+      </div>
+    </section>
+
+    <!-- Agent detail + assignment interaction -->
+    <section class="screen" id="agent" aria-label="Agent identity, detail and assignment">
+      <div class="layout">
+        <nav class="nav" aria-label="Workspace">
+          <a href="#">Overview</a>
+          <a href="#">Work</a>
+          <a href="#" class="active">Agents</a>
+          <a href="#">Deliverables</a>
+          <a href="#">Chat</a>
+          <a href="#">Settings</a>
+        </nav>
+        <main class="page">
+          <header class="page-header">
+            <div>
+              <p class="eyebrow">Agent</p>
+              <h1>Arjun</h1>
+              <p class="subtle">Research lead in DriftLock Launch · <span class="status ready">Ready</span></p>
+            </div>
+            <div class="header-actions">
+              <button class="btn primary" type="button">Assign work</button>
+            </div>
+          </header>
+
+          <div class="agent-detail">
+            <section class="identity">
+              <div class="avatar tri" aria-hidden="true">A</div>
+              <div>
+                <h2>Identity and role</h2>
+                <p style="margin-bottom:8px; color:var(--text)">Finds sources, compares options, and turns research into briefs the team can act on.</p>
+                <div class="tags">
+                  <span class="tag">Web research</span><span class="tag">Summaries</span><span class="tag">Library drafts</span><span class="tag">Citations when available</span>
+                </div>
+              </div>
+            </section>
+
+            <section>
+              <h2>Current assignment and recent outcomes</h2>
+              <div class="list" style="border-top:1px solid var(--border)">
+                <div class="row" style="grid-template-columns: 1fr auto;">
+                  <div>
+                    <h3>Current: Scan API monitoring competitors <span class="status running">Running</span></h3>
+                    <div class="meta">Started 4 min ago · Progress: gathering sources, comparing pricing and positioning</div>
+                  </div>
+                  <div><button class="btn quiet" type="button">View progress</button></div>
+                </div>
+                <div class="row" style="grid-template-columns: 1fr auto; border-bottom:none">
+                  <div>
+                    <h3>Last outcome: ICP shortlist for DriftLock <span class="status ready">Delivered</span></h3>
+                    <div class="meta">Saved to Library today 14:20 · Openable result with summary and source notes</div>
+                  </div>
+                  <div><button class="btn" type="button">Open result</button></div>
+                </div>
+              </div>
+            </section>
+
+            <section class="assign" aria-labelledby="assign-h">
+              <h2 id="assign-h">Assign work</h2>
+              <p>One primary action per assignment. Readiness and requirements are shown before work starts.</p>
+              <div class="form-row">
+                <label for="goal">What should Arjun do?</label>
+                <textarea id="goal">Research 5 API monitoring tools used by early-stage SaaS teams. Summarize pricing, key strengths, and gaps in a short brief.</textarea>
+              </div>
+              <div class="form-row">
+                <label for="done">What counts as done?</label>
+                <input id="done" type="text" value="A Library brief with a comparison table and 3 recommended options." />
+              </div>
+              <div class="inline">
+                <span class="status ready">Agent ready</span>
+                <span class="meta">Model configured · permissions allow research and Library drafts · no approval required for this draft</span>
+              </div>
+              <div class="inline" style="margin-top: var(--space-3)">
+                <button class="btn primary" type="button" id="simulate-assign">Start assignment</button>
+                <button class="btn quiet" type="button">Save as draft</button>
+              </div>
+              <div class="notice" id="assign-notice"><strong>Not started.</strong> This is a fixture interaction. In production, starting would create assigned work, show execution state, and link the persisted outcome when available. Work cannot start if the agent is unavailable (missing model, runner, permission, or required input).</div>
+            </section>
+
+            <details>
+              <summary>Configuration and diagnostics (progressive disclosure)</summary>
+              <div class="detail-body">
+                <div class="kv">
+                  <div>Model/provider</div><div>Configured (details in Settings)</div>
+                  <div>Permissions</div><div>Research, read workspace context, create Library drafts</div>
+                  <div>Agent ID</div><div><code>tm_fixture_arjun</code></div>
+                  <div>Raw config/export</div><div><button class="link-btn" type="button">View JSON</button></div>
+                </div>
+              </div>
+            </details>
+          </div>
+        </main>
+      </div>
+    </section>
+
+    <!-- Outcome / deliverable presentation -->
+    <section class="screen" id="outcome" aria-label="Execution and outcome">
+      <div class="layout">
+        <nav class="nav" aria-label="Workspace">
+          <a href="#">Overview</a>
+          <a href="#">Work</a>
+          <a href="#">Agents</a>
+          <a href="#" class="active">Deliverables</a>
+          <a href="#">Chat</a>
+          <a href="#">Settings</a>
+        </nav>
+        <main class="page">
+          <header class="page-header">
+            <div>
+              <p class="eyebrow">Outcome</p>
+              <h1>API monitoring competitor brief</h1>
+              <p class="subtle">Produced by Arjun for DriftLock Launch · <span class="status ready">Completed</span></p>
+            </div>
+            <div class="header-actions">
+              <button class="btn" type="button">Open in Library</button>
+              <button class="btn primary" type="button">Use in next step</button>
+            </div>
+          </header>
+
+          <section class="section" style="margin-bottom: var(--space-5)">
+            <h2>Execution summary</h2>
+            <div class="result">
+              <h3>Persisted deliverable ready</h3>
+              <p style="color:var(--text); margin-bottom:8px">A comparison brief was saved to Library with 5 tools reviewed, pricing notes, and 3 recommended options for early-stage SaaS teams.</p>
+              <ul class="progress" aria-label="Execution steps">
+                <li class="done">Assigned to Arjun (ready: model and permissions available)</li>
+                <li class="done">Execution completed and result saved</li>
+                <li class="done">Deliverable persisted: Library document “API monitoring competitor brief”</li>
+                <li class="done">Result opened from workspace deliverables</li>
+              </ul>
+            </div>
+          </section>
+
+          <section class="section">
+            <h2>Deliverable preview</h2>
+            <div style="border-top:1px solid var(--border); padding-top:14px">
+              <div class="type">Library · Brief</div>
+              <h3 style="font-size:18px; margin:4px 0 8px">Recommended options</h3>
+              <p style="color:var(--text); max-width: 70ch">1. <strong>Better Stack</strong> for fast setup and clear alerting. 2. <strong>Checkly</strong> for developer-focused monitoring workflows. 3. <strong>Incident.io</strong> adjacent tooling when incident response matters most. Pricing and integration notes are included in the full brief.</p>
+              <p class="meta">Fixture content for layout/density only. In production this opens the real persisted document/run output.</p>
+            </div>
+          </section>
+
+          <div style="margin-top: var(--space-5)">
+            <details>
+              <summary>Run details (technical)</summary>
+              <div class="detail-body">
+                <div class="kv">
+                  <div>Assignment</div><div><code>task_fixture_competitors</code></div>
+                  <div>Run</div><div><code>run_fixture_103</code></div>
+                  <div>Agent</div><div>Arjun (<code>tm_fixture_arjun</code>)</div>
+                  <div>Outcome</div><div>Completed → Library doc <code>lib_fixture_brief</code></div>
+                </div>
+              </div>
+            </details>
+          </div>
+        </main>
+      </div>
+    </section>
+
+    <!-- Mobile representative state -->
+    <section class="screen" id="mobile" aria-label="Representative mobile state">
+      <div class="mobile-frame">
+        <div class="layout">
+          <nav class="nav" aria-label="Workspace">
+            <a href="#" class="active">Overview</a>
+            <a href="#">Work</a>
+            <a href="#">Agents</a>
+            <a href="#">Results</a>
+          </nav>
+          <main class="page">
+            <header class="page-header" style="margin-bottom: var(--space-4)">
+              <div>
+                <p class="eyebrow">Workspace</p>
+                <h1 style="font-size:24px">DriftLock Launch</h1>
+                <p class="subtle">One queue, one primary action, no stacked duplicate controls.</p>
+              </div>
+              <div class="header-actions" style="width:100%"><button class="btn primary" type="button" style="width:100%">Assign work</button></div>
+            </header>
+            <section class="section">
+              <div class="section-head"><h2>Attention</h2></div>
+              <ul class="queue">
+                <li class="queue-item"><div><p class="queue-title">Approval needed: outreach draft</p><div class="meta">Maya · Waiting for decision</div></div><div><button class="btn" type="button">Review</button></div></li>
+                <li class="queue-item"><div><p class="queue-title">Research brief ready</p><div class="meta">Arjun · Saved to Library</div></div><div><button class="btn" type="button">Open</button></div></li>
+              </ul>
+            </section>
+            <div class="divider"></div>
+            <section class="section">
+              <div class="section-head"><h2>Agents</h2></div>
+              <div class="list">
+                <div class="row" style="grid-template-columns:auto 1fr"><div class="avatar tri" aria-hidden="true">A</div><div><h3>Arjun <span class="status ready">Ready</span></h3><div class="meta">Research lead · Running competitor scan</div></div></div>
+                <div class="row" style="grid-template-columns:auto 1fr"><div class="avatar" aria-hidden="true">R</div><div><h3>Ravi <span class="status unavailable">Unavailable</span></h3><div class="meta">No model configured. Saved but not ready to run.</div></div></div>
+              </div>
+            </section>
+            <details style="margin-top: var(--space-3)"><summary>Technical details</summary><div class="detail-body">IDs, exports, access, and diagnostics are available here, not in the primary flow.</div></details>
+          </main>
+        </div>
+      </div>
+      <p class="panel-note" style="max-width:390px">Representative mobile state: intentionally prioritized layout and actions (not desktop cards stacked). Dark theme can be toggled above for the same states.</p>
+    </section>
+  </div>
+
+  <script>
+    (function () {
+      const app = document.getElementById('app');
+      const viewButtons = Array.from(document.querySelectorAll('[data-view]'));
+      const themeButtons = Array.from(document.querySelectorAll('[data-theme-set]'));
+      const screens = Array.from(document.querySelectorAll('.screen'));
+
+      function setView(id) {
+        screens.forEach(s => s.classList.toggle('active', s.id === id));
+        viewButtons.forEach(b => b.setAttribute('aria-pressed', String(b.dataset.view === id)));
+      }
+      function setTheme(theme) {
+        app.setAttribute('data-theme', theme);
+        themeButtons.forEach(b => b.setAttribute('aria-pressed', String(b.dataset.themeSet === theme)));
+      }
+      viewButtons.forEach(b => b.addEventListener('click', () => setView(b.dataset.view)));
+      themeButtons.forEach(b => b.addEventListener('click', () => setTheme(b.dataset.themeSet)));
+
+      const assignBtn = document.getElementById('simulate-assign');
+      const notice = document.getElementById('assign-notice');
+      if (assignBtn && notice) {
+        assignBtn.addEventListener('click', () => {
+          notice.innerHTML = '<strong>Fixture state change:</strong> Assignment accepted for a ready agent. In the real flow this becomes assigned work → execution (running) → approval if required → persisted deliverable with an openable result. If model, runner, permission, or required input is missing, the UI should explain why work cannot start and show unavailable/blocked (not ready).';
+        });
+      }
+    })();
+  </script>
+</body>
+</html>
