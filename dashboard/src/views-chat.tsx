@@ -271,9 +271,16 @@ export function ConversationView({
             </>
           )}
         </div>
-        <Button variant="primary" onClick={() => setShowNew(true)} disabled={!home.data}>
-          New chat
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {!isHome && activeId ? (
+            <Button variant="ghost" onClick={() => { setActiveId(null); onSetActiveThread?.(null); }}>
+              Conversations
+            </Button>
+          ) : null}
+          <Button variant="primary" onClick={() => setShowNew(true)} disabled={!home.data}>
+            New chat
+          </Button>
+        </div>
       </header>
 
       {/* Workspace-wide attention banner. Kept to the same column as the
@@ -310,62 +317,8 @@ export function ConversationView({
         </div>
       </div>
 
-      {/* Body: thread rail + active pane. Home has one conversation list
-          (below), so the rail would be a second list of the same thing. */}
+      {/* Body: active conversation pane (no competing workspace sidebar). */}
       <div className="flex min-h-0 flex-1">
-        {!isHome ? (
-        <aside className="hidden w-[var(--width-conversation-sidebar)] shrink-0 flex-col border-r border-[var(--border-dim)] xl:flex">
-          <div className="px-3 pt-3">
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search conversations"
-              aria-label="Search conversations"
-              className="h-8 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-step--1 outline-none transition-colors placeholder:text-[var(--faint)] focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
-            />
-            <label className="mt-2 flex items-center gap-2 text-step--2 text-[var(--muted)]">
-              <input type="checkbox" checked={showArchivedThreads} onChange={(e) => setShowArchivedThreads(e.target.checked)} />
-              Show archived
-            </label>
-          </div>
-          <div className="px-3 pb-1 pt-4 flex items-center justify-between gap-2">
-            <div className="min-w-0">
-              <SectionLabel>Conversations</SectionLabel>
-              <p className="mt-0.5 truncate text-step--2 text-[var(--faint)]" title={workspaceName || "This workspace"}>
-                {workspaceName || "This workspace"}
-              </p>
-            </div>
-            <span className="text-step--2 text-[var(--faint)]">{(threads.data?.threads ?? []).length}</span>
-          </div>
-          <div className="flex-1 overflow-y-auto px-2 pb-4 pt-1">
-            {threads.loading ? (
-              <LoadingState lines={3} />
-            ) : threads.error ? (
-              <ErrorState error={threads.error} onRetry={threads.reload} />
-            ) : null}
-            {(threads.data?.threads ?? []).map((thread: ChatThread) => (
-              <ThreadListItem
-                key={thread.id}
-                thread={thread}
-                active={activeId === thread.id}
-                projectId={resolvedProjectId}
-                onOpen={() => { setActiveId(thread.id); onSetActiveThread?.(thread.id); }}
-                onChanged={() => { threads.reload(); recentThreads.reload(); }}
-                onMoved={(targetProjectId) => {
-                  if (targetProjectId !== resolvedProjectId) setActiveId((id) => (id === thread.id ? null : id));
-                  threads.reload(); recentThreads.reload();
-                }}
-              />
-            ))}
-            {threads.data && (threads.data.threads ?? []).length === 0 && !threads.loading ? (
-              <p className="px-2.5 py-2 text-step--1 text-[var(--faint)]">
-                {showArchivedThreads ? "No conversations found." : "No conversations yet"}
-              </p>
-            ) : null}
-          </div>
-        </aside>
-        ) : null}
-
         <section className="flex min-w-0 flex-1 flex-col">
           {activeId ? (
             <ThreadPane
@@ -411,43 +364,68 @@ export function ConversationView({
               refreshThreads={() => recentThreads.reload()}
             />
           ) : (
-            <div className="flex flex-1 flex-col items-center overflow-y-auto">
-              <EmptyState
-                title="Select a conversation"
-                hint={`Choose a conversation in ${workspaceName || "this workspace"}, or start a new one. This view is scoped to the workspace.`}
-                action={
-                  <Button variant="primary" onClick={() => setShowNew(true)}>
-                    New chat
-                  </Button>
-                }
-              />
-              {/* The conversation rail is hidden below xl in scoped chat, so show
-                  an in-pane list on smaller screens for reachability. */}
-              {(threads.data?.threads ?? []).length > 0 ? (
-                <div className="mb-6 w-full max-w-[420px] overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)] xl:hidden">
-                  {(threads.data?.threads ?? []).map((t, index) => (
-                    <button
-                      key={t.id}
-                      type="button"
-                      onClick={() => {
-                        setActiveId(t.id);
-                        onSetActiveThread?.(t.id);
-                      }}
-                      aria-label={`Resume: ${t.title || "Untitled"}`}
-                      className={`flex w-full items-baseline justify-between gap-3 px-4 py-2.5 text-left transition-colors hover:bg-[var(--surface-2)] ${
-                        index > 0 ? "border-t border-[var(--border-dim)]" : ""
-                      }`}
-                    >
-                      <span className="truncate text-step--1 text-[var(--text)]">
-                        {t.title || "Untitled"}
-                      </span>
-                      <span className="mono shrink-0 text-step--2 text-[var(--faint)]">
-                        {relativeTime(t.created_at)}
-                      </span>
-                    </button>
-                  ))}
+            <div className="flex flex-1 flex-col overflow-y-auto px-4 py-6 md:px-6">
+              <div className="mx-auto w-full max-w-[860px]">
+                <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+                  <div>
+                    <h2 className="text-step-1 font-semibold tracking-tight text-[var(--text)]">Conversations</h2>
+                    <p className="mt-1 text-step--1 text-[var(--muted)]">
+                      Scoped to {workspaceName || "this workspace"}. Search, resume, or start a new conversation.
+                    </p>
+                  </div>
+                  <Button variant="primary" onClick={() => setShowNew(true)}>New chat</Button>
                 </div>
-              ) : null}
+                <div className="mb-4 flex flex-wrap items-center gap-3">
+                  <input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search conversations"
+                    aria-label="Search conversations"
+                    className="h-9 w-full max-w-sm rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-step--1 outline-none transition-colors placeholder:text-[var(--faint)] focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
+                  />
+                  <label className="flex items-center gap-2 text-step--2 text-[var(--muted)]">
+                    <input type="checkbox" checked={showArchivedThreads} onChange={(e) => setShowArchivedThreads(e.target.checked)} />
+                    Show archived
+                  </label>
+                </div>
+                {threads.loading ? <LoadingState lines={4} /> : threads.error ? <ErrorState error={threads.error} onRetry={threads.reload} /> : null}
+                {!threads.loading && !threads.error && (threads.data?.threads ?? []).length === 0 ? (
+                  <EmptyState
+                    title={showArchivedThreads ? "No conversations found" : "No conversations yet"}
+                    hint={showArchivedThreads ? "Try a different search or clear filters." : `Start a conversation in ${workspaceName || "this workspace"}.`}
+                    action={<Button variant="primary" onClick={() => setShowNew(true)}>New chat</Button>}
+                  />
+                ) : (
+                  <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
+                    {(threads.data?.threads ?? []).map((thread: ChatThread, index) => (
+                      <div key={thread.id} className={`flex items-center gap-2 px-2 py-1.5 ${index > 0 ? "border-t border-[var(--border-dim)]" : ""}`}>
+                        <button
+                          type="button"
+                          onClick={() => { setActiveId(thread.id); onSetActiveThread?.(thread.id); }}
+                          className="min-w-0 flex-1 rounded-md px-2 py-2 text-left transition-colors hover:bg-[var(--surface-2)]"
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            {thread.pinned ? <span className="text-[10px] text-[var(--accent)]" title="Pinned">●</span> : null}
+                            <span className="truncate text-step--1 font-medium text-[var(--text)]">{thread.title || "Untitled"}</span>
+                            {thread.archived ? <span className="rounded bg-[var(--surface-2)] px-1.5 py-0.5 text-step--2 text-[var(--faint)]">archived</span> : null}
+                          </div>
+                          <div className="mt-0.5 text-step--2 text-[var(--faint)]">{relativeTime((thread.updated_at || thread.created_at) ?? "")}</div>
+                        </button>
+                        <div className="shrink-0 pr-1">
+                          <ThreadRowActions
+                            thread={thread}
+                            onChanged={() => { threads.reload(); recentThreads.reload(); }}
+                            onMoved={(targetProjectId) => {
+                              if (targetProjectId !== resolvedProjectId) setActiveId((id) => (id === thread.id ? null : id));
+                              threads.reload(); recentThreads.reload();
+                            }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </section>
@@ -2476,135 +2454,6 @@ function ContextPanel({
     </div>
   );
 }
-
-function ThreadListItem({
-  thread,
-  active,
-  projectId: _projectId,
-  onOpen,
-  onChanged,
-  onMoved,
-}: {
-  thread: ChatThread;
-  active: boolean;
-  projectId: string;
-  onOpen: () => void;
-  onChanged: () => void;
-  onMoved?: (targetProjectId: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [moving, setMoving] = useState(false);
-  const [projects, setProjects] = useState<Array<{ id: string; repository: string }>>([]);
-  const token = getSession()?.token || "";
-
-  const run = async (fn: () => Promise<void>, ok?: string) => {
-    setBusy(true);
-    try {
-      await fn();
-      if (ok) toast.success(ok);
-      onChanged();
-    } catch (err) {
-      notifyError(err);
-    } finally {
-      setBusy(false);
-      setOpen(false);
-    }
-  };
-
-  const rename = () =>
-    void run(async () => {
-      const title = window.prompt("Rename conversation", thread.title || "");
-      if (title == null) return;
-      await api.renameThread(thread.id, title.trim() || "Untitled");
-    }, "Conversation renamed");
-
-  const togglePin = () => void run(() => api.pinThread(thread.id, !thread.pinned).then(() => undefined), thread.pinned ? "Unpinned" : "Pinned");
-  const archive = () => void run(async () => { if (thread.archived) await api.unarchiveThread(thread.id); else await api.archiveThread(thread.id); }, thread.archived ? "Restored from archive" : "Archived");
-  const remove = () => void run(async () => {
-    if (!window.confirm("Delete this conversation? It will be removed from your lists (safe delete).")) return;
-    await api.deleteThread(thread.id);
-  }, "Conversation deleted");
-
-  const startMove = async () => {
-    setMoving(true);
-    try {
-      const res = await api.listProjects();
-      setProjects(res.projects.map((p) => ({ id: p.id, repository: p.repository })));
-    } catch (err) {
-      notifyError(err);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const doMove = (target: string) => void run(async () => {
-    if (!target || target === thread.project_id) return;
-    const res = await api.moveThread(thread.id, target);
-    if (res.provider_cleared) toast.message("Moved; model binding cleared (models are workspace-scoped).");
-    onMoved?.(target);
-    setMoving(false);
-  }, "Conversation moved");
-
-  return (
-    <div className={`group mb-0.5 rounded-md ${active ? "bg-[var(--surface-3)]" : "hover:bg-[var(--surface-2)]"}`}>
-      <div className="flex items-start gap-1 px-1 py-1">
-        <button
-          onClick={onOpen}
-          title={thread.title || "Untitled"}
-          className="min-w-0 flex-1 rounded-md px-1.5 py-1 text-left"
-        >
-          <div className="flex items-center gap-1.5">
-            {thread.pinned ? <span className="text-[10px] text-[var(--accent)]" title="Pinned">●</span> : null}
-            <span className="truncate text-step--1 font-medium text-[var(--text)]">
-              {thread.title || "Untitled"}
-            </span>
-            {thread.archived ? <span className="rounded bg-[var(--surface-2)] px-1 text-[10px] text-[var(--faint)]">archived</span> : null}
-          </div>
-          <span className="mono block text-step--2 text-[var(--faint)]">
-            {relativeTime((thread.updated_at || thread.created_at) ?? "")}
-          </span>
-        </button>
-        <div className="relative shrink-0">
-          <button
-            type="button"
-            aria-label="Conversation actions"
-            disabled={busy}
-            onClick={() => setOpen((v) => !v)}
-            className="rounded px-1.5 py-1 text-[var(--faint)] opacity-0 transition-opacity hover:bg-[var(--surface)] hover:text-[var(--text)] group-hover:opacity-100 focus:opacity-100"
-          >
-            ⋯
-          </button>
-          {open ? (
-            <>
-              <div className="fixed inset-0 z-20" onClick={() => { setOpen(false); setMoving(false); }} />
-              <div className="absolute right-0 top-full z-30 mt-1 w-48 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 shadow-lg text-step--1">
-                <button className="w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={rename}>Rename</button>
-                <button className="w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={togglePin}>{thread.pinned ? "Unpin" : "Pin"}</button>
-                <button className="w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={archive}>{thread.archived ? "Unarchive" : "Archive"}</button>
-                <a className="block w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" href={api.exportThreadUrl(thread.id, token)} target="_blank" rel="noreferrer">Export (JSON)</a>
-                <button className="w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={() => void startMove()}>Move to workspace…</button>
-                <button className="w-full rounded px-2 py-1.5 text-left text-[var(--danger)] hover:bg-[var(--danger-dim)]" onClick={remove}>Delete</button>
-                {moving ? (
-                  <div className="mt-1 border-t border-[var(--border-dim)] pt-1">
-                    <div className="px-2 py-1 text-step--2 text-[var(--muted)]">Move to</div>
-                    {projects.filter((p) => p.id !== thread.project_id).map((p) => (
-                      <button key={p.id} className="w-full truncate rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={() => doMove(p.id)}>
-                        {p.repository || p.id}
-                      </button>
-                    ))}
-                    {projects.filter((p) => p.id !== thread.project_id).length === 0 ? <div className="px-2 py-1 text-[var(--faint)]">No other workspaces</div> : null}
-                  </div>
-                ) : null}
-              </div>
-            </>
-          ) : null}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 
 function ThreadRowActions({ thread, onChanged, onMoved }: { thread: ChatThread; onChanged: () => void; onMoved?: (targetProjectId: string) => void }) {
   const [open, setOpen] = useState(false);

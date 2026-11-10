@@ -11,6 +11,7 @@ import {
 } from "./api";
 import type { ChatThread, Project } from "./types";
 import { ConversationView } from "./views-chat";
+import { HomeOverviewView } from "./views-home-overview";
 import { ApprovalsView } from "./views-approvals";
 import { LibraryView, LibraryDocView } from "./views-library";
 import { GalleryView } from "./views-gallery";
@@ -252,26 +253,27 @@ function Sidebar({
     href: string;
     badge?: number;
   }> = [
-    { label: "Chat", icon: "home", routes: ["home", "chat"], href: "/" },
+    { label: "Home", icon: "home", routes: ["home"], href: "/" },
     {
       label: "Workspaces",
       icon: "projects",
-      routes: ["projects", "project", "workbench"],
+      routes: ["projects", "project"],
       href: "/projects",
     },
     {
-      label: "Team",
+      label: "Agents",
       icon: "teammates",
       routes: ["bots", "bot", "teams", "team"],
       href: "/bots",
     },
     {
-      label: "Activity",
+      label: "Work",
       icon: "work",
-      routes: ["activity", "work", "task", "approvals"],
+      routes: ["activity", "work", "task", "approvals", "boards", "board"],
       href: "/activity",
       badge: nav.pendingApprovals,
     },
+    { label: "Chat", icon: "home", routes: ["chat"], href: "/chat" },
     {
       label: "Library",
       icon: "library",
@@ -307,7 +309,7 @@ function Sidebar({
         </div>
 
         <button
-          onClick={() => onNavigate("/")}
+          onClick={() => onNavigate("/chat")}
           className="mb-4 flex w-full items-center justify-center gap-2 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step--1 font-medium text-[var(--text-soft)] transition-colors hover:border-[var(--faint)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-inset"
         >
           <span aria-hidden className="text-[var(--accent)]">+</span>
@@ -495,26 +497,19 @@ export default function App() {
     return <ConnectScreen onConnected={() => setConnected(true)} />;
   }
 
-  /* Route → view. ConversationView is the home surface (Command Center
-  * landing); every other route renders a full-page view that owns its
-  * own scroll container. */
+  /* Route → view. Home is the operating overview; Chat is the
+   * conversational surface. All other routes render full-page views. */
   let content: ReactNode;
   switch (route.name) {
     case "home":
+      content = <HomeOverviewView />;
+      break;
     case "chat":
       content = (
         <ConversationView
-          key={
-            route.name === "chat"
-              ? `${route.projectId ?? ""}:${route.threadId ?? ""}`
-              : "home"
-          }
-          projectId={
-            route.name === "chat" ? route.projectId : undefined
-          }
-          initialThreadId={
-            route.name === "chat" ? route.threadId ?? activeThreadId : activeThreadId
-          }
+          key={`${route.projectId ?? "global"}:${route.threadId ?? "none"}`}
+          projectId={route.projectId}
+          initialThreadId={route.threadId ?? (route.projectId ? activeThreadId : undefined)}
           onSetActiveThread={setActiveThread}
         />
       );
@@ -644,17 +639,17 @@ export default function App() {
         <Toaster position="bottom-right" richColors closeButton />
       </main>
 
-      {/* Mobile bottom navigation for primary destinations (Library via drawer/more contexts). */}
+      {/* Mobile bottom navigation for primary destinations. */}
       <nav
         aria-label="Primary"
         className="fixed inset-x-0 bottom-0 z-40 flex items-stretch border-t border-[var(--border-dim)] bg-[var(--bg)]/95 backdrop-blur md:hidden"
       >
         {[
-          { label: "Chat", icon: "home", href: "/", routes: ["home", "chat"] },
-          { label: "Workspaces", icon: "projects", href: "/projects", routes: ["projects", "project", "workbench"] },
-          { label: "Team", icon: "teammates", href: "/bots", routes: ["bots", "bot", "teams", "team"] },
-          { label: "Activity", icon: "work", href: "/activity", routes: ["activity", "work", "task", "approvals"] },
-          { label: "Settings", icon: "settings", href: "/settings", routes: ["settings", "capabilities"] },
+          { label: "Home", icon: "home", href: "/", routes: ["home"] },
+          { label: "Workspaces", icon: "projects", href: "/projects", routes: ["projects", "project"] },
+          { label: "Agents", icon: "teammates", href: "/bots", routes: ["bots", "bot", "teams", "team"] },
+          { label: "Work", icon: "work", href: "/activity", routes: ["activity", "work", "task", "approvals", "boards", "board"] },
+          { label: "Chat", icon: "home", href: "/chat", routes: ["chat"] },
         ].map((item) => {
           const active = item.routes.includes(route.name);
           return (
