@@ -250,14 +250,26 @@ export function ConversationView({
           painted underneath it. */}
       <header className="flex flex-wrap items-end justify-between gap-3 border-b border-[var(--border-dim)] py-3 pl-14 pr-4 md:px-6">
         <div className="min-w-0">
-          <h1 className="text-step-1 font-semibold tracking-tight">
-            {isHome ? "Chat" : workspaceName || "Conversation"}
-          </h1>
-          <p className="mt-0.5 text-step-0 text-[var(--muted)]">
-            {isHome
-              ? "Ask, delegate, or pick up where you left off."
-              : "This project's conversation."}
-          </p>
+          {isHome ? (
+            <>
+              <h1 className="text-step-1 font-semibold tracking-tight">Chat</h1>
+              <p className="mt-0.5 text-step-0 text-[var(--muted)]">
+                Global chat across your workspaces. Ask, delegate, or pick up where you left off.
+              </p>
+            </>
+          ) : (
+            <>
+              <div className="mb-1 text-step--2 uppercase tracking-[0.16em] text-[var(--faint)]">
+                Workspace chat
+              </div>
+              <h1 className="text-step-1 font-semibold tracking-tight">
+                {workspaceName || "Workspace"}
+              </h1>
+              <p className="mt-0.5 text-step-0 text-[var(--muted)]">
+                Conversations scoped to this workspace. Model choices and some actions stay within workspace boundaries.
+              </p>
+            </>
+          )}
         </div>
         <Button variant="primary" onClick={() => setShowNew(true)} disabled={!home.data}>
           New chat
@@ -316,8 +328,13 @@ export function ConversationView({
               Show archived
             </label>
           </div>
-          <div className="px-3 pb-1 pt-4 flex items-center justify-between">
-            <SectionLabel>Conversations</SectionLabel>
+          <div className="px-3 pb-1 pt-4 flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <SectionLabel>Conversations</SectionLabel>
+              <p className="mt-0.5 truncate text-step--2 text-[var(--faint)]" title={workspaceName || "This workspace"}>
+                {workspaceName || "This workspace"}
+              </p>
+            </div>
             <span className="text-step--2 text-[var(--faint)]">{(threads.data?.threads ?? []).length}</span>
           </div>
           <div className="flex-1 overflow-y-auto px-2 pb-4 pt-1">
@@ -354,6 +371,7 @@ export function ConversationView({
             <ThreadPane
               threadId={activeId}
               projectId={resolvedProjectId}
+              workspaceName={isHome ? "Home" : (workspaceName || "Workspace")}
               providers={providers.data?.providers ?? []}
               onPlanApproved={(id) => setObjectiveId(id)}
               onReload={() => threads.reload()}
@@ -396,18 +414,17 @@ export function ConversationView({
             <div className="flex flex-1 flex-col items-center overflow-y-auto">
               <EmptyState
                 title="Select a conversation"
-                hint="Pick a recent chat or start a new one."
+                hint={`Choose a conversation in ${workspaceName || "this workspace"}, or start a new one. This view is scoped to the workspace.`}
                 action={
                   <Button variant="primary" onClick={() => setShowNew(true)}>
                     New chat
                   </Button>
                 }
               />
-              {/* The conversation rail is hidden below md, so without this the
-                  list of existing conversations is unreachable on a narrow
-                  screen. It is the same list, shown here instead. */}
+              {/* The conversation rail is hidden below xl in scoped chat, so show
+                  an in-pane list on smaller screens for reachability. */}
               {(threads.data?.threads ?? []).length > 0 ? (
-                <div className="mb-6 w-full max-w-[420px] overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)] md:hidden">
+                <div className="mb-6 w-full max-w-[420px] overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)] xl:hidden">
                   {(threads.data?.threads ?? []).map((t, index) => (
                     <button
                       key={t.id}
@@ -704,12 +721,14 @@ const PROVIDER_SELECT_CLASS =
 function ThreadPane({
   threadId,
   projectId,
+  workspaceName,
   providers,
   onReload,
   onPlanApproved,
 }: {
   threadId: string;
   projectId: string;
+  workspaceName?: string;
   providers: { id: string; name: string; kind: string }[];
   onReload: () => void;
   onPlanApproved?: (id: string) => void;
@@ -1049,9 +1068,11 @@ function ThreadPane({
             {thread?.archived ? <span className="rounded bg-[var(--surface-2)] px-1.5 py-0.5 text-step--2 text-[var(--faint)]">archived</span> : null}
           </div>
           <div className="mono text-step--2 text-[var(--faint)]">
-            <span className="rounded bg-[var(--surface-2)] px-1 py-0.5">{thread?.project_id === projectId ? "this workspace" : "workspace"}</span>
+            <span className="rounded bg-[var(--surface-2)] px-1 py-0.5" title={thread?.project_id || ""}>
+              Scope: {workspaceName || (thread?.project_id === projectId ? "This workspace" : "Workspace")}
+            </span>
             {` · ${relativeTime((thread?.updated_at || thread?.created_at) ?? "")}`}
-            {` · ${providers.find((provider) => provider.id === thread?.provider_id)?.name ?? "Default model"}`}
+            {` · Model: ${providers.find((provider) => provider.id === thread?.provider_id)?.name ?? "Default"}`}
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
@@ -1083,10 +1104,10 @@ function ThreadPane({
                   <button className="w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={() => void runThreadAction(async () => { if (thread.archived) await api.unarchiveThread(thread.id); else await api.archiveThread(thread.id); }, thread.archived ? "Unarchived" : "Archived")}>{thread.archived ? "Unarchive" : "Archive"}</button>
                   <a className="block w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" href={api.exportThreadUrl(thread.id, threadToken)} target="_blank" rel="noreferrer">Export (JSON)</a>
                   <button className="w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={async () => { setShowMove(true); try { const r = await api.listProjects(); setMoveProjects(r.projects.map((p: any) => ({ id: p.id, repository: p.repository }))); } catch (e) { notifyError(e); } }}>Move to workspace…</button>
-                  <button className="w-full rounded px-2 py-1.5 text-left text-[var(--danger)] hover:bg-[var(--danger-dim)]" onClick={() => void runThreadAction(async () => { if (!window.confirm("Delete this conversation? (safe delete)")) return; await api.deleteThread(thread.id); navigate("/"); }, "Deleted")}>Delete</button>
+                  <button className="w-full rounded px-2 py-1.5 text-left text-[var(--danger)] hover:bg-[var(--danger-dim)]" onClick={() => void runThreadAction(async () => { if (!window.confirm("Remove this conversation from your lists? This is a safe delete (it can be restored via API).")) return; await api.deleteThread(thread.id); navigate("/"); }, "Removed")}>Delete</button>
                   {showMove ? (
                     <div className="mt-1 border-t border-[var(--border-dim)] pt-1">
-                      <div className="px-2 py-1 text-step--2 text-[var(--muted)]">Move to (clears model binding)</div>
+                      <div className="px-2 py-1 text-step--2 text-[var(--muted)]">Move to workspace (clears workspace-scoped model binding)</div>
                       {moveProjects.filter((p) => p.id !== thread.project_id).map((p) => (
                         <button key={p.id} className="w-full truncate rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={() => void runThreadAction(async () => { await api.moveThread(thread.id, p.id); navigate(`/chat/${p.id}?thread=${thread.id}`); }, "Moved")}>{p.repository || p.id}</button>
                       ))}
