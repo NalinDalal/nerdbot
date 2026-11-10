@@ -79,3 +79,24 @@ describe("libraryKindLabel", () => {
     expect(libraryKindLabel("mystery")).toBe("Note");
   });
 });
+
+import { parseCsv, toCsv } from "./views-library";
+
+describe("csv helpers", () => {
+  it("parses quoted commas and newlines and keeps rectangular rows", () => {
+    const rows = parseCsv('a,"b,c","d\n e"\n1,2,3\n');
+    expect(rows[0]).toEqual(["a", "b,c", "d\n e"]);
+    expect(rows[1]).toEqual(["1", "2", "3"]);
+    expect(rows.every((r) => r.length === 3)).toBe(true);
+  });
+
+  it("serializes quotes/newlines safely", () => {
+    const csv = toCsv([["a", "b,c", 'd"e', "line\n2"]]);
+    expect(csv).toBe('a,"b,c","d""e","line\n2"');
+  });
+
+  it("handles empty input and trailing newline", () => {
+    expect(parseCsv("")).toEqual([[""]]);
+    expect(parseCsv("a,b\n")).toEqual([["a", "b"]]);
+  });
+});

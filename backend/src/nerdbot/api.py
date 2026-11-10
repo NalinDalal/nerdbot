@@ -3411,6 +3411,11 @@ def create_app() -> FastAPI:
             asset = store.create_gallery_asset(
                 conn, project_id, name=name, mime_type=mtype, size=size, storage_path=str(path),
                 source=source or name, thread_id=thread_id or "", task_id=task_id or "", doc_id=doc_id or "",
+                metadata={
+                    "storage_policy": "project_gallery_v1",
+                    "max_bytes": cap,
+                    "preview": "image_or_small_text_inline",
+                },
             )
         except Exception:
             try: path.unlink(missing_ok=True)

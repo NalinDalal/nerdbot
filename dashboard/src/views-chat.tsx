@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { toast } from "sonner";
-import { api, ApiError } from "./api";
+import { api, ApiError, getSession } from "./api";
 import { notifyError, navigate } from "./app";
 import { TeamView } from "./team-view";
 import type { ChatMessage, ChatThread, Plan, Provider, ResearchJob, ResearchJobEvent, Teammate } from "./types";
@@ -17,6 +17,8 @@ import {
   BotFace,
   Button,
   Field,
+  FORM_INPUT,
+  FORM_SELECT,
   StatusBadge,
   StatusDot,
   SectionLabel,
@@ -718,7 +720,7 @@ function ThreadPane({
   const [execView, setExecView] = useState<{ kind: "task"; taskId: string; projectId: string } | null>(null);
   const [planPreview, setPlanPreview] = useState<{ objective: string; plan: Plan } | null>(null);
   const [planBusy, setPlanBusy] = useState(false);
-  const [contextPanel, setContextPanel] = useState<"files" | "bots" | null>(null);
+  const [contextPanel, setContextPanel] = useState<"files" | "bots" | "refs" | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<Array<{ name: string; content: string }>>([]);
   const [mates, setMates] = useState<Teammate[]>([]);
   const [researchJobIds, setResearchJobIds] = useState<string[]>([]);
@@ -1216,6 +1218,8 @@ function ThreadPane({
               <ResearchJobCard
                 key={id}
                 jobId={id}
+                projectId={projectId}
+                threadId={threadId}
                 onClose={() => setResearchJobIds((prev) => prev.filter((x) => x !== id))}
               />
             ))}
@@ -1274,6 +1278,15 @@ function ThreadPane({
                 className="rounded-md px-2 py-1.5 text-step--1 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
               >
                 +
+              </button>
+              <button
+                type="button"
+                onClick={() => setContextPanel("refs")}
+                title="Insert Library/Gallery reference"
+                aria-label="Insert Library or Gallery reference"
+                className="rounded-md px-2 py-1.5 text-step--1 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
+              >
+                Ref
               </button>
               <input
                 type="file"
@@ -1374,6 +1387,11 @@ function ThreadPane({
           onAttachFile={(file) => {
             setAttachedFiles((prev) => [...prev, file]);
             setContextPanel(null);
+          }}
+          onInsertReference={(text) => {
+            setDraft((prev) => (prev ? `${prev}\n${text}` : text));
+            setContextPanel(null);
+            requestAnimationFrame(() => composerRef.current?.focus());
           }}
         />
       )}
@@ -1488,14 +1506,19 @@ function ResearchJobCard({
   jobId,
   initialJob,
   onClose,
+  projectId,
+  threadId,
 }: {
   jobId: string;
   initialJob?: ResearchJob;
   onClose?: () => void;
+  projectId?: string;
+  threadId?: string;
 }) {
   const [job, setJob] = useState<ResearchJob | null>(initialJob ?? null);
   const [events, setEvents] = useState<ResearchJobEvent[]>([]);
   const [busy, setBusy] = useState(false);
+  const [saveOpen, setSaveOpen] = useState(false);
   const terminal = job?.status === "done" || job?.status === "failed" || job?.status === "cancelled";
 
   useEffect(() => {
@@ -1590,14 +1613,29 @@ function ResearchJobCard({
         <div className="mt-3">
           <div className="mb-2 flex flex-wrap items-center gap-2">
             {job.library_doc_id ? (
-              <Button variant="primary" onClick={() => navigate(`/library/${job.library_doc_id}`)}>
-                Open in Library
-              </Button>
+              <Button variant="primary" onClick={() => navigate(`/library/${job.library_doc_id}`)}>Open in Library</Button>
+            ) : null}
+            {job.report_markdown && (projectId || job.project_id) && !job.library_doc_id ? (
+              <Button onClick={() => setSaveOpen(true)}>Save to Library</Button>
             ) : null}
             {job.report_markdown ? (
               <Button onClick={() => navigator.clipboard?.writeText(job.report_markdown || "")}>Copy report</Button>
             ) : null}
           </div>
+          {job.report_markdown ? (
+            <SaveToLibraryModal
+              open={saveOpen}
+              projectId={projectId || job.project_id}
+              initialTitle={job.report_title || job.query || "Research report"}
+              initialContent={job.report_markdown}
+              initialFormat="md"
+              source="research report"
+              threadId={threadId || job.thread_id || ""}
+              metadata={{ provenance: "research_report", job_id: job.id, query: job.query || "" }}
+              onClose={() => setSaveOpen(false)}
+              onSaved={(id) => navigate(`/library/${id}`)}
+            />
+          ) : null}
           {sources.length > 0 ? (
             <details className="mb-3 rounded-lg border border-[var(--border-dim)]">
               <summary className="cursor-pointer px-3 py-2 text-step--1 font-medium text-[var(--text-soft)]">
@@ -1631,6 +1669,76 @@ function ResearchJobCard({
   );
 }
 
+
+function SaveToLibraryModal({
+  open,
+  projectId,
+  initialTitle,
+  initialContent,
+  initialFormat = "md",
+  source,
+  threadId,
+  metadata,
+  onClose,
+  onSaved,
+}: {
+  open: boolean;
+  projectId?: string;
+  initialTitle: string;
+  initialContent: string;
+  initialFormat?: string;
+  source: string;
+  threadId?: string;
+  metadata?: Record<string, unknown>;
+  onClose: () => void;
+  onSaved: (docId: string) => void;
+}) {
+  const [title, setTitle] = useState(initialTitle);
+  const [format, setFormat] = useState(initialFormat);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { if (open) { setTitle(initialTitle || "Untitled"); setFormat(initialFormat || "md"); } }, [open, initialTitle, initialFormat]);
+  if (!open) return null;
+  return (
+    <Modal title="Save to Library" onClose={onClose}>
+      {!projectId ? (
+        <p className="text-step--1 text-[var(--muted)]">No project context available for this chat. Open a project-scoped chat to save to Library.</p>
+      ) : (
+        <form className="flex flex-col gap-1" onSubmit={async (e) => {
+          e.preventDefault();
+          if (!projectId || !title.trim()) return;
+          setSaving(true);
+          try {
+            const doc = await api.createLibraryDoc(projectId, {
+              title: title.trim(),
+              content: initialContent || "",
+              kind: "doc",
+              format,
+              source,
+              thread_id: threadId || "",
+              metadata: metadata || {},
+            });
+            toast.success("Saved to Library", { action: { label: "Open", onClick: () => navigate(`/library/${doc.id}`) } });
+            onSaved(doc.id);
+            onClose();
+          } catch (err) { notifyError(err); } finally { setSaving(false); }
+        }}>
+          <Field label="Title"><input className={FORM_INPUT} value={title} onChange={(e) => setTitle(e.target.value)} required /></Field>
+          <Field label="Format">
+            <select className={FORM_SELECT} value={format} onChange={(e) => setFormat(e.target.value)}>
+              <option value="md">Markdown</option><option value="csv">CSV</option><option value="html">HTML</option><option value="text">Text</option>
+            </select>
+          </Field>
+          <div className="text-step--2 text-[var(--faint)]">Source: {source}{threadId ? ` · linked to thread ${threadId}` : ""}</div>
+          <div className="mt-2 flex justify-end gap-2">
+            <Button variant="ghost" onClick={onClose}>Cancel</Button>
+            <Button type="submit" variant="primary" disabled={saving || !title.trim()}>{saving ? "Saving…" : "Save & open"}</Button>
+          </div>
+        </form>
+      )}
+    </Modal>
+  );
+}
+
 function ReminderCard({ part }: { part: any }) {
   const due = part.due_at ? new Date(part.due_at).toLocaleString() : "unknown time";
   return (
@@ -1643,35 +1751,24 @@ function ReminderCard({ part }: { part: any }) {
   );
 }
 
-function ReportCard({ part }: { part: any }) {
+function ReportCard({ part, projectId, threadId, sourceLabel }: { part: any; projectId?: string; threadId?: string; sourceLabel?: string }) {
   const [open, setOpen] = useState(false);
+  const [saveOpen, setSaveOpen] = useState(false);
   const content = part.content || "";
   return (
     <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3 text-step--1">
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="font-semibold text-[var(--text)]">{part.title || "Report"}</div>
-        <div className="flex gap-2">
-          <button type="button" className="text-step--2 text-[var(--accent)] hover:underline" onClick={() => setOpen((v) => !v)}>
-            {open ? "Hide" : "Open"}
-          </button>
-          <button type="button" className="text-step--2 text-[var(--accent)] hover:underline" onClick={() => navigator.clipboard?.writeText(content)}>
-            Copy
-          </button>
-          <button
-            type="button"
-            className="text-step--2 text-[var(--accent)] hover:underline"
-            onClick={() => {
-              const blob = new Blob([content], { type: "text/markdown" });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement("a");
-              a.href = url;
-              a.download = `${(part.title || "report").replace(/[^a-z0-9]+/gi, "-")}.md`;
-              a.click();
-              URL.revokeObjectURL(url);
-            }}
-          >
-            Export
-          </button>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className="text-step--2 text-[var(--accent)] hover:underline" onClick={() => setOpen((v) => !v)}>{open ? "Hide" : "Open"}</button>
+          {projectId ? <button type="button" className="text-step--2 text-[var(--accent)] hover:underline" onClick={() => setSaveOpen(true)}>Save to Library</button> : null}
+          <button type="button" className="text-step--2 text-[var(--accent)] hover:underline" onClick={() => navigator.clipboard?.writeText(content)}>Copy</button>
+          <button type="button" className="text-step--2 text-[var(--accent)] hover:underline" onClick={() => {
+            const blob = new Blob([content], { type: "text/markdown" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url; a.download = `${(part.title || "report").replace(/[^a-z0-9]+/gi, "-")}.md`; a.click(); URL.revokeObjectURL(url);
+          }}>Export</button>
         </div>
       </div>
       {open ? (
@@ -1679,6 +1776,18 @@ function ReportCard({ part }: { part: any }) {
       ) : (
         <div className="mt-1 line-clamp-3 whitespace-pre-wrap text-[var(--text-soft)]">{content.slice(0, 200)}</div>
       )}
+      <SaveToLibraryModal
+        open={saveOpen}
+        projectId={projectId}
+        initialTitle={part.title || "Report"}
+        initialContent={content}
+        initialFormat="md"
+        source={sourceLabel || "chat report"}
+        threadId={threadId}
+        metadata={{ provenance: "chat_report", thread_id: threadId || "", saved_from: "chat" }}
+        onClose={() => setSaveOpen(false)}
+        onSaved={(id) => navigate(`/library/${id}`)}
+      />
     </div>
   );
 }
@@ -1797,6 +1906,7 @@ function Message({
 }) {
   const isUser = message.role === "user";
   const [expanded, setExpanded] = useState(false);
+  const [saveOpen, setSaveOpen] = useState(false);
   // Long assistant replies (e.g. a model dumping a whole file) flood the
   // conversation the way a raw tool log would. Collapse them behind a toggle
   // so the chat stays scannable, like Grok/ChatGPT collapsing tool output.
@@ -1839,7 +1949,7 @@ function Message({
           {parts.map((p, i) => (
             <div key={i}>
               {p.type === "report" ? (
-                <ReportCard part={p} />
+                <ReportCard part={p} projectId={projectId} threadId={message.thread_id} sourceLabel="chat report" />
               ) : p.type === "task" && p.proposal ? (
                 <TaskProposalCard proposal={p.proposal} onCreateTask={onCreateTask} />
               ) : p.type === "plan" ? (
@@ -1853,10 +1963,34 @@ function Message({
           ))}
         </div>
       ) : null}
-      <div className={`mono mt-1 flex items-center gap-1.5 text-step--2 text-[var(--faint)] ${isUser ? "mr-1" : "ml-1"}`}>
+      <div className={`mono mt-1 flex flex-wrap items-center gap-1.5 text-step--2 text-[var(--faint)] ${isUser ? "mr-1 justify-end" : "ml-1"}`}>
         {!isUser ? <BotFace face={speaker?.face ?? null} size={18} animated={streaming} /> : null}
         <span>{isUser ? "you" : speaker?.name || "NerdBot"}</span>
         {streaming ? " · streaming…" : ""}
+        {!streaming && projectId && (message.content || "").trim() ? (
+          <>
+            <button
+              type="button"
+              className="ml-1 rounded px-1.5 py-0.5 text-[11px] text-[var(--accent)] hover:bg-[var(--accent-dim)]"
+              onClick={() => setSaveOpen(true)}
+              title="Save this message to Library as a living document"
+            >
+              Save to Library
+            </button>
+            <SaveToLibraryModal
+              open={saveOpen}
+              projectId={projectId}
+              initialTitle={(isUser ? "Chat: " : "") + ((message.content || "").slice(0, 60).replace(/\s+/g, " ").trim() || "Chat note")}
+              initialContent={message.content || ""}
+              initialFormat="md"
+              source={isUser ? "chat message" : "assistant message"}
+              threadId={message.thread_id || ""}
+              metadata={{ provenance: "chat_message", message_id: message.id, role: message.role, thread_id: message.thread_id || "" }}
+              onClose={() => setSaveOpen(false)}
+              onSaved={(id) => navigate(`/library/${id}`)}
+            />
+          </>
+        ) : null}
       </div>
     </div>
   );
@@ -2061,15 +2195,15 @@ function ContextPanel({
   onSelectBot,
   onOpenBot,
   onAttachFile,
+  onInsertReference,
 }: {
-  type: "files" | "bots";
+  type: "files" | "bots" | "refs";
   projectId: string;
   onClose: () => void;
-  /** Insert the teammate's @mention into the composer. */
   onSelectBot: (mate: Teammate) => void;
-  /** Leave the conversation to open the teammate's own page. */
   onOpenBot: (teammateId: string) => void;
   onAttachFile: (file: { name: string; content: string }) => void;
+  onInsertReference?: (text: string) => void;
 }) {
   const bots = useAsync(
     async () => {
@@ -2077,9 +2211,7 @@ function ContextPanel({
       try {
         const res = await api.listTeammates(projectId);
         if ((res.teammates || []).length > 0) return { teammates: res.teammates, scope: "project" as const };
-      } catch {
-        /* fall through to all teammates */
-      }
+      } catch {}
       try {
         const all = await api.listAllTeammates();
         return { teammates: all.teammates || [], scope: "all" as const };
@@ -2090,12 +2222,18 @@ function ContextPanel({
     [projectId, type],
   );
   const files = useAsync(
-    () =>
-      type === "files"
-        ? api.projectWorkspaceFiles(projectId)
-        : Promise.resolve({ checkouts: [], file_count: 0 } as any),
+    () => type === "files" ? api.projectWorkspaceFiles(projectId) : Promise.resolve({ checkouts: [], file_count: 0 } as any),
     [projectId, type],
   );
+  const refs = useAsync(async () => {
+    if (type !== "refs") return { docs: [] as any[], assets: [] as any[] };
+    const [docsRes, assetsRes] = await Promise.all([
+      api.listLibrary(projectId).catch(() => ({ docs: [] })),
+      api.listGallery(projectId, { limit: 50 }).catch(() => ({ assets: [] })),
+    ]);
+    return { docs: (docsRes as any).docs || [], assets: (assetsRes as any).assets || [] };
+  }, [projectId, type]);
+  const token = getSession()?.token || "";
   const [attaching, setAttaching] = useState<string | null>(null);
   const [attachError, setAttachError] = useState<string | null>(null);
 
@@ -2128,11 +2266,11 @@ function ContextPanel({
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
-        aria-label={type === "bots" ? "Teammates" : "Project files"}
+        aria-label={type === "bots" ? "Teammates" : type === "refs" ? "Insert reference" : "Project files"}
       >
         <div className="flex items-center justify-between border-b border-[var(--border-dim)] px-4 py-3">
           <span className="text-step-0 font-semibold">
-            {type === "bots" ? "Teammates" : "Project files"}
+            {type === "bots" ? "Teammates" : type === "refs" ? "Insert reference" : "Project files"}
           </span>
           <button
             onClick={onClose}
@@ -2187,6 +2325,42 @@ function ContextPanel({
                   </div>
                 </div>
               ))}
+            </div>
+          )
+        ) : type === "refs" ? (
+          refs.loading ? <LoadingState lines={3} /> : refs.error ? <ErrorState error={refs.error} onRetry={refs.reload} /> : (
+            <div className="flex-1 overflow-y-auto p-3">
+              <p className="mb-3 text-step--2 text-[var(--muted)]">Insert a markdown reference to a Library document or Gallery asset into your message.</p>
+              <div className="mb-4">
+                <div className="mb-1.5 text-step--2 font-medium uppercase tracking-wider text-[var(--faint)]">Library docs</div>
+                {(refs.data?.docs || []).length === 0 ? <div className="text-step--2 text-[var(--faint)]">No documents</div> : (
+                  <div className="flex flex-col gap-1">
+                    {(refs.data?.docs || []).slice(0, 30).map((d: any) => (
+                      <button key={d.id} type="button" className="rounded-md border border-[var(--border-dim)] px-2.5 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => onInsertReference?.(`[${d.title || 'Untitled'}](/library/${d.id})`)}>
+                        <div className="truncate text-step--1 text-[var(--text)]">{d.title || "Untitled"}</div>
+                        <div className="text-step--2 text-[var(--faint)]">{(d.format || "md").toUpperCase()} · {d.id}</div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div>
+                <div className="mb-1.5 text-step--2 font-medium uppercase tracking-wider text-[var(--faint)]">Gallery assets</div>
+                {(refs.data?.assets || []).length === 0 ? <div className="text-step--2 text-[var(--faint)]">No assets</div> : (
+                  <div className="flex flex-col gap-1">
+                    {(refs.data?.assets || []).slice(0, 30).map((a: any) => {
+                      const url = api.galleryAssetContentUrl(a.id, token);
+                      const ref = (a.mime_type || "").startsWith("image/") ? `![${a.name || "asset"}](${url})` : `[${a.name || "asset"}](${url})`;
+                      return (
+                        <button key={a.id} type="button" className="rounded-md border border-[var(--border-dim)] px-2.5 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => onInsertReference?.(ref)}>
+                          <div className="truncate text-step--1 text-[var(--text)]">{a.name || "Asset"}</div>
+                          <div className="text-step--2 text-[var(--faint)]">{a.mime_type || "file"} · {a.id}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           )
         ) : files.loading ? (
@@ -2632,6 +2806,7 @@ function CommandCenter({
                   <ResearchJobCard
                     key={id}
                     jobId={id}
+                    projectId={projectId}
                     onClose={() => setResearchJobIds((prev) => prev.filter((x) => x !== id))}
                   />
                 ))}

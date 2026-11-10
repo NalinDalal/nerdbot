@@ -64,13 +64,14 @@ function sanitizeHtml(html: string): string {
     .replace(/<iframe[\s\S]*?>[\s\S]*?<\/iframe>/gi, "");
 }
 
-function parseCsv(text: string): string[][] {
+export function parseCsv(text: string): string[][] {
+  const s = String(text ?? "");
+  if (s === "") return [[""]];
   const rows: string[][] = [];
   let row: string[] = [];
   let cell = "";
   let i = 0;
   let inQuotes = false;
-  const s = text || "";
   while (i < s.length) {
     const ch = s[i];
     if (inQuotes) {
@@ -80,22 +81,29 @@ function parseCsv(text: string): string[][] {
     }
     if (ch === '"') { inQuotes = true; i++; continue; }
     if (ch === ",") { row.push(cell); cell = ""; i++; continue; }
-    if (ch === "\n") { row.push(cell); rows.push(row); row = []; cell = ""; i++; continue; }
     if (ch === "\r") { i++; continue; }
+    if (ch === "\n") { row.push(cell); rows.push(row); row = []; cell = ""; i++; continue; }
     cell += ch; i++;
   }
-  row.push(cell);
-  if (row.length > 1 || row[0] !== "" || rows.length === 0) rows.push(row);
-  return rows;
+  // RFC4180-like: trailing newline at EOF does not create an extra empty row.
+  if (inQuotes) { /* unclosed quote: keep best-effort cell */ }
+  const endedWithNewline = /\r?\n$/.test(s);
+  const trailingEmpty = endedWithNewline && ((row.length === 1 && cell === "") || (row.length === 0 && cell === ""));
+  if (!trailingEmpty) {
+    row.push(cell);
+    rows.push(row);
+  }
+  const maxCols = Math.max(1, ...rows.map((r) => r.length));
+  return rows.map((r) => (r.length === maxCols ? r : [...r, ...Array(maxCols - r.length).fill("")]));
 }
 
-function toCsv(rows: string[][]): string {
+export function toCsv(rows: string[][]): string {
   const esc = (v: string) => {
-    const s = v ?? "";
+    const s = String(v ?? "");
     if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
     return s;
   };
-  return rows.map((r) => r.map(esc).join(",")).join("\n");
+  return (rows || []).map((r) => (r || []).map(esc).join(",")).join("\n");
 }
 
 function CsvGrid({ value, onChange, readOnly }: { value: string; onChange?: (v: string) => void; readOnly?: boolean }) {
@@ -358,8 +366,15 @@ export function LibraryDocView({ docId }: { docId: string }) {
   const [grantLevel, setGrantLevel] = useState<"read" | "write">("read");
   const [aiInstr, setAiInstr] = useState("");
   const [suggestion, setSuggestion] = useState<{ suggested_content: string; diff: string; attribution?: any } | null>(null);
+  const [showPreview, setShowPreview] = useState(true);
+  const [showRefPicker, setShowRefPicker] = useState(false);
+  const [refTab, setRefTab] = useState<"docs" | "gallery">("docs");
   const saveTimer = useRef<number | null>(null);
+  const contentRef = useRef<HTMLTextAreaElement>(null);
   const token = getSession()?.token || "";
+  const refProjectId = doc.data?.project_id || "";
+  const refDocs = useAsync(() => refProjectId ? api.listLibrary(refProjectId) : Promise.resolve({ docs: [] as LibraryDoc[] }), [showRefPicker, refProjectId]);
+  const refAssets = useAsync(() => refProjectId ? api.listGallery(refProjectId, { limit: 100 }) : Promise.resolve({ assets: [] as any[], total: 0 }), [showRefPicker, refProjectId]);
 
   const teammateList = mates.data?.teammates ?? [];
   const mateName = (teammateId: string) => {
@@ -468,10 +483,26 @@ export function LibraryDocView({ docId }: { docId: string }) {
   if (doc.error || !doc.data) return <Page><ErrorState error={doc.error ?? new Error("Document not found")} onRetry={doc.reload} /></Page>;
 
   const current = doc.data;
+
   const aclRows = access.data?.access ?? [];
   const grantedIds = new Set(aclRows.map((row) => row.teammate_id));
   const grantable = teammateList.filter((m) => !grantedIds.has(m.id));
   const exportUrl = (fmt: string) => api.exportLibraryDocUrl(docId, fmt, token);
+  const docRefMd = `[${current.title || "Untitled"}](/library/${current.id})`;
+  const docRefLink = `${(getSession()?.baseUrl || "").replace(/\/+$/, "")}/library/${current.id}`;
+  const insertRef = (ref: string) => {
+    const el = contentRef.current;
+    if (el) {
+      const start = el.selectionStart ?? draftContent.length;
+      const end = el.selectionEnd ?? draftContent.length;
+      const next = draftContent.slice(0, start) + ref + draftContent.slice(end);
+      setDraftContent(next);
+      requestAnimationFrame(() => { el.focus(); const pos = start + ref.length; el.setSelectionRange(pos, pos); });
+    } else {
+      setDraftContent((d) => d + (d && !d.endsWith("\n") ? "\n" : "") + ref);
+    }
+    setShowRefPicker(false);
+  };
 
   return (
     <Page width="reading">
@@ -506,6 +537,10 @@ export function LibraryDocView({ docId }: { docId: string }) {
         <a className="inline-flex items-center rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-step--1 hover:bg-[var(--surface-2)]" href={exportUrl("md")} target="_blank" rel="noreferrer">Export .md</a>
         <a className="inline-flex items-center rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-step--1 hover:bg-[var(--surface-2)]" href={exportUrl("csv")} target="_blank" rel="noreferrer">Export .csv</a>
         <a className="inline-flex items-center rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-step--1 hover:bg-[var(--surface-2)]" href={exportUrl("html")} target="_blank" rel="noreferrer">Export .html</a>
+        <Button onClick={() => { navigator.clipboard?.writeText(docRefMd); toast.success("Document reference copied"); }}>Copy ref</Button>
+        <Button onClick={() => { navigator.clipboard?.writeText(docRefLink); toast.success("Document link copied"); }}>Copy link</Button>
+        <Button onClick={() => { navigator.clipboard?.writeText(current.id); toast.success("Document ID copied"); }}>Copy ID</Button>
+        {editing ? <Button onClick={() => setShowRefPicker(true)}>Insert ref</Button> : null}
         {(current.thread_id || current.task_id || current.job_id) ? (
           <span className="text-step--2 text-[var(--faint)] self-center">Linked: {current.thread_id ? `thread ${current.thread_id} ` : ""}{current.task_id ? `task ${current.task_id} ` : ""}{current.job_id ? `job ${current.job_id}` : ""}</span>
         ) : null}
@@ -524,7 +559,46 @@ export function LibraryDocView({ docId }: { docId: string }) {
           {draftFormat === "csv" ? (
             <Field label="Content (CSV grid)"><CsvGrid value={draftContent} onChange={setDraftContent} /></Field>
           ) : (
-            <Field label="Content"><textarea value={draftContent} onChange={(e) => setDraftContent(e.target.value)} rows={18} className={`${FORM_INPUT} resize-y font-mono`} /></Field>
+            <div className="space-y-2">
+              {draftFormat === "md" ? (
+                <div className="flex flex-wrap gap-1.5 rounded-lg border border-[var(--border-dim)] bg-[var(--surface-2)] p-2">
+                  {[
+                    { label: "B", title: "Bold", pre: "**", post: "**", placeholder: "bold" },
+                    { label: "I", title: "Italic", pre: "_", post: "_", placeholder: "italic" },
+                    { label: "H2", title: "Heading", pre: "\n## ", post: "\n", placeholder: "Heading" },
+                    { label: "List", title: "Bullet list", pre: "\n- ", post: "", placeholder: "item" },
+                    { label: "Quote", title: "Quote", pre: "\n> ", post: "", placeholder: "quote" },
+                    { label: "Code", title: "Inline code", pre: "`", post: "`", placeholder: "code" },
+                    { label: "Link", title: "Link", pre: "[", post: "](url)", placeholder: "text" },
+                  ].map((b) => (
+                    <button key={b.label} type="button" className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-0.5 text-step--2 hover:bg-[var(--surface-3,var(--surface))]" title={b.title}
+                      onClick={() => {
+                        const el = contentRef.current;
+                        if (!el) return;
+                        const start = el.selectionStart ?? draftContent.length;
+                        const end = el.selectionEnd ?? draftContent.length;
+                        const selected = draftContent.slice(start, end) || b.placeholder;
+                        const next = draftContent.slice(0, start) + b.pre + selected + b.post + draftContent.slice(end);
+                        setDraftContent(next);
+                        requestAnimationFrame(() => { el.focus(); const pos = start + b.pre.length + selected.length; el.setSelectionRange(pos, pos); });
+                      }}>{b.label}</button>
+                  ))}
+                  <button type="button" className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-0.5 text-step--2 hover:bg-[var(--surface-3,var(--surface))]" title="Insert Library/Gallery reference" onClick={() => setShowRefPicker(true)}>+ Ref</button>
+                  <label className="ml-auto inline-flex items-center gap-1.5 text-step--2 text-[var(--muted)]"><input type="checkbox" checked={showPreview} onChange={(e) => setShowPreview(e.target.checked)} /> Preview</label>
+                </div>
+              ) : draftFormat === "html" || draftFormat === "text" ? (
+                <div className="flex flex-wrap gap-1.5"><button type="button" className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-0.5 text-step--2" onClick={() => setShowRefPicker(true)}>Insert reference</button></div>
+              ) : null}
+              <Field label={`Content${draftFormat === "md" ? " (Markdown)" : draftFormat === "html" ? " (HTML)" : " (Text)"}`}>
+                <textarea ref={contentRef} value={draftContent} onChange={(e) => setDraftContent(e.target.value)} rows={18} className={`${FORM_INPUT} resize-y font-mono`} />
+              </Field>
+              {draftFormat === "md" && showPreview ? (
+                <div>
+                  <div className="mb-1 text-step--2 font-medium text-[var(--muted)]">Live preview</div>
+                  <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3"><Markdown text={draftContent || ""} /></div>
+                </div>
+              ) : null}
+            </div>
           )}
           {draftFormat === "html" ? (
             <div>
@@ -594,6 +668,42 @@ export function LibraryDocView({ docId }: { docId: string }) {
           )}
         </PageSection>
       </div>
+
+      {showRefPicker ? (
+        <Modal title="Insert reference" onClose={() => setShowRefPicker(false)}>
+          <div className="mb-3 flex gap-2">
+            <Button variant={refTab === "docs" ? "primary" : "ghost"} onClick={() => setRefTab("docs")}>Library docs</Button>
+            <Button variant={refTab === "gallery" ? "primary" : "ghost"} onClick={() => setRefTab("gallery")}>Gallery assets</Button>
+          </div>
+          {refTab === "docs" ? (
+            refDocs.loading ? <LoadingState lines={2} /> : refDocs.error ? <ErrorState error={refDocs.error} onRetry={refDocs.reload} /> : (refDocs.data?.docs || []).length === 0 ? <EmptyState title="No documents" hint="" /> : (
+              <div className="flex max-h-80 flex-col gap-1 overflow-auto">
+                {(refDocs.data?.docs || []).filter((d) => d.id !== current.id).map((d) => (
+                  <button key={d.id} type="button" className="rounded-md border border-[var(--border-dim)] px-2.5 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => insertRef(`[${d.title || "Untitled"}](/library/${d.id})`)}>
+                    <div className="truncate text-step--1">{d.title || "Untitled"}</div>
+                    <div className="text-step--2 text-[var(--faint)]">{(d.format || "md").toUpperCase()} · {d.id}</div>
+                  </button>
+                ))}
+              </div>
+            )
+          ) : (
+            refAssets.loading ? <LoadingState lines={2} /> : refAssets.error ? <ErrorState error={refAssets.error} onRetry={refAssets.reload} /> : ((refAssets.data as any)?.assets || []).length === 0 ? <EmptyState title="No assets" hint="" /> : (
+              <div className="flex max-h-80 flex-col gap-1 overflow-auto">
+                {((refAssets.data as any)?.assets || []).map((a: any) => {
+                  const url = api.galleryAssetContentUrl(a.id, token);
+                  const ref = (a.mime_type || "").startsWith("image/") ? `![${a.name || "asset"}](${url})` : `[${a.name || "asset"}](${url})`;
+                  return (
+                    <button key={a.id} type="button" className="rounded-md border border-[var(--border-dim)] px-2.5 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => insertRef(ref)}>
+                      <div className="truncate text-step--1">{a.name || "Asset"}</div>
+                      <div className="text-step--2 text-[var(--faint)]">{a.mime_type || "file"} · {a.id}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            )
+          )}
+        </Modal>
+      ) : null}
 
       <div className="mt-10">
         <PageSection title="Access" description="Who can read or edit this document. Owner manages access; a missing row means no access.">
