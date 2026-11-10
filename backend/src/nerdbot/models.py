@@ -481,9 +481,10 @@ class KnowledgeChunk(BaseModel):
     created_at: datetime = Field(default_factory=_utcnow)
 
 
-# Library document kinds: a typed note, a markdown doc, or a text file
-# uploaded as-is. Everything is stored as markdown-capable text.
+# Library document kinds/formats. `kind` kept for compatibility; `format`
+# is the editable/export format (md/html/csv/text).
 LIBRARY_KINDS = frozenset({"note", "doc", "upload"})
+LIBRARY_FORMATS = frozenset({"md", "html", "csv", "text"})
 LIBRARY_ACCESS_LEVELS = frozenset({"read", "write"})
 
 
@@ -493,19 +494,24 @@ class LibraryDoc(BaseModel):
     ``tainted`` marks content a bot has written: the owner sees the badge
     and decides whether to keep it. ``teammate_id`` is the bot that last
     wrote ("" = the owner). ``source`` is where the content came from
-    (upload filename, "note", …) and stays put across edits so provenance
-    survives rewrites.
+    (upload filename, "note", research job, …) and stays put across edits so
+    provenance survives rewrites. ``format`` drives rendering/export.
     """
 
     id: str
     project_id: str
     kind: str = "note"
+    format: str = "md"
     title: str = ""
     content: str = ""
     source: str = ""
     teammate_id: str = ""
     tainted: bool = False
     version: int = 1
+    thread_id: str = ""
+    task_id: str = ""
+    job_id: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
 
@@ -521,6 +527,8 @@ class LibraryDocVersion(BaseModel):
     source: str = ""
     teammate_id: str = ""
     tainted: bool = False
+    format: str = "md"
+    metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_utcnow)
 
 
@@ -531,6 +539,23 @@ class LibraryDocAccess(BaseModel):
     doc_id: str
     teammate_id: str
     access: str = "read"
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+class GalleryAsset(BaseModel):
+    """A managed file/image asset for Gallery (view/manage only)."""
+
+    id: str
+    project_id: str
+    name: str = ""
+    mime_type: str = "application/octet-stream"
+    size: int = 0
+    source: str = ""
+    thread_id: str = ""
+    task_id: str = ""
+    doc_id: str = ""
+    storage_path: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_utcnow)
 
 

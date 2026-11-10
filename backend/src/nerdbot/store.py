@@ -317,10 +317,12 @@ CREATE INDEX IF NOT EXISTS idx_board_messages_board ON board_messages(board_id);
 CREATE INDEX IF NOT EXISTS idx_board_messages_to_board ON board_messages(to_board_id);
 CREATE TABLE IF NOT EXISTS library_docs (
   id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
-  kind TEXT NOT NULL DEFAULT 'note', title TEXT NOT NULL DEFAULT '',
-  content TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT '',
-  teammate_id TEXT NOT NULL DEFAULT '', tainted INTEGER NOT NULL DEFAULT 0,
-  version INTEGER NOT NULL DEFAULT 1,
+  kind TEXT NOT NULL DEFAULT 'note', format TEXT NOT NULL DEFAULT 'md',
+  title TEXT NOT NULL DEFAULT '', content TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT '', teammate_id TEXT NOT NULL DEFAULT '',
+  tainted INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1,
+  thread_id TEXT NOT NULL DEFAULT '', task_id TEXT NOT NULL DEFAULT '',
+  job_id TEXT NOT NULL DEFAULT '', metadata TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_library_docs_project ON library_docs(project_id, updated_at);
@@ -329,6 +331,7 @@ CREATE TABLE IF NOT EXISTS library_doc_versions (
   version INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '',
   content TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT '',
   teammate_id TEXT NOT NULL DEFAULT '', tainted INTEGER NOT NULL DEFAULT 0,
+  format TEXT NOT NULL DEFAULT 'md', metadata TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_library_versions_doc ON library_doc_versions(doc_id, version);
@@ -338,6 +341,15 @@ CREATE TABLE IF NOT EXISTS library_doc_access (
   created_at TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_library_access_doc ON library_doc_access(doc_id, teammate_id);
+CREATE TABLE IF NOT EXISTS gallery_assets (
+  id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+  name TEXT NOT NULL DEFAULT '', mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+  size INTEGER NOT NULL DEFAULT 0, source TEXT NOT NULL DEFAULT '',
+  thread_id TEXT NOT NULL DEFAULT '', task_id TEXT NOT NULL DEFAULT '', doc_id TEXT NOT NULL DEFAULT '',
+  storage_path TEXT NOT NULL DEFAULT '', metadata TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gallery_assets_project ON gallery_assets(project_id, created_at DESC);
 """
 
 
@@ -722,6 +734,21 @@ _PHASE30_COLUMNS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
+_PHASE31_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    # Phase 4: richer library docs (format/links/metadata) and gallery assets.
+    "library_docs": [
+        ("format", "TEXT NOT NULL DEFAULT 'md'"),
+        ("thread_id", "TEXT NOT NULL DEFAULT ''"),
+        ("task_id", "TEXT NOT NULL DEFAULT ''"),
+        ("job_id", "TEXT NOT NULL DEFAULT ''"),
+        ("metadata", "TEXT NOT NULL DEFAULT '{}'"),
+    ],
+    "library_doc_versions": [
+        ("format", "TEXT NOT NULL DEFAULT 'md'"),
+        ("metadata", "TEXT NOT NULL DEFAULT '{}'"),
+    ],
+}
+
 
 _PHASE20_COLUMNS: dict[str, list[tuple[str, str]]] = {
     # Bot persona files (ai-teammates model): a bot's identity, its active
@@ -755,7 +782,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
                   _PHASE18_COLUMNS, _PHASE19_COLUMNS, _PHASE20_COLUMNS,
                   _PHASE21_COLUMNS, _PHASE22_COLUMNS, _PHASE23_COLUMNS, _PHASE24_COLUMNS,
                   _PHASE25_COLUMNS, _PHASE26_COLUMNS, _PHASE27_COLUMNS, _PHASE28_COLUMNS,
-                  _PHASE29_COLUMNS, _PHASE30_COLUMNS):
+                  _PHASE29_COLUMNS, _PHASE30_COLUMNS, _PHASE31_COLUMNS):
         for table, columns in phase.items():
             phases.setdefault(table, []).extend(columns)
     for table, columns in phases.items():
@@ -5691,23 +5718,53 @@ def _check_library_size(title: str, content: str) -> None:
         raise ValueError("document content exceeds 1MiB size cap")
 
 
+class LibraryConflictError(ValueError):
+    """Optimistic concurrency conflict (expected_version mismatch)."""
+
+
+def _json_obj(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw:
+        try:
+            val = json.loads(raw)
+            return val if isinstance(val, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
 def _library_doc_from_row(row: sqlite3.Row) -> LibraryDoc:
+    keys = row.keys()
+    fmt = (row["format"] if "format" in keys else "") or "md"
+    kind = row["kind"] or "note"
+    if fmt not in {"md", "html", "csv", "text"}:
+        fmt = "md"
     return LibraryDoc(
         id=row["id"],
         project_id=row["project_id"],
-        kind=row["kind"] or "note",
+        kind=kind,
+        format=fmt,
         title=row["title"] or "",
         content=row["content"] or "",
         source=row["source"] or "",
         teammate_id=row["teammate_id"] or "",
         tainted=bool(row["tainted"]),
         version=int(row["version"] or 1),
+        thread_id=(row["thread_id"] if "thread_id" in keys else "") or "",
+        task_id=(row["task_id"] if "task_id" in keys else "") or "",
+        job_id=(row["job_id"] if "job_id" in keys else "") or "",
+        metadata=_json_obj(row["metadata"] if "metadata" in keys else "{}"),
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )
 
 
 def _library_version_from_row(row: sqlite3.Row) -> LibraryDocVersion:
+    keys = row.keys()
+    fmt = (row["format"] if "format" in keys else "") or "md"
+    if fmt not in {"md", "html", "csv", "text"}:
+        fmt = "md"
     return LibraryDocVersion(
         id=row["id"],
         doc_id=row["doc_id"],
@@ -5717,6 +5774,8 @@ def _library_version_from_row(row: sqlite3.Row) -> LibraryDocVersion:
         source=row["source"] or "",
         teammate_id=row["teammate_id"] or "",
         tainted=bool(row["tainted"]),
+        format=fmt,
+        metadata=_json_obj(row["metadata"] if "metadata" in keys else "{}"),
         created_at=datetime.fromisoformat(row["created_at"]),
     )
 
@@ -5733,11 +5792,12 @@ def _library_access_from_row(row: sqlite3.Row) -> LibraryDocAccess:
 
 def _library_version_row(
     doc_id: str, version: int, title: str, content: str, source: str,
-    teammate_id: str, tainted: bool, created_at: str,
+    teammate_id: str, tainted: bool, created_at: str, *, format: str = "md", metadata: dict[str, Any] | None = None,
 ) -> tuple[str, ...]:
     return (
         new_id("lvr"), doc_id, str(version), title, content, source,
-        teammate_id, "1" if tainted else "0", created_at,
+        teammate_id, "1" if tainted else "0", format or "md",
+        json.dumps(metadata or {}, ensure_ascii=False), created_at,
     )
 
 
@@ -5746,39 +5806,49 @@ def create_library_doc(
     project_id: str,
     *,
     kind: str = "note",
+    format: str | None = None,
     title: str = "",
     content: str = "",
     source: str = "",
     teammate_id: str = "",
     tainted: bool = False,
+    thread_id: str = "",
+    task_id: str = "",
+    job_id: str = "",
+    metadata: dict[str, Any] | None = None,
 ) -> LibraryDoc:
     """Create a document and its version 1 in one commit."""
     if get_project(conn, project_id) is None:
         raise KeyError(f"unknown project {project_id}")
     if kind not in LIBRARY_KINDS:
         raise ValueError(f"unknown library kind {kind!r}")
+    fmt = format or ("csv" if kind == "upload" and (source or title).lower().endswith(".csv") else "md")
+    if fmt not in {"md", "html", "csv", "text"}:
+        fmt = "md"
     _check_library_size(title, content)
     if teammate_id and get_teammate(conn, teammate_id) is None:
         raise KeyError(f"unknown teammate {teammate_id}")
     now = _now_iso()
+    meta = metadata or {}
     doc = LibraryDoc(
-        id=new_id("lib"), project_id=project_id, kind=kind, title=title,
+        id=new_id("lib"), project_id=project_id, kind=kind, format=fmt, title=title,
         content=content, source=source, teammate_id=teammate_id,
-        tainted=tainted, version=1,
+        tainted=tainted, version=1, thread_id=thread_id or "", task_id=task_id or "",
+        job_id=job_id or "", metadata=meta,
         created_at=datetime.fromisoformat(now), updated_at=datetime.fromisoformat(now),
     )
     conn.execute(
-        "INSERT INTO library_docs (id, project_id, kind, title, content, source,"
-        " teammate_id, tainted, version, created_at, updated_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (doc.id, project_id, kind, title, content, source, teammate_id,
-         "1" if tainted else "0", "1", now, now),
+        "INSERT INTO library_docs (id, project_id, kind, format, title, content, source,"
+        " teammate_id, tainted, version, thread_id, task_id, job_id, metadata, created_at, updated_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (doc.id, project_id, kind, fmt, title, content, source, teammate_id,
+         "1" if tainted else "0", "1", thread_id or "", task_id or "", job_id or "",
+         json.dumps(meta, ensure_ascii=False), now, now),
     )
     conn.execute(
         "INSERT INTO library_doc_versions (id, doc_id, version, title, content,"
-        " source, teammate_id, tainted, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        _library_version_row(doc.id, 1, title, content, source, teammate_id,
-                             tainted, now),
+        " source, teammate_id, tainted, format, metadata, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        _library_version_row(doc.id, 1, title, content, source, teammate_id, tainted, now, format=fmt, metadata=meta),
     )
     conn.commit()
     record_event(conn, project_id, "library", doc.id, "library.created")
@@ -5809,16 +5879,21 @@ def update_library_doc(
     source: str | None = None,
     teammate_id: str | None = None,
     tainted: bool | None = None,
+    format: str | None = None,
+    thread_id: str | None = None,
+    task_id: str | None = None,
+    job_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
+    expected_version: int | None = None,
 ) -> LibraryDoc:
-    """Save a document: apply the given fields, bump the version, append history.
-
-    ``None`` means "leave this field alone"; pass ``""``/``False`` to clear it.
-    The caller (library.py) decides which of these a principal is allowed to
-    set — this function only persists what it is told.
+    """Save a document: apply fields, bump version, append history.
+    If expected_version is provided, raises LibraryConflictError on mismatch.
     """
     doc = get_library_doc(conn, doc_id)
     if doc is None:
         raise KeyError(f"unknown library doc {doc_id}")
+    if expected_version is not None and int(expected_version) != int(doc.version):
+        raise LibraryConflictError(f"version conflict: expected {expected_version}, current {doc.version}")
     new_title = doc.title if title is None else title
     new_content = doc.content if content is None else content
     _check_library_size(new_title, new_content)
@@ -5827,24 +5902,104 @@ def update_library_doc(
     if new_writer and get_teammate(conn, new_writer) is None:
         raise KeyError(f"unknown teammate {new_writer}")
     new_tainted = doc.tainted if tainted is None else tainted
+    new_format = doc.format if format is None else format
+    if new_format not in {"md", "html", "csv", "text"}:
+        new_format = doc.format
+    new_thread = doc.thread_id if thread_id is None else (thread_id or "")
+    new_task = doc.task_id if task_id is None else (task_id or "")
+    new_job = doc.job_id if job_id is None else (job_id or "")
+    new_meta = doc.metadata if metadata is None else (metadata or {})
     version = doc.version + 1
     now = _now_iso()
     conn.execute(
-        "UPDATE library_docs SET title = ?, content = ?, source = ?,"
-        " teammate_id = ?, tainted = ?, version = ?, updated_at = ? WHERE id = ?",
-        (new_title, new_content, new_source, new_writer,
-         "1" if new_tainted else "0", version, now, doc_id),
+        "UPDATE library_docs SET title=?, content=?, source=?, teammate_id=?, tainted=?, version=?, updated_at=?,"
+        " format=?, thread_id=?, task_id=?, job_id=?, metadata=? WHERE id=?",
+        (new_title, new_content, new_source, new_writer, "1" if new_tainted else "0", version, now,
+         new_format, new_thread, new_task, new_job, json.dumps(new_meta, ensure_ascii=False), doc_id),
     )
     conn.execute(
-        "INSERT INTO library_doc_versions (id, doc_id, version, title, content,"
-        " source, teammate_id, tainted, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        _library_version_row(doc_id, version, new_title, new_content, new_source,
-                             new_writer, new_tainted, now),
+        "INSERT INTO library_doc_versions (id, doc_id, version, title, content, source, teammate_id, tainted, format, metadata, created_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        _library_version_row(doc_id, version, new_title, new_content, new_source, new_writer, new_tainted, now, format=new_format, metadata=new_meta),
     )
     conn.commit()
     updated = get_library_doc(conn, doc_id)
-    assert updated is not None  # just wrote it
+    assert updated is not None
     return updated
+
+
+# -- Gallery assets (Phase 4, view/manage only) -------------------------------
+
+GALLERY_MAX_BYTES = 10 * 1024 * 1024
+
+
+def _gallery_asset_from_row(row: sqlite3.Row) -> "GalleryAsset":
+    from .models import GalleryAsset
+    keys = row.keys()
+    return GalleryAsset(
+        id=row["id"], project_id=row["project_id"], name=row["name"] or "",
+        mime_type=row["mime_type"] or "application/octet-stream", size=int(row["size"] or 0),
+        source=row["source"] or "", thread_id=row["thread_id"] or "", task_id=row["task_id"] or "",
+        doc_id=row["doc_id"] or "", storage_path=row["storage_path"] or "",
+        metadata=_json_obj(row["metadata"] if "metadata" in keys else "{}"),
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def create_gallery_asset(
+    conn: sqlite3.Connection, project_id: str, *, name: str, mime_type: str, size: int,
+    storage_path: str, source: str = "", thread_id: str = "", task_id: str = "", doc_id: str = "",
+    metadata: dict[str, Any] | None = None,
+):
+    from .models import GalleryAsset
+    if get_project(conn, project_id) is None:
+        raise KeyError(f"unknown project {project_id}")
+    if size < 0 or size > GALLERY_MAX_BYTES:
+        raise ValueError("asset size exceeds limit")
+    now = _now_iso()
+    asset = GalleryAsset(id=new_id("ast"), project_id=project_id, name=name or "asset", mime_type=mime_type or "application/octet-stream",
+                         size=int(size), source=source or name or "", thread_id=thread_id or "", task_id=task_id or "",
+                         doc_id=doc_id or "", storage_path=storage_path, metadata=metadata or {}, created_at=datetime.fromisoformat(now))
+    conn.execute(
+        "INSERT INTO gallery_assets (id,project_id,name,mime_type,size,source,thread_id,task_id,doc_id,storage_path,metadata,created_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (asset.id, project_id, asset.name, asset.mime_type, asset.size, asset.source, asset.thread_id, asset.task_id,
+         asset.doc_id, asset.storage_path, json.dumps(asset.metadata, ensure_ascii=False), now),
+    )
+    conn.commit()
+    record_event(conn, project_id, "gallery", asset.id, "gallery.created")
+    return asset
+
+
+def get_gallery_asset(conn: sqlite3.Connection, asset_id: str):
+    row = conn.execute("SELECT * FROM gallery_assets WHERE id = ?", (asset_id,)).fetchone()
+    return None if row is None else _gallery_asset_from_row(row)
+
+
+def list_gallery_assets(conn: sqlite3.Connection, project_id: str, *, q: str = "", mime: str = "", limit: int = 100, offset: int = 0):
+    clauses = ["project_id = ?"]
+    vals: list[Any] = [project_id]
+    if q and q.strip():
+        like = f"%{q.strip()[:200]}%"; clauses.append("(name LIKE ? OR source LIKE ?)"); vals.extend([like, like])
+    if mime and mime.strip():
+        clauses.append("mime_type LIKE ?"); vals.append(f"{mime.strip()}%")
+    where = "WHERE " + " AND ".join(clauses)
+    total = conn.execute(f"SELECT COUNT(*) AS n FROM gallery_assets {where}", vals).fetchone()["n"]
+    rows = conn.execute(
+        f"SELECT * FROM gallery_assets {where} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+        [*vals, max(1, min(int(limit or 100), 200)), max(0, int(offset or 0))],
+    ).fetchall()
+    return [_gallery_asset_from_row(r) for r in rows], int(total or 0)
+
+
+def delete_gallery_asset(conn: sqlite3.Connection, asset_id: str) -> bool:
+    row = conn.execute("SELECT project_id FROM gallery_assets WHERE id = ?", (asset_id,)).fetchone()
+    if row is None: return False
+    conn.execute("DELETE FROM gallery_assets WHERE id = ?", (asset_id,))
+    conn.commit()
+    record_event(conn, row["project_id"], "gallery", asset_id, "gallery.deleted")
+    return True
+
 
 
 def delete_library_doc(conn: sqlite3.Connection, doc_id: str) -> bool:

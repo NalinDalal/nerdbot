@@ -13,6 +13,7 @@ import type { ChatThread, Project } from "./types";
 import { ConversationView } from "./views-chat";
 import { ApprovalsView } from "./views-approvals";
 import { LibraryView, LibraryDocView } from "./views-library";
+import { GalleryView } from "./views-gallery";
 import { CapabilitiesView } from "./views-projects";
 import { ProjectDetailView } from "./views-project";
 import { ProjectsView } from "./views-projects";
@@ -45,6 +46,7 @@ export type Route =
   | { name: "bots" }
   | { name: "library" }
   | { name: "libraryDoc"; docId: string }
+  | { name: "gallery" }
   | { name: "approvals" };
 
 export function parseRoute(): Route {
@@ -101,6 +103,7 @@ export function parseRoute(): Route {
   if (parts[0] === "library") {
     return parts[1] ? { name: "libraryDoc", docId: parts[1] } : { name: "library" };
   }
+  if (parts[0] === "gallery") return { name: "gallery" };
   if (parts[0] === "approvals") return { name: "approvals" };
   return { name: "home" };
 }
@@ -121,6 +124,7 @@ const NAV_ICONS: Record<string, string> = {
   teams: "M5.5 13.5V9.5h5v4M2 13.5V7l6-3 6 3v6.5M6.5 7h3",
   boards: "M2.5 3.5h11v9h-11zM5.5 3.5v9M10.5 3.5v9",
   library: "M2.5 3.5h3v9h-3zM6.5 3.5h3v9h-3zM10.9 4.1l2.6.7-2.3 8.3-2.6-.7z",
+  gallery: "M3 3h10v10H3zM5 10l2-2 2 2 2-3 2 3M5.5 6.5a1 1 0 1 0 0-2 1 1 0 0 0 0 2z",
   settings: "M8 5.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8ZM8 1.5v1.4M8 13.1v1.4M1.5 8h1.4M13.1 8h1.4M3.4 3.4l1 1M11.6 11.6l1 1M12.6 3.4l-1 1M4.4 11.6l-1 1",
 };
 
@@ -335,6 +339,12 @@ function Sidebar({
                 icon="library"
                 active={route.name === "library" || route.name === "libraryDoc"}
                 onClick={() => onNavigate("/library")}
+              />
+              <NavItem
+                label="Gallery"
+                icon="gallery"
+                active={route.name === "gallery"}
+                onClick={() => onNavigate("/gallery")}
               />
               <NavItem
                 label="Boards"
@@ -582,6 +592,9 @@ export default function App() {
       break;
     case "libraryDoc":
       content = <LibraryDocView docId={route.docId} />;
+      break;
+    case "gallery":
+      content = <GalleryView />;
       break;
     default:
       content = (

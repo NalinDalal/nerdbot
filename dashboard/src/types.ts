@@ -171,15 +171,21 @@ export interface LibraryDoc {
   project_id: string;
   /** note | doc | upload — how the document arrived. */
   kind: string;
+  /** md | html | csv | text */
+  format?: string;
   title: string;
   content: string;
-  /** Where the content came from (upload filename, "note", …). */
+  /** Where the content came from (upload filename, "note", research job, …). */
   source: string;
   /** Teammate that last wrote it ("" = the owner). */
   teammate_id: string;
   /** True when a bot has written this content; only an owner edit clears it. */
   tainted: boolean;
   version: number;
+  thread_id?: string;
+  task_id?: string;
+  job_id?: string;
+  metadata?: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 }
@@ -193,6 +199,8 @@ export interface LibraryDocVersion {
   source: string;
   teammate_id: string;
   tainted: boolean;
+  format?: string;
+  metadata?: Record<string, unknown>;
   created_at: string;
 }
 
@@ -202,6 +210,21 @@ export interface LibraryDocAccess {
   teammate_id: string;
   /** read | write — a missing row means no access at all. */
   access: string;
+  created_at: string;
+}
+
+export interface GalleryAsset {
+  id: string;
+  project_id: string;
+  name: string;
+  mime_type: string;
+  size: number;
+  source: string;
+  thread_id?: string;
+  task_id?: string;
+  doc_id?: string;
+  storage_path?: string;
+  metadata?: Record<string, unknown>;
   created_at: string;
 }
 

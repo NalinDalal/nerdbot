@@ -3023,11 +3023,9 @@ def create_app() -> FastAPI:
     # -- Library ----------------------------------------------------------------
 
     def _library_error(exc: Exception) -> HTTPException:
-        """Map a library failure to the HTTP status it owes the caller.
-
-        Policy denials are 403, gate results keep their own mapping (403 or
-        409-with-approval), missing rows 404, bad input 400.
-        """
+        """Map a library failure to the HTTP status it owes the caller."""
+        if isinstance(exc, store.LibraryConflictError):
+            return HTTPException(status_code=409, detail={"message": str(exc), "conflict": True})
         if isinstance(exc, library_mod.AccessDenied):
             return HTTPException(status_code=403, detail=str(exc))
         if isinstance(exc, (gates_mod.GateDenied, gates_mod.GateApprovalRequired)):
@@ -3039,6 +3037,7 @@ def create_app() -> FastAPI:
         return HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}")
 
     _LIBRARY_ERRORS = (
+        store.LibraryConflictError,
         library_mod.AccessDenied,
         gates_mod.GateDenied,
         gates_mod.GateApprovalRequired,
@@ -3049,7 +3048,6 @@ def create_app() -> FastAPI:
     def _library_doc_or_404(
         conn: sqlite3.Connection, doc_id: str, principal: str
     ) -> Any:
-        """Load a document and enforce that the caller owns its project."""
         doc = store.get_library_doc(conn, doc_id)
         if doc is None:
             raise HTTPException(status_code=404, detail="document not found")
@@ -3057,12 +3055,19 @@ def create_app() -> FastAPI:
         return doc
 
     def _opt_str(body: dict[str, Any], key: str) -> str | None:
-        """A present string field, None when absent/null. Rejects other types."""
         if key not in body or body[key] is None:
             return None
         if not isinstance(body[key], str):
             raise HTTPException(status_code=400, detail=f"{key} must be a string")
         return body[key]
+
+    def _opt_int(body: dict[str, Any], key: str) -> int | None:
+        if key not in body or body[key] is None:
+            return None
+        try:
+            return int(body[key])
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"{key} must be an integer") from exc
 
     @app.get("/projects/{project_id}/library")
     def list_library(
@@ -3071,13 +3076,10 @@ def create_app() -> FastAPI:
         principal: str = Depends(principal_from_header),
         acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
     ) -> dict[str, Any]:
-        """Documents the caller may see: all for the owner, only ACL'd for a bot."""
         require_project_owner(conn, project_id, principal)
         try:
             if acting is not None:
-                gates_mod.require(
-                    conn, acting, "knowledge.read", payload={"project_id": project_id}
-                )
+                gates_mod.require(conn, acting, "knowledge.read", payload={"project_id": project_id})
             docs = library_mod.list_visible(conn, project_id, acting)
         except _LIBRARY_ERRORS as exc:
             raise _library_error(exc) from exc
@@ -3098,9 +3100,14 @@ def create_app() -> FastAPI:
                 project_id,
                 acting,
                 kind=str(body.get("kind", "note") or "note"),
+                format=_opt_str(body, "format"),
                 title=str(body.get("title", "") or ""),
                 content=str(body.get("content", "") or ""),
                 source=str(body.get("source", "") or ""),
+                thread_id=str(body.get("thread_id", "") or ""),
+                task_id=str(body.get("task_id", "") or ""),
+                job_id=str(body.get("job_id", "") or ""),
+                metadata=body.get("metadata") if isinstance(body.get("metadata"), dict) else {},
             )
         except _LIBRARY_ERRORS as exc:
             raise _library_error(exc) from exc
@@ -3115,13 +3122,6 @@ def create_app() -> FastAPI:
         principal: str = Depends(principal_from_header),
         acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
     ) -> dict[str, Any]:
-        """Turn a UTF-8 text file (≤1MiB) into an uploaded document.
-
-        The file arrives as the raw request body (``text/plain``) with its
-        name in ``?filename=`` — no multipart dependency — and is read with
-        a hard cap so an oversized upload is refused while streaming instead
-        of being buffered whole.
-        """
         require_project_owner(conn, project_id, principal)
         cap = library_mod.MAX_UPLOAD_BYTES
         chunks: list[bytes] = []
@@ -3134,14 +3134,10 @@ def create_app() -> FastAPI:
         raw = b"".join(chunks)
         try:
             source, content = library_mod.parse_upload(filename, raw)
+            fmt = "csv" if (filename or source).lower().endswith(".csv") else ("html" if (filename or source).lower().endswith((".html", ".htm")) else "md")
             doc = library_mod.create_doc(
-                conn,
-                project_id,
-                acting,
-                kind="upload",
-                title=source[: store.LIBRARY_MAX_TITLE_CHARS],
-                content=content,
-                source=source,
+                conn, project_id, acting, kind="upload", format=fmt,
+                title=source[: store.LIBRARY_MAX_TITLE_CHARS], content=content, source=source,
             )
         except _LIBRARY_ERRORS as exc:
             raise _library_error(exc) from exc
@@ -3169,14 +3165,20 @@ def create_app() -> FastAPI:
         principal: str = Depends(principal_from_header),
         acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
     ) -> dict[str, Any]:
+        """Save/autosave. Pass expected_version for optimistic concurrency."""
         doc = _library_doc_or_404(conn, doc_id, principal)
         try:
             updated = library_mod.save_doc(
-                conn,
-                doc,
-                acting,
+                conn, doc, acting,
                 title=_opt_str(body, "title"),
                 content=_opt_str(body, "content"),
+                format=_opt_str(body, "format"),
+                source=_opt_str(body, "source"),
+                thread_id=_opt_str(body, "thread_id"),
+                task_id=_opt_str(body, "task_id"),
+                job_id=_opt_str(body, "job_id"),
+                metadata=body.get("metadata") if "metadata" in body and isinstance(body.get("metadata"), dict) else None,
+                expected_version=_opt_int(body, "expected_version"),
             )
         except _LIBRARY_ERRORS as exc:
             raise _library_error(exc) from exc
@@ -3195,6 +3197,82 @@ def create_app() -> FastAPI:
         except _LIBRARY_ERRORS as exc:
             raise _library_error(exc) from exc
         return {"deleted": doc_id}
+
+    @app.get("/library/{doc_id}/export")
+    def export_library_doc(
+        doc_id: str,
+        format: str = "md",
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ):
+        from fastapi.responses import Response
+        import html as _html
+        doc = _library_doc_or_404(conn, doc_id, principal)
+        try:
+            library_mod.require_read(conn, doc, acting)
+        except _LIBRARY_ERRORS as exc:
+            raise _library_error(exc) from exc
+        fmt = (format or doc.format or "md").lower()
+        content = doc.content or ""
+        title = (doc.title or "document").strip() or "document"
+        safe_name = "".join(c if c.isalnum() or c in "._- " else "_" for c in title)[:80] or "document"
+        if fmt == "csv":
+            out = content
+            ctype = "text/csv; charset=utf-8"; ext = "csv"
+        elif fmt == "html":
+            if (doc.format or "md") == "html":
+                body = content
+            else:
+                body = "<pre>" + _html.escape(content) + "</pre>"
+            out = "<!doctype html><html><head><meta charset='utf-8'><title>" + _html.escape(title) + "</title></head><body>" + body + "</body></html>"
+            ctype = "text/html; charset=utf-8"; ext = "html"
+        else:
+            out = content; ctype = "text/markdown; charset=utf-8"; ext = "md"
+        return Response(content=out, media_type=ctype, headers={"Content-Disposition": f'attachment; filename="{safe_name}.{ext}"'})
+
+    @app.post("/library/{doc_id}/ai-suggest")
+    def ai_suggest_library_doc(
+        doc_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        """Return a suggested revision/diff (not applied). Respects read access."""
+        doc = _library_doc_or_404(conn, doc_id, principal)
+        try:
+            library_mod.require_read(conn, doc, acting)
+        except _LIBRARY_ERRORS as exc:
+            raise _library_error(exc) from exc
+        instruction = str(body.get("instruction", "") or "").strip()
+        if not instruction:
+            raise HTTPException(status_code=400, detail="instruction is required")
+        try:
+            provider = chat_mod.resolve_chat_provider(conn, doc.project_id, None)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"no provider available: {exc}") from exc
+        if provider is None:
+            raise HTTPException(status_code=400, detail="no chat provider available for AI suggestions")
+        prompt = (
+            "You are an editing assistant. Revise the document according to the user's instruction. "
+            "Return ONLY the full revised document content, with no explanation or code fences.\n\n"
+            f"Instruction: {instruction}\n\n"
+            f"Current document (format={doc.format}):\n{(doc.content or '')[:12000]}"
+        )
+        try:
+            suggested = chat_mod.chat_complete(provider, [{"role": "user", "content": prompt}]).strip()
+        except Exception as exc:
+            mapped = _chat_error_to_http(exc)
+            raise mapped from exc
+        import difflib
+        before = (doc.content or "").splitlines()
+        after = (suggested or "").splitlines()
+        diff = "\n".join(difflib.unified_diff(before, after, fromfile="current", tofile="suggested", lineterm=""))
+        attribution = {"actor": acting.id if acting else principal, "actor_type": "teammate" if acting else "owner"}
+        if acting is not None and acting.provider_id:
+            attribution["provider_id"] = acting.provider_id
+        return {"doc_id": doc.id, "version": doc.version, "suggested_content": suggested, "diff": diff, "attribution": attribution}
 
     @app.get("/library/{doc_id}/versions")
     def list_library_versions(
@@ -3279,6 +3357,113 @@ def create_app() -> FastAPI:
         except _LIBRARY_ERRORS as exc:
             raise _library_error(exc) from exc
         return {"access": [r.model_dump(mode="json") for r in rows]}
+
+    # -- Gallery (Phase 4: view/manage assets, no editing/OCR) -----------------
+
+    @app.get("/projects/{project_id}/gallery")
+    def list_gallery(
+        project_id: str,
+        q: str = "",
+        mime: str = "",
+        limit: int = 100,
+        offset: int = 0,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        assets, total = store.list_gallery_assets(conn, project_id, q=q, mime=mime, limit=limit, offset=offset)
+        return {"assets": [a.model_dump(mode="json") for a in assets], "total": total}
+
+    @app.post("/projects/{project_id}/gallery")
+    async def upload_gallery_asset(
+        project_id: str,
+        request: Request,
+        filename: str = "asset",
+        mime_type: str = "",
+        thread_id: str = "",
+        task_id: str = "",
+        doc_id: str = "",
+        source: str = "",
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        import mimetypes
+        from pathlib import Path
+        require_project_owner(conn, project_id, principal)
+        cap = store.GALLERY_MAX_BYTES
+        chunks: list[bytes] = []
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > cap:
+                raise HTTPException(status_code=413, detail="asset exceeds size limit")
+            chunks.append(chunk)
+        raw = b"".join(chunks)
+        name = (filename or "asset").strip() or "asset"
+        mtype = mime_type or mimetypes.guess_type(name)[0] or "application/octet-stream"
+        root = Path(_data_dir()) / "gallery" / project_id
+        root.mkdir(parents=True, exist_ok=True)
+        aid = store.new_id("ast")
+        safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in name)[:120] or "asset"
+        path = root / f"{aid}_{safe}"
+        path.write_bytes(raw)
+        try:
+            asset = store.create_gallery_asset(
+                conn, project_id, name=name, mime_type=mtype, size=size, storage_path=str(path),
+                source=source or name, thread_id=thread_id or "", task_id=task_id or "", doc_id=doc_id or "",
+            )
+        except Exception:
+            try: path.unlink(missing_ok=True)
+            except Exception: pass
+            raise
+        return asset.model_dump(mode="json")
+
+    @app.get("/gallery/{asset_id}")
+    def get_gallery_asset(
+        asset_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        asset = store.get_gallery_asset(conn, asset_id)
+        if asset is None:
+            raise HTTPException(status_code=404, detail="asset not found")
+        require_project_owner(conn, asset.project_id, principal)
+        return asset.model_dump(mode="json")
+
+    @app.get("/gallery/{asset_id}/content")
+    def get_gallery_asset_content(
+        asset_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ):
+        from fastapi.responses import FileResponse
+        asset = store.get_gallery_asset(conn, asset_id)
+        if asset is None:
+            raise HTTPException(status_code=404, detail="asset not found")
+        require_project_owner(conn, asset.project_id, principal)
+        path = Path(asset.storage_path)
+        if not path.exists() or not path.is_file():
+            raise HTTPException(status_code=404, detail="asset file missing")
+        return FileResponse(str(path), media_type=asset.mime_type or "application/octet-stream", filename=asset.name or "asset")
+
+    @app.delete("/gallery/{asset_id}")
+    def delete_gallery_asset(
+        asset_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        from pathlib import Path
+        asset = store.get_gallery_asset(conn, asset_id)
+        if asset is None:
+            raise HTTPException(status_code=404, detail="asset not found")
+        require_project_owner(conn, asset.project_id, principal)
+        store.delete_gallery_asset(conn, asset_id)
+        try:
+            if asset.storage_path:
+                Path(asset.storage_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+        return {"deleted": True, "id": asset_id}
 
 
     # -- Skills (Phase 3) ------------------------------------------------------

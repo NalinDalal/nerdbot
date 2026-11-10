@@ -19,6 +19,7 @@ import type {
   LibraryDoc,
   LibraryDocAccess,
   LibraryDocVersion,
+  GalleryAsset,
   MemoryEntry,
   MemoryProvenance,
   Notification,
@@ -156,32 +157,28 @@ function joinUrl(base: string, path: string): string {
 
 async function req<T>(
   path: string,
-  options: { method?: string; body?: unknown; textBody?: string } = {},
+  options: { method?: string; body?: unknown; textBody?: string; rawBody?: BodyInit; contentType?: string } = {},
 ): Promise<T> {
-  // getSession (not the bare module var) so a request path keeps working
-  // after a full page reload restores the session from localStorage.
   const current = getSession();
   if (!current) throw new ApiError(0, "Not connected. Enter your API token first.");
   let res: Response;
   try {
-    // textBody sends the payload verbatim (text/plain) — used by the
-    // Library upload, which posts a file's contents as the raw body.
+    const method = options.method ?? (options.textBody !== undefined || options.rawBody !== undefined || options.body !== undefined ? "POST" : "GET");
+    const headers: Record<string, string> = { Authorization: `Bearer ${current.token}` };
+    if (options.textBody !== undefined) headers["Content-Type"] = "text/plain";
+    else if (options.rawBody !== undefined) { if (options.contentType) headers["Content-Type"] = options.contentType; }
+    else if (options.body !== undefined) headers["Content-Type"] = "application/json";
     res = await fetch(joinUrl(current.baseUrl, path), {
-      method: options.method ?? (options.textBody !== undefined ? "POST" : "GET"),
-      headers: {
-        Authorization: `Bearer ${current.token}`,
-        ...(options.textBody !== undefined
-          ? { "Content-Type": "text/plain" }
-          : options.body !== undefined
-            ? { "Content-Type": "application/json" }
-            : {}),
-      },
+      method,
+      headers,
       body:
         options.textBody !== undefined
           ? options.textBody
-          : options.body !== undefined
-            ? JSON.stringify(options.body)
-            : undefined,
+          : options.rawBody !== undefined
+            ? options.rawBody
+            : options.body !== undefined
+              ? JSON.stringify(options.body)
+              : undefined,
     });
   } catch (err) {
     throw new ApiError(0, err instanceof Error ? `Network error: ${err.message}` : "Network error");
@@ -193,8 +190,6 @@ async function req<T>(
     data = {};
   }
   if (!res.ok) {
-    // Server errors carry either a plain string detail or, for gated bot
-    // actions, {detail: {message, approval}} — keep both readable.
     let detail = `Request failed (${res.status})`;
     let approval: unknown;
     const raw =
@@ -204,7 +199,7 @@ async function req<T>(
     if (typeof raw === "string") {
       detail = raw;
     } else if (raw && typeof raw === "object") {
-      const obj = raw as { message?: unknown; approval?: unknown };
+      const obj = raw as { message?: unknown; approval?: unknown; conflict?: unknown };
       if (typeof obj.message === "string") detail = obj.message;
       approval = obj.approval;
     }
@@ -525,7 +520,7 @@ export const api = {
   // teammate) are enforced server-side; the dashboard is the owner's UI.
   listLibrary: (projectId: string) =>
     req<{ docs: LibraryDoc[] }>(`/projects/${projectId}/library`),
-  createLibraryDoc: (projectId: string, body: { kind?: string; title: string; content?: string; source?: string }) =>
+  createLibraryDoc: (projectId: string, body: Record<string, unknown>) =>
     post<LibraryDoc>(`/projects/${projectId}/library`, body),
   uploadLibraryDoc: (projectId: string, filename: string, text: string) =>
     req<LibraryDoc>(
@@ -533,7 +528,7 @@ export const api = {
       { textBody: text },
     ),
   getLibraryDoc: (docId: string) => req<LibraryDoc>(`/library/${docId}`),
-  patchLibraryDoc: (docId: string, body: { title?: string; content?: string }) =>
+  patchLibraryDoc: (docId: string, body: Record<string, unknown>) =>
     patch<LibraryDoc>(`/library/${docId}`, body),
   deleteLibraryDoc: (docId: string) =>
     req<{ deleted: string }>(`/library/${docId}`, { method: "DELETE" }),
@@ -552,6 +547,34 @@ export const api = {
     req<{ access: LibraryDocAccess[] }>(`/library/${docId}/access/${teammateId}`, {
       method: "DELETE",
     }),
+  exportLibraryDocUrl: (docId: string, format = "md", token = "") => {
+    const base = (getSession()?.baseUrl || "").replace(/\/+$/, "");
+    return `${base}/library/${docId}/export?format=${encodeURIComponent(format)}${token ? `&token=${encodeURIComponent(token)}` : ""}`;
+  },
+  aiSuggestLibraryDoc: (docId: string, instruction: string) =>
+    post<{ doc_id: string; version: number; suggested_content: string; diff: string; attribution: Record<string, unknown> }>(`/library/${docId}/ai-suggest`, { instruction }),
+  // -- Gallery (Phase 4) -----------------------------------------------------
+  listGallery: (projectId: string, params?: { q?: string; mime?: string; limit?: number; offset?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.q) q.set("q", params.q);
+    if (params?.mime) q.set("mime", params.mime);
+    if (params?.limit) q.set("limit", String(params.limit));
+    if (params?.offset) q.set("offset", String(params.offset));
+    const s = q.toString();
+    return req<{ assets: GalleryAsset[]; total: number }>(`/projects/${projectId}/gallery${s ? `?${s}` : ""}`);
+  },
+  uploadGalleryAsset: (projectId: string, file: File, meta?: { thread_id?: string; task_id?: string; doc_id?: string; source?: string }) =>
+    file.arrayBuffer().then((buf) =>
+      req<GalleryAsset>(
+        `/projects/${projectId}/gallery?filename=${encodeURIComponent(file.name)}&mime_type=${encodeURIComponent(file.type || "")}&thread_id=${encodeURIComponent(meta?.thread_id || "")}&task_id=${encodeURIComponent(meta?.task_id || "")}&doc_id=${encodeURIComponent(meta?.doc_id || "")}&source=${encodeURIComponent(meta?.source || "")}`,
+        { method: "POST", rawBody: buf, contentType: file.type || "application/octet-stream" },
+      ),
+    ),
+  galleryAssetContentUrl: (assetId: string, token = "") => {
+    const base = (getSession()?.baseUrl || "").replace(/\/+$/, "");
+    return `${base}/gallery/${assetId}/content${token ? `?token=${encodeURIComponent(token)}` : ""}`;
+  },
+  deleteGalleryAsset: (assetId: string) => req<{ deleted: boolean }>(`/gallery/${assetId}`, { method: "DELETE" }),
 
   schedulePresets: () => req<{ presets: Array<{ id: string; cron: string; label: string }> }>("/schedules/presets"),
   listSchedules: (projectId: string) =>

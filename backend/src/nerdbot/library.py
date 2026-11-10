@@ -100,9 +100,14 @@ def create_doc(
     acting: Teammate | None,
     *,
     kind: str = "note",
+    format: str | None = None,
     title: str = "",
     content: str = "",
     source: str = "",
+    thread_id: str = "",
+    task_id: str = "",
+    job_id: str = "",
+    metadata: dict | None = None,
 ) -> LibraryDoc:
     """Create a document, applying taint rules and granting the creator."""
     if acting is not None:
@@ -112,12 +117,11 @@ def create_doc(
         )
     teammate_id, tainted = save_rules(acting)
     doc = store.create_library_doc(
-        conn, project_id, kind=kind, title=title, content=content,
+        conn, project_id, kind=kind, format=format, title=title, content=content,
         source=source, teammate_id=teammate_id, tainted=tainted,
+        thread_id=thread_id, task_id=task_id, job_id=job_id, metadata=metadata or {},
     )
     if acting is not None:
-        # The creator can come back to what it wrote; without this row its
-        # own document would be invisible to it on the next request.
         store.set_library_doc_access(conn, doc.id, acting.id, "write")
     return doc
 
@@ -129,13 +133,21 @@ def save_doc(
     *,
     title: str | None = None,
     content: str | None = None,
+    format: str | None = None,
+    source: str | None = None,
+    thread_id: str | None = None,
+    task_id: str | None = None,
+    job_id: str | None = None,
+    metadata: dict | None = None,
+    expected_version: int | None = None,
 ) -> LibraryDoc:
     """Edit a document under write access and the taint rules."""
     require_write(conn, doc, acting)
     teammate_id, tainted = save_rules(acting)
     return store.update_library_doc(
-        conn, doc.id, title=title, content=content,
-        teammate_id=teammate_id, tainted=tainted,
+        conn, doc.id, title=title, content=content, format=format, source=source,
+        thread_id=thread_id, task_id=task_id, job_id=job_id, metadata=metadata,
+        teammate_id=teammate_id, tainted=tainted, expected_version=expected_version,
     )
 
 
@@ -150,7 +162,9 @@ def restore_version(
     teammate_id, tainted = save_rules(acting, version=saved)
     return store.update_library_doc(
         conn, doc.id, title=saved.title, content=saved.content,
-        source=saved.source, teammate_id=teammate_id, tainted=tainted,
+        source=saved.source, format=getattr(saved, "format", doc.format),
+        metadata=getattr(saved, "metadata", doc.metadata),
+        teammate_id=teammate_id, tainted=tainted,
     )
 
 
