@@ -147,7 +147,7 @@ export function ThemeButton({ onThemeChange }: { onThemeChange: (t: Theme) => vo
         setIndex(next);
         onThemeChange(cycle[next]);
       }}
-      className="inline-flex items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1.5 text-step--1 text-[var(--text-soft)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-1"
+      className="inline-flex items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1.5 text-step--1 text-[var(--text-soft)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--bg)]"
       aria-label={`Theme: ${label}`}
       title={label}
     >
@@ -696,7 +696,7 @@ export function Button({
   ariaLabel?: string;
 }) {
   const base =
-    "inline-flex items-center justify-center gap-1.5 rounded-md border px-3 py-1.5 text-step--1 font-medium transition-[background-color,border-color,color,transform] duration-150 ease-out active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-1 max-lg:min-h-11";
+    "inline-flex items-center justify-center gap-1.5 rounded-md border px-3 py-1.5 text-step--1 font-medium transition-[background-color,border-color,color,transform] duration-150 ease-out active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--bg)] max-lg:min-h-11";
   const variants: Record<string, string> = {
     default:
       "border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] hover:border-[var(--faint)] hover:text-[var(--text)]",

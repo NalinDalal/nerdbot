@@ -162,7 +162,7 @@ function NavItem({
     <button
       onClick={onClick}
       aria-current={active ? "page" : undefined}
-      className={`relative flex w-full items-center gap-2.5 rounded-md py-1.5 pl-3 pr-2.5 text-left text-step--1 transition-colors ${
+      className={`relative flex w-full items-center gap-2.5 rounded-md py-1.5 pl-3 pr-2.5 text-left text-step--1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-inset ${
         active
           ? "bg-[var(--surface-2)] text-[var(--text)]"
           : "text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text-soft)]"
@@ -256,13 +256,13 @@ function Sidebar({
     {
       label: "Workspaces",
       icon: "projects",
-      routes: ["projects", "project"],
+      routes: ["projects", "project", "workbench"],
       href: "/projects",
     },
     {
       label: "Team",
       icon: "teammates",
-      routes: ["bots", "bot"],
+      routes: ["bots", "bot", "teams", "team"],
       href: "/bots",
     },
     {
@@ -271,6 +271,12 @@ function Sidebar({
       routes: ["activity", "work", "task", "approvals"],
       href: "/activity",
       badge: nav.pendingApprovals,
+    },
+    {
+      label: "Library",
+      icon: "library",
+      routes: ["library", "libraryDoc", "gallery"],
+      href: "/library",
     },
     {
       label: "Settings",
@@ -302,7 +308,7 @@ function Sidebar({
 
         <button
           onClick={() => onNavigate("/")}
-          className="mb-4 flex w-full items-center justify-center gap-2 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step--1 font-medium text-[var(--text-soft)] transition-colors hover:border-[var(--faint)] hover:text-[var(--text)]"
+          className="mb-4 flex w-full items-center justify-center gap-2 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step--1 font-medium text-[var(--text-soft)] transition-colors hover:border-[var(--faint)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-inset"
         >
           <span aria-hidden className="text-[var(--accent)]">+</span>
           New chat
@@ -321,13 +327,13 @@ function Sidebar({
           ))}
         </nav>
 
-        {/* Advanced surfaces: preserved but demoted from primary nav. */}
+        {/* Advanced/contextual surfaces: preserved, not primary. */}
         <div className="mt-2">
           <button
             type="button"
             aria-expanded={advancedOpen}
             onClick={() => setAdvancedOpen((v) => !v)}
-            className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left text-step--2 font-medium uppercase tracking-[0.16em] text-[var(--faint)] transition-colors hover:text-[var(--text-soft)]"
+            className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left text-step--2 font-medium uppercase tracking-[0.16em] text-[var(--faint)] transition-colors hover:text-[var(--text-soft)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-inset"
           >
             <span aria-hidden>{advancedOpen ? "▾" : "▸"}</span>
             Advanced
@@ -335,16 +341,10 @@ function Sidebar({
           {advancedOpen ? (
             <div className="mt-0.5 flex flex-col gap-0.5">
               <NavItem
-                label="Library"
-                icon="library"
-                active={route.name === "library" || route.name === "libraryDoc"}
-                onClick={() => onNavigate("/library")}
-              />
-              <NavItem
-                label="Gallery"
-                icon="gallery"
-                active={route.name === "gallery"}
-                onClick={() => onNavigate("/gallery")}
+                label="Teams & groups"
+                icon="teams"
+                active={route.name === "teams" || route.name === "team"}
+                onClick={() => onNavigate("/teams")}
               />
               <NavItem
                 label="Boards"
@@ -353,10 +353,10 @@ function Sidebar({
                 onClick={() => onNavigate("/boards")}
               />
               <NavItem
-                label="Teams"
-                icon="teams"
-                active={route.name === "teams" || route.name === "team"}
-                onClick={() => onNavigate("/teams")}
+                label="Gallery"
+                icon="gallery"
+                active={route.name === "gallery"}
+                onClick={() => onNavigate("/gallery")}
               />
               <NavItem
                 label="Workbench"
@@ -365,7 +365,7 @@ function Sidebar({
                 onClick={() => onNavigate("/workbench")}
               />
               <NavItem
-                label="Approvals"
+                label="Approvals inbox"
                 icon="approvals"
                 active={route.name === "approvals"}
                 onClick={() => onNavigate("/approvals")}
@@ -634,7 +634,7 @@ export default function App() {
 
       <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden pb-14 md:pb-0">
         <button
-          className="fixed top-3 left-3 z-40 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] transition-colors hover:border-[var(--faint)] focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-1 focus-visible:outline-none md:hidden"
+          className="fixed top-3 left-3 z-40 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] transition-colors hover:border-[var(--faint)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--bg)] md:hidden"
           aria-label="Open navigation"
           onClick={() => setDrawerOpen(true)}
         >
@@ -644,15 +644,15 @@ export default function App() {
         <Toaster position="bottom-right" richColors closeButton />
       </main>
 
-      {/* Mobile bottom navigation for the five primary destinations. */}
+      {/* Mobile bottom navigation for primary destinations (Library via drawer/more contexts). */}
       <nav
         aria-label="Primary"
         className="fixed inset-x-0 bottom-0 z-40 flex items-stretch border-t border-[var(--border-dim)] bg-[var(--bg)]/95 backdrop-blur md:hidden"
       >
         {[
           { label: "Chat", icon: "home", href: "/", routes: ["home", "chat"] },
-          { label: "Workspaces", icon: "projects", href: "/projects", routes: ["projects", "project"] },
-          { label: "Team", icon: "teammates", href: "/bots", routes: ["bots", "bot"] },
+          { label: "Workspaces", icon: "projects", href: "/projects", routes: ["projects", "project", "workbench"] },
+          { label: "Team", icon: "teammates", href: "/bots", routes: ["bots", "bot", "teams", "team"] },
           { label: "Activity", icon: "work", href: "/activity", routes: ["activity", "work", "task", "approvals"] },
           { label: "Settings", icon: "settings", href: "/settings", routes: ["settings", "capabilities"] },
         ].map((item) => {
@@ -666,7 +666,7 @@ export default function App() {
                 navigate(item.href);
               }}
               aria-current={active ? "page" : undefined}
-              className={`flex flex-1 flex-col items-center justify-center gap-0.5 py-2 text-step--2 transition-colors ${
+              className={`flex flex-1 flex-col items-center justify-center gap-0.5 py-2 text-step--2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-inset ${
                 active ? "text-[var(--accent)]" : "text-[var(--muted)]"
               }`}
             >
