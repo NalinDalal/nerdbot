@@ -628,6 +628,15 @@ export const api = {
     const s = q.toString();
     return req<{ entries: MemoryEntry[]; total?: number; limit?: number; offset?: number }>(`/projects/${projectId}/memory${s ? `?${s}` : ""}`);
   },
+  listMemory: (scope: string, params?: { q?: string; tier?: string; pinned?: boolean; limit?: number; offset?: number }) => {
+    const q = new URLSearchParams({ scope });
+    if (params?.q) q.set("q", params.q);
+    if (params?.tier) q.set("tier", params.tier);
+    if (params?.pinned !== undefined) q.set("pinned", String(params.pinned));
+    if (params?.limit) q.set("limit", String(params.limit));
+    if (params?.offset) q.set("offset", String(params.offset));
+    return req<{ entries: MemoryEntry[]; total?: number; limit?: number; offset?: number }>(`/memory?${q.toString()}`);
+  },
   writeProjectMemory: (projectId: string, body: Record<string, unknown>) =>
     post<MemoryEntry>(`/projects/${projectId}/memory`, body),
   patchMemory: (memoryId: string, body: Record<string, unknown>) =>

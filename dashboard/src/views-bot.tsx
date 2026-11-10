@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { ApiError, api } from "./api";
 import { describeError, navigate, notifyError } from "./app";
@@ -26,11 +26,159 @@ import {
   Badge,
   ERROR_BOX,
   FORM_INPUT,
+  FORM_SELECT,
   Field,
   TABLE_SHELL,
   TABLE_TD,
   TABLE_TH,
 } from "./components";
+
+function TeammateMemorySection({ teammateId }: { teammateId: string }) {
+  const scope = `teammate:${teammateId}`;
+  const [q, setQ] = useState("");
+  const [tier, setTier] = useState("");
+  const [pinnedOnly, setPinnedOnly] = useState(false);
+  const [page, setPage] = useState(0);
+  const [showWrite, setShowWrite] = useState(false);
+  const [edit, setEdit] = useState<MemoryEntry | null>(null);
+  const [data, setData] = useState<{ entries: MemoryEntry[]; total: number } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const limit = 20;
+
+  const reload = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.listMemory(scope, {
+        q: q || undefined,
+        tier: tier || undefined,
+        pinned: pinnedOnly || undefined,
+        limit,
+        offset: page * limit,
+      });
+      setData({ entries: res.entries || [], total: res.total ?? (res.entries || []).length });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { void reload(); }, [teammateId, q, tier, pinnedOnly, page]);
+  useEffect(() => { setPage(0); }, [q, tier, pinnedOnly, teammateId]);
+
+  const act = async (fn: () => Promise<unknown>) => {
+    try { await fn(); await reload(); } catch (err) { notifyError(err); }
+  };
+
+  const entries = data?.entries ?? [];
+  const total = data?.total ?? entries.length;
+
+  return (
+    <div>
+      <div className="mb-2 flex items-center justify-between">
+        <SectionLabel>Private memory</SectionLabel>
+      </div>
+      <p className="mb-3 max-w-[72ch] text-step--1 text-[var(--muted)]">
+        Only this bot reads and writes this memory. Notes here are recalled in its future runs as untrusted context with provenance.
+      </p>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <Button variant="primary" onClick={() => setShowWrite(true)}>Remember something</Button>
+        <Button onClick={() => void reload()}>Refresh</Button>
+        <Button variant="ghost" onClick={() => void act(() => api.pruneMemory(scope, { keep: 200 }))}>Retention prune</Button>
+        <input className={`${FORM_INPUT} max-w-xs`} placeholder="Search memories" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search teammate memories" />
+        <select className={FORM_SELECT} value={tier} onChange={(e) => setTier(e.target.value)} aria-label="Tier filter">
+          <option value="">All tiers</option>
+          <option value="raw">raw</option>
+          <option value="typed">typed</option>
+          <option value="wisdom">wisdom</option>
+        </select>
+        <label className="flex items-center gap-1.5 text-step--1 text-[var(--muted)]">
+          <input type="checkbox" checked={pinnedOnly} onChange={(e) => setPinnedOnly(e.target.checked)} /> Pinned
+        </label>
+      </div>
+
+      {showWrite ? (
+        <Modal title="Add teammate memory" onClose={() => setShowWrite(false)}>
+          <form className="flex flex-col gap-3" onSubmit={async (e) => {
+            e.preventDefault();
+            const fd = new FormData(e.currentTarget);
+            try {
+              await api.writeTeammateMemory(teammateId, {
+                content: String(fd.get("content") || "").trim(),
+                source: String(fd.get("source") || "workspace").trim(),
+                confidence: Number(fd.get("confidence") || 0.8),
+                tier: String(fd.get("tier") || "raw"),
+                provenance: { kind: "manual", actor: "user" },
+              });
+              setShowWrite(false);
+              await reload();
+              toast.success("Memory saved");
+            } catch (err) { notifyError(err); }
+          }}>
+            <label className="text-step--1"><div className="mb-1 font-medium">What to remember</div><textarea name="content" className={`${FORM_INPUT} min-h-24`} required /></label>
+            <label className="text-step--1"><div className="mb-1 font-medium">Source/provenance</div><input name="source" className={FORM_INPUT} defaultValue="workspace" /></label>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="text-step--1"><div className="mb-1 font-medium">Confidence (0–1)</div><input name="confidence" className={FORM_INPUT} defaultValue="0.8" /></label>
+              <label className="text-step--1"><div className="mb-1 font-medium">Tier</div><select name="tier" className={FORM_SELECT} defaultValue="raw"><option value="raw">raw</option><option value="typed">typed</option><option value="wisdom">wisdom</option></select></label>
+            </div>
+            <div className="flex justify-end gap-2"><Button type="button" onClick={() => setShowWrite(false)}>Cancel</Button><Button variant="primary" type="submit">Save</Button></div>
+          </form>
+        </Modal>
+      ) : null}
+
+      {edit ? (
+        <Modal title="Edit memory" onClose={() => setEdit(null)}>
+          <form className="flex flex-col gap-3" onSubmit={async (e) => { e.preventDefault(); const fd = new FormData(e.currentTarget); try { await api.patchMemory(edit.id, { content: String(fd.get("content") || ""), source: String(fd.get("source") || "") }); setEdit(null); await reload(); toast.success("Memory corrected"); } catch (err) { notifyError(err); } }}>
+            <label className="text-step--1"><div className="mb-1 font-medium">Content</div><textarea name="content" className={`${FORM_INPUT} min-h-24`} defaultValue={edit.content} /></label>
+            <label className="text-step--1"><div className="mb-1 font-medium">Source</div><input name="source" className={FORM_INPUT} defaultValue={edit.source} /></label>
+            <div className="flex justify-end gap-2"><Button type="button" onClick={() => setEdit(null)}>Cancel</Button><Button variant="primary" type="submit">Save correction</Button></div>
+          </form>
+        </Modal>
+      ) : null}
+
+      {loading ? <LoadingState lines={3} /> : error ? <ErrorState error={error} onRetry={() => void reload()} /> : entries.length === 0 ? (
+        <EmptyState title="No memories" hint="Search, pin important facts, correct mistakes, or delete entries. Scoped memories are untrusted context when recalled." />
+      ) : (
+        <>
+          <div className="flex flex-col gap-2">
+            {entries.map((entry) => (
+              <div key={entry.id} className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1 whitespace-pre-wrap text-step--1 text-[var(--text-soft)]">{entry.content}</div>
+                  <div className="flex shrink-0 flex-wrap gap-1.5">
+                    {entry.pinned ? <Badge variant="info">pinned</Badge> : null}
+                    {(entry as any).corrected ? <Badge variant="warn">corrected</Badge> : null}
+                    <Badge variant="neutral">{entry.tier || "raw"}</Badge>
+                  </div>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-step--2 text-[var(--faint)]">
+                  <span>Source: <span className="text-[var(--muted)]">{entry.source || "unknown"}</span></span>
+                  <span>Confidence: {typeof entry.confidence === "number" ? entry.confidence.toFixed(2) : entry.confidence}</span>
+                  <span>Scope: <span className="mono">{entry.scope}</span></span>
+                  <span className="mono">{entry.id}</span>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <Button onClick={() => void act(() => api.patchMemory(entry.id, { pinned: !entry.pinned }))}>{entry.pinned ? "Unpin" : "Pin"}</Button>
+                  <Button onClick={() => setEdit(entry)}>Correct</Button>
+                  <Button variant="danger" onClick={() => { if (confirm("Delete this memory?")) void act(() => api.deleteMemory(entry.id)); }}>Delete</Button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 flex items-center justify-between text-step--2 text-[var(--muted)]">
+            <span>{total} total</span>
+            <div className="flex gap-2">
+              <Button disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>Prev</Button>
+              <Button disabled={(page + 1) * limit >= total} onClick={() => setPage((p) => p + 1)}>Next</Button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 function openTask(projectId: string, taskId: string): void {
   navigate(`/p/${projectId}/t/${taskId}`);
@@ -44,7 +192,6 @@ export function BotDetailView({
   const all = useAsync(() => api.listAllTeammates(), [teammateId]);
   const tasks = useAsync(() => api.teammateTasks(teammateId), [teammateId]);
   const runs = useAsync(() => api.teammateRuns(teammateId), [teammateId]);
-  const memory = useAsync(() => api.teammateMemory(teammateId), [teammateId]);
   const persona = useAsync(() => api.getPersona(teammateId), [teammateId]);
   const skills = useAsync(() => api.teammateSkills(teammateId), [teammateId]);
   const allSkills = useAsync(() => api.listSkills({ limit: 100 }), [teammateId]);
@@ -60,9 +207,6 @@ export function BotDetailView({
     [mateProjectId],
   );
 
-  const [memContent, setMemContent] = useState("");
-  const [memSource, setMemSource] = useState("");
-  const [memBusy, setMemBusy] = useState(false);
   const [showCreateTask, setShowCreateTask] = useState(false);
   const [taskDescription, setTaskDescription] = useState("");
   const [taskCommand, setTaskCommand] = useState("");
@@ -152,26 +296,6 @@ export function BotDetailView({
     }
   };
 
-  const addMemory = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!memContent.trim()) return;
-    setMemBusy(true);
-    try {
-      await api.writeTeammateMemory(teammateId, {
-        content: memContent.trim(),
-        source: memSource.trim() || "workspace",
-        confidence: 0.5,
-      });
-      setMemContent("");
-      setMemSource("");
-      memory.reload();
-    } catch (err) {
-      notifyError(err);
-    } finally {
-      setMemBusy(false);
-    }
-  };
-
   const claim = async (taskId: string) => {
     try {
       await api.claimTask(taskId, teammateId);
@@ -182,16 +306,14 @@ export function BotDetailView({
     }
   };
 
-  if (all.loading || tasks.loading || runs.loading || memory.loading || boards.loading || persona.loading) {
+  if (all.loading || tasks.loading || runs.loading || boards.loading || persona.loading) {
     return <LoadingState lines={4} />;
   }
-  if (all.error || tasks.error || runs.error || memory.error || boards.error) {
+  if (all.error || tasks.error || runs.error || boards.error) {
     return (
       <Page>
         <ErrorState
-          error={
-            all.error ?? tasks.error ?? runs.error ?? memory.error ?? boards.error ?? "Bot not found"
-          }
+          error={all.error ?? tasks.error ?? runs.error ?? boards.error ?? "Bot not found"}
           onRetry={all.reload}
         />
       </Page>
@@ -210,7 +332,6 @@ export function BotDetailView({
 
   const taskList = (tasks.data as { tasks: Task[] }).tasks;
   const runList = (runs.data as { runs: Run[] }).runs;
-  const memList = (memory.data as { entries: MemoryEntry[] }).entries;
   const unclaimed = taskList.find((t) => t.status === "pending" && !t.owner_teammate_id);
   const openCount = taskList.filter((t) => !["done", "failed", "cancelled"].includes(t.status)).length;
 
@@ -565,45 +686,7 @@ export function BotDetailView({
       {/* Private memory */}
       {(section === "memory" || section === "overview") && (
       <section>
-        <div className="mb-2 flex items-center justify-between">
-          <SectionLabel>Private memory</SectionLabel>
-        </div>
-        <p className="mb-3 max-w-[72ch] text-step--1 text-[var(--muted)]">
-          Only this bot reads and writes this memory. Notes here are recalled in its future runs.
-        </p>
-        <form onSubmit={addMemory} className="mb-3 flex flex-wrap items-center gap-2">
-          <input
-            value={memContent}
-            onChange={(e) => setMemContent(e.target.value)}
-            placeholder="Remember this…"
-            aria-label="Memory content"
-            className={`${FORM_INPUT} min-w-52 flex-1`}
-          />
-          <input
-            value={memSource}
-            onChange={(e) => setMemSource(e.target.value)}
-            placeholder="source"
-            aria-label="Memory source"
-            className={`${FORM_INPUT} w-36`}
-          />
-          <Button variant="primary" type="submit" disabled={memBusy || !memContent.trim()}>
-            {memBusy ? "Saving…" : "Save"}
-          </Button>
-        </form>
-        {memList.length > 0 ? (
-          <div className="flex flex-col gap-2">
-            {memList.map((entry) => (
-              <div key={entry.id} className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
-                <p className="whitespace-pre-wrap text-step--1 text-[var(--text-soft)]">{entry.content}</p>
-                <p className="mt-1 text-step--2 text-[var(--faint)]">
-                  {entry.source} · confidence {entry.confidence} · {relativeTime(entry.timestamp)}
-                </p>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <EmptyState title="No memories" hint="Save a note this bot will recall in future runs." />
-        )}
+        <TeammateMemorySection teammateId={teammateId} />
       </section>
       )}
 

@@ -1154,9 +1154,24 @@ function ThreadPane({
               {streaming ? (
                 <div className="flex flex-col gap-1.5">
                   {recalledThisTurn.length > 0 ? (
-                    <div className="text-step--2 text-[var(--faint)]" title={recalledThisTurn.map((m:any)=>`${m.kind||'memory'}:${m.source||m.id}`).join(', ')}>
-                      Recalled this turn: {recalledThisTurn.length} item{recalledThisTurn.length===1?'':'s'} (untrusted context)
-                    </div>
+                    <details className="rounded-md border border-[var(--border-dim)] bg-[var(--surface-2)] px-2.5 py-1.5 text-step--2 text-[var(--faint)]">
+                      <summary className="cursor-pointer select-none">
+                        Recalled this turn: {recalledThisTurn.length} item{recalledThisTurn.length===1?'':'s'} (untrusted context)
+                      </summary>
+                      <ul className="mt-1.5 space-y-1 text-[var(--muted)]">
+                        {recalledThisTurn.map((m: any, i: number) => (
+                          <li key={m.id || i} className="break-words">
+                            <span className="font-medium text-[var(--text-soft)]">{m.kind || 'memory'}</span>
+                            {m.source ? <span> · {m.source}</span> : null}
+                            {m.scope ? <span className="mono"> · {m.scope}</span> : null}
+                            {m.tier ? <span> · {m.tier}</span> : null}
+                            {typeof m.confidence === 'number' ? <span> · conf {m.confidence.toFixed(2)}</span> : null}
+                            {m.pinned ? <span> · pinned</span> : null}
+                            {m.snippet ? <div className="mt-0.5 text-[var(--faint)]">{m.snippet}</div> : null}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
                   ) : null}
                   <div className="flex items-center gap-2 text-step--2 text-[var(--muted)]" aria-live="polite">
                     <span className="inline-flex gap-1" aria-hidden><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--accent)]" /><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--accent)] [animation-delay:120ms]" /><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--accent)] [animation-delay:240ms]" /></span>

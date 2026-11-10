@@ -279,6 +279,9 @@ def _frame_recalled(
     provenance: list[dict[str, Any]] = []
     lines: list[str] = []
     for entry in memories:
+        snippet = " ".join(str(entry.content or "").split())
+        if len(snippet) > 140:
+            snippet = snippet[:137].rstrip() + "..."
         provenance.append({
             "id": entry.id,
             "source": entry.source,
@@ -287,12 +290,26 @@ def _frame_recalled(
             "tier": getattr(entry, "tier", "raw"),
             "pinned": bool(getattr(entry, "pinned", False)),
             "kind": "memory",
+            "snippet": snippet,
         })
-        lines.append(f"[memory {entry.id} · {entry.source} · {getattr(entry, 'tier', 'raw')} · confidence {entry.confidence}] {entry.content}")
+        lines.append(
+            f"[memory {entry.id} · scope {entry.scope} · {entry.source} · {getattr(entry, 'tier', 'raw')} · confidence {entry.confidence}] {entry.content}"
+        )
     for other in store.list_thread_summaries(conn, project_id, exclude_id=exclude_id):
-        provenance.append({"id": other.id, "source": "thread-summary", "confidence": 1.0, "kind": "thread-summary"})
+        summary = " ".join(str(other.summary or "").split())
+        if len(summary) > 140:
+            summary = summary[:137].rstrip() + "..."
+        provenance.append({
+            "id": other.id,
+            "source": "thread-summary",
+            "scope": f"thread:{other.id}",
+            "confidence": 1.0,
+            "kind": "thread-summary",
+            "snippet": summary,
+            "title": other.title or other.id,
+        })
         title = other.title or other.id
-        lines.append(f"[thread-summary {title}] {other.summary}")
+        lines.append(f"[thread-summary {title} · {other.id}] {other.summary}")
     if lines:
         messages.append({"role": "system", "content": frame_untrusted("\n".join(lines))})
     return messages, provenance

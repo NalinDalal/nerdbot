@@ -96,8 +96,13 @@ def test_chat_fallback_mock_and_memory(app_client: TestClient) -> None:
     body = r.json()
     assert body["message"]["role"] == "assistant"
     assert "hi there" in body["message"]["content"]
-    assert body["memory_used"] == [
-        {"id": body["memory_used"][0]["id"], "source": "note", "confidence": 0.9}]
+    assert body["memory_used"]
+    item = body["memory_used"][0]
+    assert item["id"] == body["memory_used"][0]["id"]
+    assert item["source"] == "note"
+    assert item["confidence"] == 0.9
+    assert item["kind"] == "memory"
+    assert "scope" in item and "snippet" in item
     view = app_client.get(f"/threads/{tid}", headers=AUTH).json()
     assert [m["role"] for m in view["messages"]] == ["user", "assistant"]
 
@@ -216,10 +221,15 @@ def test_memory_provenance_framed(tmp_path) -> None:
                        confidence=0.7)
     thread = store.create_thread(conn, project.id, title="t")
     messages, provenance = chat_mod.build_messages(conn, project.id, thread)
-    assert provenance == [
-        {"id": provenance[0]["id"], "source": "note", "confidence": 0.7}]
+    assert provenance
+    item = provenance[0]
+    assert item["id"] == provenance[0]["id"]
+    assert item["source"] == "note"
+    assert item["confidence"] == 0.7
+    assert item["kind"] == "memory"
+    assert "scope" in item and "snippet" in item
     system_text = " ".join(m["content"] for m in messages if m["role"] == "system")
-    assert "UNTRUSTED" in system_text and "note" in system_text
+    assert "UNTRUSTED" in system_text and "note" in system_text and "scope" in system_text
     conn.close()
 
 
