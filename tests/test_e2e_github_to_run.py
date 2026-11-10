@@ -4,7 +4,7 @@ Covers the product's central workflow end to end — api → execution →
 persistence → inspectable state — with the dashboard view shapes exercised
 from the same API responses. All external networks are mocked (GitHub
 fetch transport + resolver, provider chat transport); no live network in
-the suite. The real-GitHub smoke test is documented in docs/PLAN.md.
+the suite. The real-GitHub smoke test is documented in external handoff/backup artifacts.
 """
 
 from __future__ import annotations

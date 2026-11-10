@@ -3,7 +3,7 @@
 The manifest contains every domain row needed for reconstruction plus
 workspace refs (task branch/path). Provider configs are redacted.
 Restore is a validated-manifest + API-replay procedure (see
-docs/backup-restore.md): this module validates manifests but performs no
+external backup/restore handoff): this module validates manifests but performs no
 blind row import.
 """
 

@@ -676,7 +676,7 @@ export default function App() {
 }
 
 /** The dashboard is normally served by the API itself (e.g. localhost:8080,
- *  documented in the README). Defaulting the API base to the current origin
+ *  documented in external handoff/backup artifacts). Defaulting the API base to the current origin
  *  keeps that flow same-origin (no CORS involved); only when the page is
  *  served elsewhere (the vite dev server) does the local default remain. */
 export function defaultApiBase(): string {
