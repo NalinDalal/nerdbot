@@ -232,7 +232,7 @@ export function ProjectOperatingOverview({
                 <div className="text-step--2 uppercase tracking-[0.12em] text-[var(--faint)]">Objective</div>
                 <div className="mt-1 text-step--1 text-[var(--text)]">No workspace objective set</div>
                 <p className="mt-1 text-step--2 text-[var(--muted)]">
-                  A canonical workspace mission/goal field is not yet available. Objectives may exist on boards, but they are not treated as the workspace mission.
+                  A saved workspace mission is not available yet, so this overview does not guess one.
                 </p>
               </div>
             </div>
@@ -394,7 +394,7 @@ export function ProjectOperatingOverview({
 
           <SectionCard
             title="Recent deliverables"
-            description="Actual documents and assets produced in this workspace. Sources covered: Library documents and Gallery assets. Task-run artifact files may also exist in task/run details."
+            description="Documents and assets produced in this workspace. This view currently shows Library documents and Gallery assets. Other task outputs may be available in task or run details."
             action={<div className="flex gap-2"><Button onClick={() => onSelectTab("Knowledge")}>Knowledge</Button><Button onClick={() => onSelectTab("Files")}>Files & tools</Button></div>}
           >
             {failedSources.includes("library") && failedSources.includes("gallery") ? (
