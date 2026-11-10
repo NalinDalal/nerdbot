@@ -1,0 +1,3 @@
+Opened agent work/assignment affordance (fixture UI flow; no live execution triggered).
+Opened task/execution detail (seeded fixture states, not evidence of successful live agent execution).
+Opened deliverable from workspace.
