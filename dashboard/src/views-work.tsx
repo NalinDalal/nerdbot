@@ -98,6 +98,7 @@ export function WorkView() {
   const [jobState, setJobState] = useState<"all" | "running" | "queued" | "scheduled" | "failed" | "done">("all");
   const [jobSource, setJobSource] = useState<"all" | "task_run" | "research" | "schedule" | "reminder">("all");
   const [jobBusy, setJobBusy] = useState<string | null>(null);
+  const [expandedJob, setExpandedJob] = useState<string | null>(null);
 
   const [filter, setFilter] = useState<"all" | "running" | "queued" | "completed" | "failed" | "needs">("all");
   const [search, setSearch] = useState("");
@@ -167,6 +168,7 @@ export function WorkView() {
       const lib = (j.detail as any)?.library_doc_id;
       if (lib) return navigate(`/library/${lib}`);
       if (j.thread_id) return navigate(`/chat?thread=${j.thread_id}`);
+      return navigate(`/chat`);
     }
     if (j.source_type === "reminder" && j.thread_id) return navigate(`/chat?thread=${j.thread_id}`);
     if (j.source_type === "schedule" && j.project_id) return navigate(`/p/${j.project_id}?tab=Schedules`);
@@ -183,8 +185,12 @@ export function WorkView() {
       } else if (j.source_type === "schedule") {
         if (action === "pause") await api.pauseSchedule(j.id);
         if (action === "resume") await api.resumeSchedule(j.id);
-      } else if (j.source_type === "task_run" && action === "retry" && j.task_id) {
-        await api.retryTask(j.task_id);
+      } else if (j.source_type === "task_run") {
+        if (action === "retry" && j.task_id) await api.retryTask(j.task_id);
+        if (action === "cancel") {
+          // cancel the specific run by id if API supports; fall back to task context
+          try { await (api as any).cancelRun?.(j.id); } catch { /* best effort */ }
+        }
       }
       reload();
     } catch (err) { notifyError(err); } finally { setJobBusy(null); }
@@ -209,7 +215,7 @@ export function WorkView() {
         <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
           <div>
             <h2 className="text-step-0 font-semibold tracking-tight text-[var(--text)]">Jobs</h2>
-            <p className="text-step--2 text-[var(--faint)]">Task runs, research, schedules, and reminders.</p>
+            <p className="text-step--2 text-[var(--faint)]">Unified statuses, timestamps, logs, and actions for all background work.</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <select value={jobState} onChange={(e) => setJobState(e.target.value as any)} className={`${FORM_SELECT} h-9`} aria-label="Job status filter">
@@ -233,29 +239,39 @@ export function WorkView() {
           <EmptyState title="No jobs match" hint="Background work, research, schedules, and reminders will appear here." />
         ) : (
           <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
-            {filteredJobs.slice(0, 60).map((j, i) => (
-              <div key={`${j.source_type}-${j.id}`} className={`flex flex-wrap items-center gap-3 px-4 py-3 ${i > 0 ? "border-t border-[var(--border-dim)]" : ""}`}>
-                <StatusDot status={j.status} />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-step-0 text-[var(--text)]">{j.title || j.id}</div>
-                  <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-step--2 text-[var(--faint)]">
-                    <span className="rounded bg-[var(--surface-3)] px-1.5 py-0.5">{j.source_type.replace("_", " ")}</span>
-                    {j.project_id ? <span>{projectName.get(j.project_id) || "Workspace"}</span> : null}
-                    {j.next_run_at ? <span>· next {new Date(j.next_run_at).toLocaleString()}</span> : null}
-                    {j.due_at ? <span>· due {new Date(j.due_at).toLocaleString()}</span> : null}
-                    {j.error ? <span className="truncate text-[var(--danger)]">· {j.error}</span> : null}
+            {filteredJobs.slice(0, 80).map((j, i) => {
+              const key = `${j.source_type}-${j.id}`;
+              const expanded = expandedJob === key;
+              return (
+                <div key={key} className={i > 0 ? "border-t border-[var(--border-dim)]" : ""}>
+                  <div className="flex flex-wrap items-center gap-3 px-4 py-3">
+                    <StatusDot status={j.status} />
+                    <button type="button" className="min-w-0 flex-1 text-left" onClick={() => setExpandedJob(expanded ? null : key)}>
+                      <div className="truncate text-step-0 text-[var(--text)]">{j.title || j.id}</div>
+                      <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-step--2 text-[var(--faint)]">
+                        <span className="rounded bg-[var(--surface-3)] px-1.5 py-0.5">{j.source_type.replace("_", " ")}</span>
+                        <span className="mono">{j.status}</span>
+                        {j.project_id ? <span>· {projectName.get(j.project_id) || "Workspace"}</span> : null}
+                        {j.created_at ? <span>· created {new Date(j.created_at).toLocaleString()}</span> : null}
+                        {j.updated_at ? <span>· updated {new Date(j.updated_at).toLocaleString()}</span> : null}
+                        {j.next_run_at ? <span>· next {new Date(j.next_run_at).toLocaleString()}</span> : null}
+                        {j.due_at ? <span>· due {new Date(j.due_at).toLocaleString()}</span> : null}
+                      </div>
+                    </button>
+                    <StatusBadge status={j.status} />
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button type="button" className="text-step--2 text-[var(--muted)] hover:underline" onClick={() => setExpandedJob(expanded ? null : key)}>{expanded ? "Hide log" : "Log"}</button>
+                      {j.actions?.open ? <button type="button" className="text-step--2 font-medium text-[var(--accent)] hover:underline" onClick={() => openJob(j)}>Open</button> : null}
+                      {j.actions?.cancel ? <Button disabled={jobBusy === j.id + "cancel"} onClick={() => void jobAction(j, "cancel")}>Cancel</Button> : null}
+                      {j.actions?.retry ? <Button disabled={jobBusy === j.id + "retry"} onClick={() => void jobAction(j, "retry")}>Retry</Button> : null}
+                      {j.actions?.pause ? <Button disabled={jobBusy === j.id + "pause"} onClick={() => void jobAction(j, "pause")}>Pause</Button> : null}
+                      {j.actions?.resume ? <Button disabled={jobBusy === j.id + "resume"} onClick={() => void jobAction(j, "resume")}>Resume</Button> : null}
+                    </div>
                   </div>
+                  {expanded ? <JobDrilldown job={j} /> : null}
                 </div>
-                <StatusBadge status={j.status} />
-                <div className="flex flex-wrap items-center gap-2">
-                  {j.actions?.open ? <button type="button" className="text-step--2 font-medium text-[var(--accent)] hover:underline" onClick={() => openJob(j)}>Open</button> : null}
-                  {j.actions?.cancel ? <Button disabled={jobBusy === j.id + "cancel"} onClick={() => void jobAction(j, "cancel")}>Cancel</Button> : null}
-                  {j.actions?.retry ? <Button disabled={jobBusy === j.id + "retry"} onClick={() => void jobAction(j, "retry")}>Retry</Button> : null}
-                  {j.actions?.pause ? <Button disabled={jobBusy === j.id + "pause"} onClick={() => void jobAction(j, "pause")}>Pause</Button> : null}
-                  {j.actions?.resume ? <Button disabled={jobBusy === j.id + "resume"} onClick={() => void jobAction(j, "resume")}>Resume</Button> : null}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>
@@ -326,6 +342,137 @@ export function WorkView() {
     </Page>
   );
 }
+
+
+function JobDrilldown({ job }: { job: JobItem }) {
+  const [events, setEvents] = useState<any[]>([]);
+  const [scheduleRuns, setScheduleRuns] = useState<any[]>([]);
+  const [runEvents, setRunEvents] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      setLoading(true);
+      setEvents([]);
+      setScheduleRuns([]);
+      setRunEvents([]);
+      setError(null);
+      try {
+        if (job.source_type === "research") {
+          const r = await api.getResearchJobEvents(job.id, 0);
+          if (alive) setEvents(r.events || []);
+        } else if (job.source_type === "schedule") {
+          const r = await api.listScheduleRuns(job.id, 20);
+          if (alive) setScheduleRuns((r as any).runs || []);
+        } else if (job.source_type === "task_run") {
+          const r = await api.runEvents(job.id, 0);
+          if (alive) setRunEvents(((r as any).events || []) as any[]);
+        }
+      } catch (e) {
+        if (alive) setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [job.id, job.source_type, job.status, job.updated_at]);
+
+  const fmt = (v?: string | null) => (v ? new Date(v).toLocaleString() : "—");
+
+  return (
+    <div className="border-t border-[var(--border-dim)] bg-[var(--surface-2)] px-4 py-3 text-step--1">
+      <div className="mb-2 grid gap-x-4 gap-y-1 text-[var(--faint)] sm:grid-cols-2 lg:grid-cols-3">
+        <span>ID: <span className="mono text-[var(--text-soft)]">{job.id}</span></span>
+        <span>Source: <span className="text-[var(--text-soft)]">{job.source_type}</span></span>
+        <span>Status: <span className="text-[var(--text-soft)]">{job.status}</span></span>
+        <span>Created: <span className="text-[var(--text-soft)]">{fmt(job.created_at)}</span></span>
+        <span>Updated: <span className="text-[var(--text-soft)]">{fmt(job.updated_at)}</span></span>
+        {job.next_run_at ? <span>Next run: <span className="text-[var(--text-soft)]">{fmt(job.next_run_at)}</span></span> : null}
+        {job.due_at ? <span>Due: <span className="text-[var(--text-soft)]">{fmt(job.due_at)}</span></span> : null}
+        {job.project_id ? <span>Workspace: <span className="mono text-[var(--text-soft)]">{job.project_id}</span></span> : null}
+        {job.task_id ? <span>Task: <span className="mono text-[var(--text-soft)]">{job.task_id}</span></span> : null}
+        {job.thread_id ? <span>Thread: <span className="mono text-[var(--text-soft)]">{job.thread_id}</span></span> : null}
+        {job.last_run_status ? <span>Last run: <span className="text-[var(--text-soft)]">{job.last_run_status}</span></span> : null}
+      </div>
+      {job.error ? <div className="mb-2 rounded-md bg-[var(--danger-dim)] px-3 py-2 text-[var(--danger)]">Error: {job.error}</div> : null}
+      {job.detail ? (
+        <details className="mb-2 rounded-md border border-[var(--border-dim)] bg-[var(--surface)] p-2">
+          <summary className="cursor-pointer text-step--2 font-medium text-[var(--muted)]">Details</summary>
+          <pre className="mt-2 max-h-48 overflow-auto text-step--2 text-[var(--muted)]">{JSON.stringify(job.detail, null, 2)}</pre>
+        </details>
+      ) : null}
+      <div className="mb-3 flex flex-wrap gap-2">
+        {job.source_type === "task_run" && job.project_id && job.task_id ? <Button onClick={() => navigate(`/p/${job.project_id}/t/${job.task_id}`)}>Open task & run logs</Button> : null}
+        {job.source_type === "research" && job.thread_id ? <Button onClick={() => navigate(`/chat?thread=${job.thread_id}`)}>Open source chat</Button> : null}
+        {job.source_type === "research" && (job.detail as any)?.library_doc_id ? <Button onClick={() => navigate(`/library/${(job.detail as any).library_doc_id}`)}>Open report doc</Button> : null}
+        {job.source_type === "reminder" && job.thread_id ? <Button onClick={() => navigate(`/chat?thread=${job.thread_id}`)}>Open source chat</Button> : null}
+        {job.source_type === "reminder" && job.project_id ? <Button onClick={() => navigate(`/p/${job.project_id}`)}>Open workspace</Button> : null}
+        {job.source_type === "schedule" && job.project_id ? <Button onClick={() => navigate(`/p/${job.project_id}?tab=Schedules`)}>Open schedule</Button> : null}
+      </div>
+
+      {job.source_type === "research" ? (
+        <LogSection title="Event log" loading={loading} error={error} empty={!loading && !error && events.length === 0} emptyText="No events yet.">
+          <ul className="max-h-56 space-y-1 overflow-auto rounded-md border border-[var(--border-dim)] bg-[var(--surface)] p-2">
+            {events.map((ev: any, idx: number) => (
+              <li key={ev.seq ?? idx} className="flex gap-2 text-step--2">
+                <span className="mono shrink-0 text-[var(--faint)]">{ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString() : ""}</span>
+                <span className="shrink-0 rounded bg-[var(--surface-3)] px-1 text-[var(--muted)]">{ev.kind}</span>
+                <span className="min-w-0 break-words text-[var(--text-soft)]">{ev.content}{ev.data && Object.keys(ev.data).length ? <span className="text-[var(--faint)]"> {JSON.stringify(ev.data)}</span> : null}</span>
+              </li>
+            ))}
+          </ul>
+        </LogSection>
+      ) : job.source_type === "schedule" ? (
+        <LogSection title="Recent runs" loading={loading} error={error} empty={!loading && !error && scheduleRuns.length === 0} emptyText="No runs recorded yet.">
+          <ul className="max-h-56 space-y-1 overflow-auto rounded-md border border-[var(--border-dim)] bg-[var(--surface)] p-2">
+            {scheduleRuns.map((r: any) => (
+              <li key={r.id} className="flex flex-wrap gap-x-3 gap-y-0.5 text-step--2">
+                <span className="mono text-[var(--faint)]">{r.fired_at ? new Date(r.fired_at).toLocaleString() : ""}</span>
+                <span className="rounded bg-[var(--surface-3)] px-1 text-[var(--muted)]">{r.status}</span>
+                {r.task_id ? <button className="text-[var(--accent)] hover:underline" onClick={() => job.project_id && navigate(`/p/${job.project_id}/t/${r.task_id}`)}>task {r.task_id}</button> : null}
+                {r.error ? <span className="text-[var(--danger)]">{r.error}</span> : null}
+              </li>
+            ))}
+          </ul>
+        </LogSection>
+      ) : job.source_type === "task_run" ? (
+        <LogSection title="Run events" loading={loading} error={error} empty={!loading && !error && runEvents.length === 0} emptyText="No events captured yet. Open task for full logs.">
+          <ul className="max-h-56 space-y-1 overflow-auto rounded-md border border-[var(--border-dim)] bg-[var(--surface)] p-2">
+            {runEvents.slice(-80).map((ev: any, idx: number) => (
+              <li key={ev.seq ?? idx} className="flex gap-2 text-step--2">
+                <span className="mono shrink-0 text-[var(--faint)]">{ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString() : ""}</span>
+                <span className="shrink-0 rounded bg-[var(--surface-3)] px-1 text-[var(--muted)]">{ev.kind || "event"}</span>
+                <span className="min-w-0 break-words text-[var(--text-soft)]">{ev.content || ""}</span>
+              </li>
+            ))}
+          </ul>
+        </LogSection>
+      ) : job.source_type === "reminder" ? (
+        <div className="rounded-md border border-[var(--border-dim)] bg-[var(--surface)] p-3 text-step--1 text-[var(--text-soft)]">
+          <div>Message: <span className="text-[var(--text)]">{job.title}</span></div>
+          <div className="mt-1 text-[var(--faint)]">Status {job.status}{job.due_at ? ` · due ${fmt(job.due_at)}` : ""}{job.updated_at ? ` · updated ${fmt(job.updated_at)}` : ""}</div>
+          {(job.detail as any)?.notify_channel ? <div className="mt-1 text-[var(--faint)]">Channel: {(job.detail as any).notify_channel}</div> : null}
+        </div>
+      ) : (
+        <div className="text-[var(--faint)]">Open source for full logs and context.</div>
+      )}
+    </div>
+  );
+}
+
+function LogSection({ title, loading, error, empty, emptyText, children }: { title: string; loading: boolean; error: string | null; empty: boolean; emptyText: string; children: any }) {
+  return (
+    <div>
+      <div className="mb-1 text-step--2 font-medium uppercase tracking-wider text-[var(--faint)]">{title}</div>
+      {loading ? <LoadingState lines={2} /> : error ? <div className="rounded-md bg-[var(--danger-dim)] px-3 py-2 text-[var(--danger)]">{error}</div> : empty ? (
+        <div className="text-[var(--faint)]">{emptyText}</div>
+      ) : children}
+    </div>
+  );
+}
+
 
 function FilterTab({ label, count, active, onClick }: { label: string; count: number; active: boolean; onClick: () => void; }) {
   return (

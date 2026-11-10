@@ -4228,27 +4228,41 @@ def create_app() -> FastAPI:
     @app.get("/projects/{project_id}/threads")
     def list_threads(
         project_id: str,
+        q: str | None = None,
+        include_archived: bool = False,
+        archived_only: bool = False,
+        pinned_only: bool = False,
+        limit: int | None = None,
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
         require_project_owner(conn, project_id, principal)
-        threads = [t.model_dump(mode="json") for t in store.list_threads(conn, project_id)]
+        threads = [
+            t.model_dump(mode="json")
+            for t in store.list_threads(
+                conn, project_id, include_archived=include_archived,
+                archived_only=archived_only, pinned_only=pinned_only, q=q, limit=limit,
+            )
+        ]
         return {"threads": threads}
 
     @app.get("/threads")
     def list_recent_threads(
         limit: int = 20,
+        q: str | None = None,
+        include_archived: bool = False,
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
         """Recent conversations across every project the caller owns.
 
-        The Command Center is cross-workspace, so its resume list cannot be
-        scoped to one project. The owner check is the same one every other
-        project route uses: a caller only ever sees their own projects.
+        Supports search/filter for long-lived history while keeping a safe
+        default view (non-deleted, non-archived unless requested).
         """
-        capped = max(1, min(limit, 50))
-        threads = store.list_threads_for_owner(conn, principal, limit=capped)
+        capped = max(1, min(limit, 100))
+        threads = store.list_threads_for_owner(
+            conn, principal, limit=capped, include_archived=include_archived, q=q
+        )
         return {"threads": [t.model_dump(mode="json") for t in threads]}
 
     @app.patch("/threads/{thread_id}")
@@ -4259,23 +4273,124 @@ def create_app() -> FastAPI:
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
         require_project_owner(conn, _chat_thread_project(conn, thread_id), principal)
-        thread = store.get_thread(conn, thread_id)
-        if thread is None:  # pragma: no cover - raced deletion
-            raise HTTPException(status_code=404, detail="thread not found")
-        # Only the fields the caller actually sent are applied.
-        if "provider_id" in body.model_fields_set:
-            try:
-                thread = store.set_thread_provider(conn, thread_id, body.provider_id)
-            except (KeyError, ValueError) as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if "title" in body.model_fields_set:
-            conn.execute("UPDATE chat_threads SET title = ? WHERE id = ?",
-                         (body.title or "", thread_id))
-            conn.commit()
-            refreshed = store.get_thread(conn, thread_id)
-            if refreshed is not None:
-                thread = refreshed
+        try:
+            # Provider/title/pinned/archived handled via store; unset fields ignored.
+            thread = store.update_thread(
+                conn,
+                thread_id,
+                title=body.title if "title" in body.model_fields_set else None,
+                provider_id=body.provider_id if "provider_id" in body.model_fields_set else store._UNSET,
+                summary=body.summary if "summary" in body.model_fields_set else None,
+                pinned=body.pinned if "pinned" in body.model_fields_set else None,
+                archived=body.archived if "archived" in body.model_fields_set else None,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return thread.model_dump(mode="json")
+
+    @app.post("/threads/{thread_id}/archive")
+    def archive_thread_endpoint(
+        thread_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, _chat_thread_project(conn, thread_id), principal)
+        try:
+            return {"thread": store.archive_thread(conn, thread_id).model_dump(mode="json")}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/threads/{thread_id}/unarchive")
+    def unarchive_thread_endpoint(
+        thread_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, _chat_thread_project(conn, thread_id), principal)
+        try:
+            return {"thread": store.unarchive_thread(conn, thread_id).model_dump(mode="json")}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/threads/{thread_id}/pin")
+    def pin_thread_endpoint(
+        thread_id: str,
+        body: dict[str, Any] | None = None,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, _chat_thread_project(conn, thread_id), principal)
+        pinned = bool((body or {}).get("pinned", True))
+        try:
+            return {"thread": store.pin_thread(conn, thread_id, pinned=pinned).model_dump(mode="json")}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.delete("/threads/{thread_id}")
+    def delete_thread_endpoint(
+        thread_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, _chat_thread_project(conn, thread_id), principal)
+        try:
+            thread = store.delete_thread(conn, thread_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"deleted": True, "thread": thread.model_dump(mode="json")}
+
+    @app.post("/threads/{thread_id}/restore")
+    def restore_thread_endpoint(
+        thread_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        # ownership checked on stored (including deleted) thread
+        t = store.get_thread(conn, thread_id, include_deleted=True)
+        if t is None:
+            raise HTTPException(status_code=404, detail="thread not found")
+        require_project_owner(conn, t.project_id, principal)
+        return {"thread": store.restore_thread(conn, thread_id).model_dump(mode="json")}
+
+    @app.post("/threads/{thread_id}/move")
+    def move_thread_endpoint(
+        thread_id: str,
+        body: schemas.ThreadMove,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        t = store.get_thread(conn, thread_id, include_deleted=False)
+        if t is None:
+            raise HTTPException(status_code=404, detail="thread not found")
+        require_project_owner(conn, t.project_id, principal)
+        target = (body.project_id or "").strip()
+        if not target:
+            raise HTTPException(status_code=400, detail="project_id is required")
+        require_project_owner(conn, target, principal)
+        try:
+            moved = store.move_thread(conn, thread_id, target, principal=principal)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"thread": moved.model_dump(mode="json"), "provider_cleared": True}
+
+    @app.get("/threads/{thread_id}/export")
+    def export_thread_endpoint(
+        thread_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        t = store.get_thread(conn, thread_id, include_deleted=True)
+        if t is None:
+            raise HTTPException(status_code=404, detail="thread not found")
+        require_project_owner(conn, t.project_id, principal)
+        try:
+            return store.export_thread(conn, thread_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.get("/threads/{thread_id}")
     def get_thread_view(

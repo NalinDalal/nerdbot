@@ -29,37 +29,66 @@ no company hierarchy, no org management.
 - Absent: real model calls, tool-call loop, web fetch, credentials encryption,
   lockouts/quotas, UI, push/PR automation, org hierarchy.
 
-## Reconciled status (verified against code/history, 2026-10-17)
+## Reconciled status (verified against code/history, 2026-10-17; updated 2026-11-10)
 
-History note: everything below is now verified against the repository, not
-owner-reported. The "Current verified architecture" section above describes
-the pre-Phase-3 baseline and is kept for history; the older capability
-inventory ("Absent: real model calls, web fetch, UI, dashboards") is
-superseded by the record below and the git log.
+History note: the "Current verified architecture" and early "Capability inventory"
+sections above describe the pre-Phase-3 baseline and are kept for history. The
+repository has since moved through multiple later product phases (UI/IA reset,
+web search + deep research jobs, scheduling/reminders/jobs, memory/skills,
+library/gallery, conversation management/jobs polish). Treat git history and the
+product-phase record below as the source of truth for those later phases.
 
-- [x] Phase 3 fetch — hardened `fetch.py` (`f1f2e10`), DNS-rebinding
-  transport pinning (`a89f5a2`), wall-clock budget + IPv4-mapped unwrap +
-  encoding tests (this slice). ADR 0007. Acceptance: every resolved/pinned
-  address must be globally public; blocked targets provably never reach the
-  connector (recording-connector tests); redirects re-validated/re-pinned
-  per hop; no proxy bypass; size/decompression/total-time caps; untrusted
-  framing at `providers.py`.
-- [x] Phase 4 slice A' (fetch behavior, pre-dating that naming): real
-  webhook-out delivery behind the outbox (`b14d748`), scheduler-driven
-  backoff (`65bf04a`), read-only GitHub issue fetch + preview-then-ingest
-  (`449891c`), durable delivery states with locked claims and retry sweeps.
-- [x] Dashboard: read-mostly ops UI consuming the API (`135652c`) with a
-  chat home view (`2a239eb`) — strictly behind bearer auth.
-- Remaining Phase 3 item: none — web search now implemented
-  (credential-free DuckDuckGo Lite via `search.py`, ADR 0007 item 6,
-  owner-selected). `tools.web_search` capability `ready`.
-- Phase 4 remaining: per the prompt, the outbox/GitHub/webhook work that
-  exists is the *slice* that proved the pattern; the remaining durable-
-  delivery hardening (retry/backoff limits visibility, idempotent delivery
-  keys, failure surfaces) is tracked as follow-up in
-  `docs/phase4-architecture.md` review notes when the search slice closes.
-- Next action: Phase 4 slices A/B/C verified implemented and the lease
-  residual closed; per-phase review before any Phase 5 selection.
+### Legacy milestone record (2026-10-17 baseline)
+- [x] Phase 3 fetch — hardened `fetch.py` (`f1f2e10`), DNS-rebinding transport
+  pinning (`a89f5a2`), wall-clock budget + IPv4-mapped unwrap + encoding tests.
+  ADR 0007. `tools.web_search` implemented (credential-free DuckDuckGo Lite via
+  `search.py`).
+- [x] Legacy Phase 4 durable-integration slices: webhook-out/outbox, scheduler-
+  driven backoff, read-only GitHub issue fetch + preview-then-ingest, durable
+  delivery states with locked claims/lease recovery and manual-trigger sweeps.
+  See `docs/phase4-architecture.md`, `docs/integration-adapters.md`.
+
+### Product-phase record (later roadmap; verified 2026-11-10)
+- [x] Phase 0 UI/IA reset + Phase 1 web search & deep research jobs — `21f951c`
+  (`feat: Phase 0 UI/IA reset and Phase 1 web search + deep research jobs`).
+  **Implementation:** present in git. **Verification:** not fully re-run in this
+  Stage A pass; relied on existing tests/history plus targeted checks below.
+- [x] Phase 2 scheduling/reminders/jobs + chat UX fixes — `143ca5b`.
+  **Implementation:** present in git. **Verification:** targeted/indirect (see
+  Phase 5 jobs/API verification), not a full end-to-end pass.
+- [x] Phase 3 memory and reusable skills (+ gaps/tests) — `38a185a`, `c742a41`.
+  **Implementation:** present in git. **Verification:** not fully re-run in
+  this Stage A pass.
+- [x] Phase 4 library/gallery polish and flows — checkpoint `bdc0a94`
+  (`feat: complete Phase 4 library/gallery polish and flows`, **local commit,
+  not pushed**). Includes rich chat/report save-to-library flows, explicit
+  library/chat/gallery reference insertion, gallery previews/storage metadata,
+  richer markdown/CSV handling, and focused tests.
+  **Implementation:** complete in git (local). **Verification:** targeted
+  `uv run pytest -q tests/test_phase4_library_gallery.py tests/test_phase4_integrations.py`
+  → `23 passed, 1 warning` (2026-11-10). Full end-to-end UI/browser flows not
+  re-verified in this pass.
+- [x] Phase 5 conversation management and unified Jobs polish — implemented in
+  the current working tree (**uncommitted** at audit time: `backend/src/nerdbot/api.py`,
+  `backup.py`, `models.py`, `schemas.py`, `store.py`, `dashboard/src/api.ts`,
+  `types.ts`, `views-chat.tsx`, `views-work.tsx`). Scope: thread rename/pin/
+  archive/unarchive/safe soft-delete/restore/search-filter/move/export and
+  recents, additive Phase 32 `chat_threads` migration/backcompat, unified `/jobs`
+  and Activity UI with statuses/timestamps/drill-down/actions/links/empty-error
+  states. Semantics preserved: delete is soft/safe (restorable via API, no
+  trash/purge UI), move is explicit and clears workspace-scoped provider binding.
+  **Implementation:** complete in working tree. **Verification:** targeted
+  `uv run pytest -q tests/test_recent_threads.py tests/test_phase4_integrations.py`
+  → `23 passed, 1 warning`; `npx --yes --package=typescript tsc -p dashboard/tsconfig.json --noEmit`
+  → pass (2026-11-10). Manual UI/browser acceptance and full regression suite
+  not re-run in this pass.
+
+**Do not reimplement completed Phase 4 or Phase 5 functionality. Preserve it and
+include it in frontend accessibility and integration audits. Distinguish
+implementation completion from end-to-end verification.** Stage A audit
+deliverables (backend capability inventory, frontend accessibility/integration
+audit, journey issues, product IA, prioritized plan) are produced for review
+before any visual redesign.
 
 ## Phase 4 plan (written 2026-10-17; implementation gated on Phase 3 review)
 

@@ -172,12 +172,17 @@ export function ConversationView({
   const home = useAsync(() => api.getHome(), []);
   const summary = useWorkspaceSummary();
   const resolvedProjectId = projectId ?? (home.data?.id ?? "");
+  const [search, setSearch] = useState("");
+  const [showArchivedThreads, setShowArchivedThreads] = useState(false);
   const threads = useAsync(
     () =>
       resolvedProjectId
-        ? api.listThreads(resolvedProjectId)
+        ? api.listThreads(resolvedProjectId, {
+            q: search.trim() || undefined,
+            include_archived: showArchivedThreads,
+          })
         : Promise.resolve({ threads: [] }),
-    [resolvedProjectId],
+    [resolvedProjectId, search, showArchivedThreads],
   );
   const providers = useAsync(
     () =>
@@ -210,10 +215,14 @@ export function ConversationView({
   }, [projectId]);
   // The Command Center resume list spans every project the owner owns, so a
   // conversation started in another workspace is still reachable from here.
-  const recentThreads = useAsync(() => api.listRecentThreads(20), []);
+  const [recentSearch, setRecentSearch] = useState("");
+  const [showArchivedRecent, setShowArchivedRecent] = useState(false);
+  const recentThreads = useAsync(
+    () => api.listRecentThreads(50, { q: recentSearch.trim() || undefined, include_archived: showArchivedRecent }),
+    [recentSearch, showArchivedRecent],
+  );
   const [activeId, setActiveId] = useState<string | null>(initialThreadId ?? null);
   const [objectiveId, setObjectiveId] = useState<string | null>(null);
-  const [search, setSearch] = useState("");
   const [showNew, setShowNew] = useState(false);
   const [railOpen, setRailOpen] = useState(true);
   const [mobileRailOpen, setMobileRailOpen] = useState(false);
@@ -302,9 +311,14 @@ export function ConversationView({
               aria-label="Search conversations"
               className="h-8 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-step--1 outline-none transition-colors placeholder:text-[var(--faint)] focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
             />
+            <label className="mt-2 flex items-center gap-2 text-step--2 text-[var(--muted)]">
+              <input type="checkbox" checked={showArchivedThreads} onChange={(e) => setShowArchivedThreads(e.target.checked)} />
+              Show archived
+            </label>
           </div>
-          <div className="px-3 pb-1 pt-4">
+          <div className="px-3 pb-1 pt-4 flex items-center justify-between">
             <SectionLabel>Conversations</SectionLabel>
+            <span className="text-step--2 text-[var(--faint)]">{(threads.data?.threads ?? []).length}</span>
           </div>
           <div className="flex-1 overflow-y-auto px-2 pb-4 pt-1">
             {threads.loading ? (
@@ -312,33 +326,23 @@ export function ConversationView({
             ) : threads.error ? (
               <ErrorState error={threads.error} onRetry={threads.reload} />
             ) : null}
-            {(threads.data?.threads ?? [])
-              .filter((t) => !search || t.title.toLowerCase().includes(search.toLowerCase()))
-              .map((thread: ChatThread) => (
-                <button
-                  key={thread.id}
-                  onClick={() => {
-                    setActiveId(thread.id);
-                    onSetActiveThread?.(thread.id);
-                  }}
-                  title={thread.title || "Untitled"}
-                  className={`mb-0.5 flex w-full flex-col rounded-md px-2.5 py-2 text-left transition-colors ${
-                    activeId === thread.id
-                      ? "bg-[var(--surface-3)] text-[var(--text)]"
-                      : "text-[var(--text-soft)] hover:bg-[var(--surface-2)]"
-                  }`}
-                >
-                  <span className="truncate text-step--1 font-medium">
-                    {thread.title || "Untitled"}
-                  </span>
-                  <span className="mono text-step--2 text-[var(--faint)]">
-                    {relativeTime(thread.created_at)}
-                  </span>
-                </button>
-              ))}
+            {(threads.data?.threads ?? []).map((thread: ChatThread) => (
+              <ThreadListItem
+                key={thread.id}
+                thread={thread}
+                active={activeId === thread.id}
+                projectId={resolvedProjectId}
+                onOpen={() => { setActiveId(thread.id); onSetActiveThread?.(thread.id); }}
+                onChanged={() => { threads.reload(); recentThreads.reload(); }}
+                onMoved={(targetProjectId) => {
+                  if (targetProjectId !== resolvedProjectId) setActiveId((id) => (id === thread.id ? null : id));
+                  threads.reload(); recentThreads.reload();
+                }}
+              />
+            ))}
             {threads.data && (threads.data.threads ?? []).length === 0 && !threads.loading ? (
               <p className="px-2.5 py-2 text-step--1 text-[var(--faint)]">
-                No conversations yet
+                {showArchivedThreads ? "No conversations found." : "No conversations yet"}
               </p>
             ) : null}
           </div>
@@ -359,6 +363,11 @@ export function ConversationView({
               summary={summary}
               projectId={resolvedProjectId}
               recentThreads={recentThreads.data?.threads ?? []}
+              projects={(allProviders.data ? undefined : undefined) as any}
+              recentSearch={recentSearch}
+              onRecentSearch={setRecentSearch}
+              showArchivedRecent={showArchivedRecent}
+              onShowArchivedRecent={setShowArchivedRecent}
               providers={
                 (isHome ? allProviders.data : providers.data?.providers) ?? []
               }
@@ -374,9 +383,6 @@ export function ConversationView({
                 setActiveId(thread.id);
                 onSetActiveThread?.(thread.id);
                 if (thread.project_id !== resolvedProjectId) {
-                  // The conversation lives in another workspace: switch the
-                  // context so its messages, files and provider come from
-                  // there rather than from the workspace we are looking at.
                   navigate(`/chat/${thread.project_id}`);
                 }
               }}
@@ -1019,20 +1025,36 @@ function ThreadPane({
     navigate(`/bot/${teammateId}`);
   };
 
+  const thread = view.data?.thread;
+  const [threadMenuOpen, setThreadMenuOpen] = useState(false);
+  const [moveProjects, setMoveProjects] = useState<Array<{ id: string; repository: string }>>([]);
+  const [showMove, setShowMove] = useState(false);
+  const threadToken = getSession()?.token || "";
+  const runThreadAction = async (fn: () => Promise<void>, ok?: string) => {
+    try { await fn(); if (ok) toast.success(ok); await view.reload(); onReload(); }
+    catch (err) { notifyError(err); }
+    finally { setThreadMenuOpen(false); }
+  };
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* Thread header */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border-dim)] px-4 py-2.5 md:px-6">
         <div className="min-w-0">
-          <div className="truncate text-step-0 font-semibold">
-            {view.data?.thread.title || "Untitled"}
+          <div className="flex items-center gap-2 min-w-0">
+            {thread?.pinned ? <span className="text-[10px] text-[var(--accent)]" title="Pinned">●</span> : null}
+            <div className="truncate text-step-0 font-semibold">
+              {thread?.title || "Untitled"}
+            </div>
+            {thread?.archived ? <span className="rounded bg-[var(--surface-2)] px-1.5 py-0.5 text-step--2 text-[var(--faint)]">archived</span> : null}
           </div>
           <div className="mono text-step--2 text-[var(--faint)]">
-            {relativeTime(view.data?.thread.created_at ?? "")}
-            {` · ${providers.find((provider) => provider.id === view.data?.thread.provider_id)?.name ?? "Default model"}`}
+            <span className="rounded bg-[var(--surface-2)] px-1 py-0.5">{thread?.project_id === projectId ? "this workspace" : "workspace"}</span>
+            {` · ${relativeTime((thread?.updated_at || thread?.created_at) ?? "")}`}
+            {` · ${providers.find((provider) => provider.id === thread?.provider_id)?.name ?? "Default model"}`}
           </div>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
           <select
             value={providerId}
             onChange={(e) => void switchProvider(e.target.value)}
@@ -1046,18 +1068,35 @@ function ThreadPane({
               </option>
             ))}
           </select>
-          <Button variant="ghost" onClick={view.reload} title="Refresh">
-            ⟳
-          </Button>
-          <Button variant="ghost" onClick={summarize} disabled={busy} title="Summarize thread">
-            Summarize
-          </Button>
-          <Button variant="ghost" onClick={() => setContextPanel("files")} title="Project files">
-            Files
-          </Button>
-          <Button variant="ghost" onClick={() => setContextPanel("bots")} title="Teammates">
-            Teammates
-          </Button>
+          <Button variant="ghost" onClick={view.reload} title="Refresh">⟳</Button>
+          <Button variant="ghost" onClick={summarize} disabled={busy} title="Summarize thread">Summarize</Button>
+          <Button variant="ghost" onClick={() => setContextPanel("files")} title="Project files">Files</Button>
+          <Button variant="ghost" onClick={() => setContextPanel("bots")} title="Teammates">Teammates</Button>
+          <div className="relative">
+            <Button variant="ghost" onClick={() => setThreadMenuOpen((v) => !v)} aria-label="Conversation actions" title="Conversation actions">⋯</Button>
+            {threadMenuOpen && thread ? (
+              <>
+                <div className="fixed inset-0 z-20" onClick={() => { setThreadMenuOpen(false); setShowMove(false); }} />
+                <div className="absolute right-0 top-full z-30 mt-1 w-52 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 text-step--1 shadow-lg">
+                  <button className="w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={() => void runThreadAction(async () => { const t = window.prompt("Rename conversation", thread.title || ""); if (t == null) return; await api.renameThread(thread.id, t.trim() || "Untitled"); }, "Renamed")}>Rename</button>
+                  <button className="w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={() => void runThreadAction(() => api.pinThread(thread.id, !thread.pinned).then(() => undefined), thread.pinned ? "Unpinned" : "Pinned")}>{thread.pinned ? "Unpin" : "Pin"}</button>
+                  <button className="w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={() => void runThreadAction(async () => { if (thread.archived) await api.unarchiveThread(thread.id); else await api.archiveThread(thread.id); }, thread.archived ? "Unarchived" : "Archived")}>{thread.archived ? "Unarchive" : "Archive"}</button>
+                  <a className="block w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" href={api.exportThreadUrl(thread.id, threadToken)} target="_blank" rel="noreferrer">Export (JSON)</a>
+                  <button className="w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={async () => { setShowMove(true); try { const r = await api.listProjects(); setMoveProjects(r.projects.map((p: any) => ({ id: p.id, repository: p.repository }))); } catch (e) { notifyError(e); } }}>Move to workspace…</button>
+                  <button className="w-full rounded px-2 py-1.5 text-left text-[var(--danger)] hover:bg-[var(--danger-dim)]" onClick={() => void runThreadAction(async () => { if (!window.confirm("Delete this conversation? (safe delete)")) return; await api.deleteThread(thread.id); navigate("/"); }, "Deleted")}>Delete</button>
+                  {showMove ? (
+                    <div className="mt-1 border-t border-[var(--border-dim)] pt-1">
+                      <div className="px-2 py-1 text-step--2 text-[var(--muted)]">Move to (clears model binding)</div>
+                      {moveProjects.filter((p) => p.id !== thread.project_id).map((p) => (
+                        <button key={p.id} className="w-full truncate rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={() => void runThreadAction(async () => { await api.moveThread(thread.id, p.id); navigate(`/chat/${p.id}?thread=${thread.id}`); }, "Moved")}>{p.repository || p.id}</button>
+                      ))}
+                      {moveProjects.filter((p) => p.id !== thread.project_id).length === 0 ? <div className="px-2 py-1 text-[var(--faint)]">No other workspaces</div> : null}
+                    </div>
+                  ) : null}
+                </div>
+              </>
+            ) : null}
+          </div>
         </div>
       </div>
 
@@ -2417,6 +2456,176 @@ function ContextPanel({
   );
 }
 
+function ThreadListItem({
+  thread,
+  active,
+  projectId: _projectId,
+  onOpen,
+  onChanged,
+  onMoved,
+}: {
+  thread: ChatThread;
+  active: boolean;
+  projectId: string;
+  onOpen: () => void;
+  onChanged: () => void;
+  onMoved?: (targetProjectId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [moving, setMoving] = useState(false);
+  const [projects, setProjects] = useState<Array<{ id: string; repository: string }>>([]);
+  const token = getSession()?.token || "";
+
+  const run = async (fn: () => Promise<void>, ok?: string) => {
+    setBusy(true);
+    try {
+      await fn();
+      if (ok) toast.success(ok);
+      onChanged();
+    } catch (err) {
+      notifyError(err);
+    } finally {
+      setBusy(false);
+      setOpen(false);
+    }
+  };
+
+  const rename = () =>
+    void run(async () => {
+      const title = window.prompt("Rename conversation", thread.title || "");
+      if (title == null) return;
+      await api.renameThread(thread.id, title.trim() || "Untitled");
+    }, "Conversation renamed");
+
+  const togglePin = () => void run(() => api.pinThread(thread.id, !thread.pinned).then(() => undefined), thread.pinned ? "Unpinned" : "Pinned");
+  const archive = () => void run(async () => { if (thread.archived) await api.unarchiveThread(thread.id); else await api.archiveThread(thread.id); }, thread.archived ? "Restored from archive" : "Archived");
+  const remove = () => void run(async () => {
+    if (!window.confirm("Delete this conversation? It will be removed from your lists (safe delete).")) return;
+    await api.deleteThread(thread.id);
+  }, "Conversation deleted");
+
+  const startMove = async () => {
+    setMoving(true);
+    try {
+      const res = await api.listProjects();
+      setProjects(res.projects.map((p) => ({ id: p.id, repository: p.repository })));
+    } catch (err) {
+      notifyError(err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doMove = (target: string) => void run(async () => {
+    if (!target || target === thread.project_id) return;
+    const res = await api.moveThread(thread.id, target);
+    if (res.provider_cleared) toast.message("Moved; model binding cleared (models are workspace-scoped).");
+    onMoved?.(target);
+    setMoving(false);
+  }, "Conversation moved");
+
+  return (
+    <div className={`group mb-0.5 rounded-md ${active ? "bg-[var(--surface-3)]" : "hover:bg-[var(--surface-2)]"}`}>
+      <div className="flex items-start gap-1 px-1 py-1">
+        <button
+          onClick={onOpen}
+          title={thread.title || "Untitled"}
+          className="min-w-0 flex-1 rounded-md px-1.5 py-1 text-left"
+        >
+          <div className="flex items-center gap-1.5">
+            {thread.pinned ? <span className="text-[10px] text-[var(--accent)]" title="Pinned">●</span> : null}
+            <span className="truncate text-step--1 font-medium text-[var(--text)]">
+              {thread.title || "Untitled"}
+            </span>
+            {thread.archived ? <span className="rounded bg-[var(--surface-2)] px-1 text-[10px] text-[var(--faint)]">archived</span> : null}
+          </div>
+          <span className="mono block text-step--2 text-[var(--faint)]">
+            {relativeTime((thread.updated_at || thread.created_at) ?? "")}
+          </span>
+        </button>
+        <div className="relative shrink-0">
+          <button
+            type="button"
+            aria-label="Conversation actions"
+            disabled={busy}
+            onClick={() => setOpen((v) => !v)}
+            className="rounded px-1.5 py-1 text-[var(--faint)] opacity-0 transition-opacity hover:bg-[var(--surface)] hover:text-[var(--text)] group-hover:opacity-100 focus:opacity-100"
+          >
+            ⋯
+          </button>
+          {open ? (
+            <>
+              <div className="fixed inset-0 z-20" onClick={() => { setOpen(false); setMoving(false); }} />
+              <div className="absolute right-0 top-full z-30 mt-1 w-48 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 shadow-lg text-step--1">
+                <button className="w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={rename}>Rename</button>
+                <button className="w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={togglePin}>{thread.pinned ? "Unpin" : "Pin"}</button>
+                <button className="w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={archive}>{thread.archived ? "Unarchive" : "Archive"}</button>
+                <a className="block w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" href={api.exportThreadUrl(thread.id, token)} target="_blank" rel="noreferrer">Export (JSON)</a>
+                <button className="w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={() => void startMove()}>Move to workspace…</button>
+                <button className="w-full rounded px-2 py-1.5 text-left text-[var(--danger)] hover:bg-[var(--danger-dim)]" onClick={remove}>Delete</button>
+                {moving ? (
+                  <div className="mt-1 border-t border-[var(--border-dim)] pt-1">
+                    <div className="px-2 py-1 text-step--2 text-[var(--muted)]">Move to</div>
+                    {projects.filter((p) => p.id !== thread.project_id).map((p) => (
+                      <button key={p.id} className="w-full truncate rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={() => doMove(p.id)}>
+                        {p.repository || p.id}
+                      </button>
+                    ))}
+                    {projects.filter((p) => p.id !== thread.project_id).length === 0 ? <div className="px-2 py-1 text-[var(--faint)]">No other workspaces</div> : null}
+                  </div>
+                ) : null}
+              </div>
+            </>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+function ThreadRowActions({ thread, onChanged, onMoved }: { thread: ChatThread; onChanged: () => void; onMoved?: (targetProjectId: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [moving, setMoving] = useState(false);
+  const [projects, setProjects] = useState<Array<{ id: string; repository: string }>>([]);
+  const run = async (fn: () => Promise<void>, ok?: string) => {
+    setBusy(true);
+    try { await fn(); if (ok) toast.success(ok); onChanged(); }
+    catch (err) { notifyError(err); }
+    finally { setBusy(false); setOpen(false); }
+  };
+  return (
+    <div className="relative">
+      <button type="button" aria-label="Conversation actions" disabled={busy} onClick={() => setOpen((v) => !v)} className="rounded px-2 py-1 text-[var(--faint)] hover:bg-[var(--surface)] hover:text-[var(--text)]">⋯</button>
+      {open ? (
+        <>
+          <div className="fixed inset-0 z-20" onClick={() => { setOpen(false); setMoving(false); }} />
+          <div className="absolute right-0 top-full z-30 mt-1 w-52 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 text-step--1 shadow-lg">
+            <button className="w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={() => void run(async () => { const t = window.prompt("Rename conversation", thread.title || ""); if (t == null) return; await api.renameThread(thread.id, t.trim() || "Untitled"); }, "Renamed")}>Rename</button>
+            <button className="w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={() => void run(() => api.pinThread(thread.id, !thread.pinned).then(() => undefined), thread.pinned ? "Unpinned" : "Pinned")}>{thread.pinned ? "Unpin" : "Pin"}</button>
+            <button className="w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={() => void run(async () => { if (thread.archived) await api.unarchiveThread(thread.id); else await api.archiveThread(thread.id); }, thread.archived ? "Unarchived" : "Archived")}>{thread.archived ? "Unarchive" : "Archive"}</button>
+            <a className="block w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" href={api.exportThreadUrl(thread.id, getSession()?.token || "")} target="_blank" rel="noreferrer">Export (JSON)</a>
+            <button className="w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={async () => { setMoving(true); try { const r = await api.listProjects(); setProjects(r.projects.map((p: any) => ({ id: p.id, repository: p.repository }))); } catch (e) { notifyError(e); } }}>Move to workspace…</button>
+            <button className="w-full rounded px-2 py-1.5 text-left text-[var(--danger)] hover:bg-[var(--danger-dim)]" onClick={() => void run(async () => { if (!window.confirm("Delete this conversation? (safe delete)")) return; await api.deleteThread(thread.id); }, "Deleted")}>Delete</button>
+            {moving ? (
+              <div className="mt-1 border-t border-[var(--border-dim)] pt-1">
+                <div className="px-2 py-1 text-step--2 text-[var(--muted)]">Move to</div>
+                {projects.filter((p) => p.id !== thread.project_id).map((p) => (
+                  <button key={p.id} className="w-full truncate rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={() => void run(async () => { const r = await api.moveThread(thread.id, p.id); if ((r as any).provider_cleared) toast.message("Moved; model binding cleared."); onMoved?.(p.id); }, "Moved")}>{p.repository || p.id}</button>
+                ))}
+                {projects.filter((p) => p.id !== thread.project_id).length === 0 ? <div className="px-2 py-1 text-[var(--faint)]">No other workspaces</div> : null}
+              </div>
+            ) : null}
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+
 function CommandCenter({
   projectId,
   recentThreads,
@@ -2426,6 +2635,10 @@ function CommandCenter({
   onOpenThread,
   refreshProviders,
   refreshThreads,
+  recentSearch,
+  onRecentSearch,
+  showArchivedRecent,
+  onShowArchivedRecent,
 }: {
   projectId: string;
   /** Recent conversations across every project the owner owns. */
@@ -2436,6 +2649,11 @@ function CommandCenter({
   onOpenThread: (thread: ChatThread) => void;
   refreshProviders?: () => void;
   refreshThreads?: () => void;
+  recentSearch?: string;
+  onRecentSearch?: (v: string) => void;
+  showArchivedRecent?: boolean;
+  onShowArchivedRecent?: (v: boolean) => void;
+  projects?: any;
 }) {
   const usable = usableProviders(providers);
   const hasProvider = usable.length > 0;
@@ -2573,13 +2791,13 @@ function CommandCenter({
   };
 
   // The resume list spans every project the owner owns, so a conversation
-  // started elsewhere is still one click away from here.
-  const sorted = [...recentThreads].sort(
-    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-  );
+  // started elsewhere is still one click away from here. Backend orders by
+  // pinned then recency; preserve that order.
+  const sorted = recentThreads;
   const projectLabel = (id: string) => {
     const bundle = summary.data?.summary.bundles.find((b) => b.project.id === id);
-    return bundle?.project.repository || "project";
+    if (id === projectId) return "Home";
+    return bundle?.project.repository || "workspace";
   };
 
   return (
@@ -2930,46 +3148,58 @@ function CommandCenter({
         {/* One list. Home has no conversation rail, so this is the whole
             history rather than a second copy of it. */}
         <section>
-          <div className="mb-2 flex items-center justify-between gap-3">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-baseline gap-2">
               <SectionLabel>Conversations</SectionLabel>
-              <span className="text-step--2 text-[var(--faint)]">
-                every workspace
-              </span>
+              <span className="text-step--2 text-[var(--faint)]">Home + all workspaces</span>
             </div>
-            {sorted.length > 0 && refreshThreads ? (
-              <Button variant="ghost" onClick={() => void refreshThreads()}>
-                Refresh
-              </Button>
-            ) : null}
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                value={recentSearch ?? ""}
+                onChange={(e) => onRecentSearch?.(e.target.value)}
+                placeholder="Search conversations"
+                aria-label="Search recent conversations"
+                className="h-8 w-44 rounded-md border border-[var(--border)] bg-[var(--surface)] px-2.5 text-step--1 outline-none focus:border-[var(--border-focus)]"
+              />
+              <label className="flex items-center gap-1.5 text-step--2 text-[var(--muted)]">
+                <input type="checkbox" checked={!!showArchivedRecent} onChange={(e) => onShowArchivedRecent?.(e.target.checked)} />
+                Archived
+              </label>
+              {refreshThreads ? <Button variant="ghost" onClick={() => void refreshThreads()}>Refresh</Button> : null}
+            </div>
           </div>
           {sorted.length === 0 ? (
             <p className="rounded-xl border border-dashed border-[var(--border-dim)] px-4 py-6 text-center text-step--1 text-[var(--faint)]">
-              No recent conversations yet. Start one above.
+              {recentSearch || showArchivedRecent ? "No conversations match." : "No recent conversations yet. Start one above."}
             </p>
-          ) : (            <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
-              {sorted.slice(0, 8).map((t, index) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => onOpenThread(t)}
-                  aria-label={`Resume: ${t.title || "Untitled"}`}
-                  className={`flex w-full items-baseline justify-between gap-3 px-4 py-2.5 text-left transition-colors hover:bg-[var(--surface-2)] ${
-                    index > 0 ? "border-t border-[var(--border-dim)]" : ""
-                  }`}
-                >
-                  <span className="truncate text-step--1 text-[var(--text)]">
-                    {t.title || "Untitled"}
-                  </span>
-                  {t.project_id !== projectId ? (
-                    <span className="mono shrink-0 text-step--2 text-[var(--faint)]">
-                      {projectLabel(t.project_id)}
-                    </span>
-                  ) : null}
-                  <span className="mono shrink-0 text-step--2 text-[var(--faint)]">
-                    {relativeTime(t.created_at)}
-                  </span>
-                </button>
+          ) : (
+            <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
+              {sorted.slice(0, 20).map((t) => (
+                <div key={t.id} className="flex items-center gap-2 border-t border-[var(--border-dim)] first:border-t-0 px-2 py-1 hover:bg-[var(--surface-2)]">
+                  <button
+                    type="button"
+                    onClick={() => onOpenThread(t)}
+                    aria-label={`Resume: ${t.title || "Untitled"}`}
+                    className="flex min-w-0 flex-1 items-center gap-3 px-2 py-1.5 text-left"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        {t.pinned ? <span className="text-[10px] text-[var(--accent)]" title="Pinned">●</span> : null}
+                        <span className="truncate text-step--1 text-[var(--text)]">{t.title || "Untitled"}</span>
+                        {t.archived ? <span className="rounded bg-[var(--surface-2)] px-1 text-[10px] text-[var(--faint)]">archived</span> : null}
+                      </div>
+                      <div className="flex items-center gap-2 text-step--2 text-[var(--faint)]">
+                        <span className={`mono rounded px-1 ${t.project_id === projectId ? "bg-[var(--accent-dim,rgba(59,130,246,0.12))] text-[var(--accent)]" : "bg-[var(--surface-2)]"}`}>
+                          {projectLabel(t.project_id)}
+                        </span>
+                        <span className="mono">{relativeTime((t.updated_at || t.created_at) ?? "")}</span>
+                      </div>
+                    </div>
+                  </button>
+                  <div className="shrink-0 pr-1">
+                    <ThreadRowActions thread={t} onChanged={() => { refreshThreads?.(); }} onMoved={() => { refreshThreads?.(); }} />
+                  </div>
+                </div>
               ))}
             </div>
           )}

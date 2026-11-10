@@ -235,7 +235,10 @@ CREATE TABLE IF NOT EXISTS meta (
 CREATE TABLE IF NOT EXISTS chat_threads (
   id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
   title TEXT NOT NULL DEFAULT '', provider_id TEXT, summary TEXT NOT NULL DEFAULT '',
-  tainted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+  tainted INTEGER NOT NULL DEFAULT 0,
+  pinned INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0,
+  archived_at TEXT, deleted_at TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS chat_messages (
   id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES chat_threads(id),
@@ -750,6 +753,18 @@ _PHASE31_COLUMNS: dict[str, list[tuple[str, str]]] = {
 }
 
 
+_PHASE32_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    # Phase 5: conversation management (rename/pin/archive/delete/search/move/export)
+    "chat_threads": [
+        ("pinned", "INTEGER NOT NULL DEFAULT 0"),
+        ("archived", "INTEGER NOT NULL DEFAULT 0"),
+        ("archived_at", "TEXT"),
+        ("deleted_at", "TEXT"),
+        ("updated_at", "TEXT"),
+    ],
+}
+
+
 _PHASE20_COLUMNS: dict[str, list[tuple[str, str]]] = {
     # Bot persona files (ai-teammates model): a bot's identity, its active
     # objectives, and its accumulated wisdom. These are the durable parts of
@@ -782,7 +797,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
                   _PHASE18_COLUMNS, _PHASE19_COLUMNS, _PHASE20_COLUMNS,
                   _PHASE21_COLUMNS, _PHASE22_COLUMNS, _PHASE23_COLUMNS, _PHASE24_COLUMNS,
                   _PHASE25_COLUMNS, _PHASE26_COLUMNS, _PHASE27_COLUMNS, _PHASE28_COLUMNS,
-                  _PHASE29_COLUMNS, _PHASE30_COLUMNS, _PHASE31_COLUMNS):
+                  _PHASE29_COLUMNS, _PHASE30_COLUMNS, _PHASE31_COLUMNS, _PHASE32_COLUMNS):
         for table, columns in phase.items():
             phases.setdefault(table, []).extend(columns)
     for table, columns in phases.items():
@@ -791,6 +806,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
             if name not in existing:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
     conn.commit()
+    _ensure_indexes(conn)
     _backfill_blocked_reasons(conn)
     _encrypt_legacy_provider_secrets(conn)
     _backfill_teammate_names(conn)
@@ -830,6 +846,33 @@ def _backfill_teammate_names(conn: sqlite3.Connection) -> None:
             changed = True
     if changed:
         conn.commit()
+
+
+def _ensure_indexes(conn: sqlite3.Connection) -> None:
+    """Create indexes that depend on migrated columns (idempotent)."""
+    try:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chat_threads_project "
+            "ON chat_threads(project_id, COALESCE(updated_at, created_at) DESC, rowid DESC)"
+        )
+    except Exception:
+        pass
+    try:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chat_threads_state "
+            "ON chat_threads(project_id, archived, pinned, deleted_at)"
+        )
+    except Exception:
+        pass
+    # backfill updated_at for legacy rows
+    try:
+        conn.execute(
+            "UPDATE chat_threads SET updated_at = COALESCE(updated_at, created_at) WHERE updated_at IS NULL OR updated_at = ''"
+        )
+    except Exception:
+        pass
+    conn.commit()
+
 
 
 def _backfill_blocked_reasons(conn: sqlite3.Connection) -> None:
@@ -5309,6 +5352,24 @@ HISTORY_PAGE_MAX = 100
 
 def _thread_from_row(row: sqlite3.Row) -> ChatThread:
     keys = row.keys()
+    archived_at = None
+    if "archived_at" in keys and row["archived_at"]:
+        try:
+            archived_at = datetime.fromisoformat(row["archived_at"])
+        except Exception:
+            archived_at = None
+    deleted_at = None
+    if "deleted_at" in keys and row["deleted_at"]:
+        try:
+            deleted_at = datetime.fromisoformat(row["deleted_at"])
+        except Exception:
+            deleted_at = None
+    updated_at = None
+    if "updated_at" in keys and row["updated_at"]:
+        try:
+            updated_at = datetime.fromisoformat(row["updated_at"])
+        except Exception:
+            updated_at = None
     return ChatThread(
         id=row["id"],
         project_id=row["project_id"],
@@ -5316,8 +5377,18 @@ def _thread_from_row(row: sqlite3.Row) -> ChatThread:
         provider_id=row["provider_id"],
         summary=row["summary"] if "summary" in keys and row["summary"] else "",
         tainted=bool(row["tainted"]) if "tainted" in keys else False,
+        pinned=bool(row["pinned"]) if "pinned" in keys and row["pinned"] is not None else False,
+        archived=bool(row["archived"]) if "archived" in keys and row["archived"] is not None else False,
+        archived_at=archived_at,
+        deleted_at=deleted_at,
         created_at=datetime.fromisoformat(row["created_at"]),
+        updated_at=updated_at or datetime.fromisoformat(row["created_at"]),
     )
+
+
+def _touch_thread(conn: sqlite3.Connection, thread_id: str, ts: datetime | None = None) -> None:
+    now = (ts or datetime.now(UTC)).isoformat()
+    conn.execute("UPDATE chat_threads SET updated_at = ? WHERE id = ?", (now, thread_id))
 
 
 def _message_from_row(row: sqlite3.Row) -> ChatMessage:
@@ -5350,92 +5421,245 @@ def create_thread(
         provider = get_provider(conn, provider_id)
         if provider is None or provider.project_id != project_id:
             raise ValueError("provider must belong to the same project")
+    now = datetime.now(UTC)
     thread = ChatThread(id=new_id("thr"), project_id=project_id, title=title,
-                        provider_id=provider_id)
+                        provider_id=provider_id, created_at=now, updated_at=now)
     conn.execute(
-        "INSERT INTO chat_threads (id, project_id, title, provider_id, created_at)"
-        " VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO chat_threads (id, project_id, title, provider_id, tainted, pinned, archived, archived_at, deleted_at, created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, 0, 0, 0, NULL, NULL, ?, ?)",
         (thread.id, thread.project_id, thread.title, thread.provider_id,
-         thread.created_at.isoformat()),
+         thread.created_at.isoformat(), thread.updated_at.isoformat()),
     )
     conn.commit()
     record_event(conn, project_id, "thread", thread.id, "thread.created")
     return thread
 
 
-def get_thread(conn: sqlite3.Connection, thread_id: str) -> ChatThread | None:
+def get_thread(conn: sqlite3.Connection, thread_id: str, *, include_deleted: bool = False) -> ChatThread | None:
     row = conn.execute("SELECT * FROM chat_threads WHERE id = ?", (thread_id,)).fetchone()
     if row is None:
         return None
-    return _thread_from_row(row)
+    thread = _thread_from_row(row)
+    if thread.deleted_at and not include_deleted:
+        return None
+    return thread
 
 
-def list_threads(conn: sqlite3.Connection, project_id: str) -> list[ChatThread]:
+def list_threads(
+    conn: sqlite3.Connection,
+    project_id: str,
+    *,
+    include_archived: bool = False,
+    include_deleted: bool = False,
+    q: str | None = None,
+    pinned_only: bool = False,
+    archived_only: bool = False,
+    limit: int | None = None,
+) -> list[ChatThread]:
+    clauses = ["project_id = ?"]
+    vals: list[Any] = [project_id]
+    if not include_deleted:
+        clauses.append("(deleted_at IS NULL OR deleted_at = '')")
+    if archived_only:
+        clauses.append("COALESCE(archived,0) = 1")
+    elif not include_archived:
+        clauses.append("COALESCE(archived,0) = 0")
+    if pinned_only:
+        clauses.append("COALESCE(pinned,0) = 1")
+    if q and q.strip():
+        needle = f"%{q.strip().lower()}%"
+        clauses.append("(lower(COALESCE(title,'')) LIKE ? OR lower(COALESCE(summary,'')) LIKE ?)")
+        vals.extend([needle, needle])
+    where = "WHERE " + " AND ".join(clauses)
+    lim = ""
+    if limit is not None:
+        lim = " LIMIT ?"
+        vals.append(max(1, min(int(limit), 500)))
     rows = conn.execute(
-        "SELECT * FROM chat_threads WHERE project_id = ? ORDER BY rowid", (project_id,)
+        f"SELECT * FROM chat_threads {where}"
+        " ORDER BY COALESCE(pinned,0) DESC,"
+        " COALESCE(updated_at, created_at) DESC, rowid DESC"
+        f"{lim}",
+        vals,
     ).fetchall()
     return [_thread_from_row(r) for r in rows]
 
 
 def list_threads_for_owner(
-    conn: sqlite3.Connection, owner: str, limit: int = 20
+    conn: sqlite3.Connection, owner: str, limit: int = 20, *, include_archived: bool = False, q: str | None = None
 ) -> list[ChatThread]:
     """Recent conversations across every project the owner owns.
 
-    The Command Center is a cross-workspace surface: a conversation started
-    in one project must still be reachable from it. Ordered newest first, so
-    the list is a resume list rather than a project-scoped index.
+    Ordered by pinned then recency (updated_at/created_at). Excludes deleted
+    and, by default, archived threads so the resume list stays trustworthy.
     """
+    clauses = ["projects.owner = ?", "(chat_threads.deleted_at IS NULL OR chat_threads.deleted_at = '')"]
+    vals: list[Any] = [owner]
+    if not include_archived:
+        clauses.append("COALESCE(chat_threads.archived,0) = 0")
+    if q and q.strip():
+        needle = f"%{q.strip().lower()}%"
+        clauses.append("(lower(COALESCE(chat_threads.title,'')) LIKE ? OR lower(COALESCE(chat_threads.summary,'')) LIKE ?)")
+        vals.extend([needle, needle])
+    where = "WHERE " + " AND ".join(clauses)
+    vals.append(limit)
     rows = conn.execute(
         "SELECT chat_threads.* FROM chat_threads"
         " JOIN projects ON chat_threads.project_id = projects.id"
-        " WHERE projects.owner = ?"
-        " ORDER BY chat_threads.created_at DESC, chat_threads.rowid DESC"
+        f" {where}"
+        " ORDER BY COALESCE(chat_threads.pinned,0) DESC,"
+        " COALESCE(chat_threads.updated_at, chat_threads.created_at) DESC,"
+        " chat_threads.rowid DESC"
         " LIMIT ?",
-        (owner, limit),
+        vals,
     ).fetchall()
     return [_thread_from_row(r) for r in rows]
+
+
+def update_thread(
+    conn: sqlite3.Connection,
+    thread_id: str,
+    *,
+    title: str | None = None,
+    provider_id: str | None | object = _UNSET,
+    summary: str | None = None,
+    pinned: bool | None = None,
+    archived: bool | None = None,
+    tainted: bool | None = None,
+) -> ChatThread:
+    thread = get_thread(conn, thread_id, include_deleted=False)
+    if thread is None:
+        raise KeyError(f"unknown thread {thread_id}")
+    if provider_id is not _UNSET and provider_id is not None:
+        provider = get_provider(conn, str(provider_id))
+        if provider is None or provider.project_id != thread.project_id:
+            raise ValueError("provider must belong to the same project")
+        if provider.status != ProviderStatus.ACTIVE:
+            raise ValueError(f"provider {provider_id} is not active")
+    fields: list[str] = []
+    vals: list[Any] = []
+    if title is not None:
+        fields.append("title = ?"); vals.append(title)
+    if provider_id is not _UNSET:
+        fields.append("provider_id = ?"); vals.append(provider_id)
+    if summary is not None:
+        fields.append("summary = ?"); vals.append(summary)
+    if pinned is not None:
+        fields.append("pinned = ?"); vals.append(1 if pinned else 0)
+    if tainted is not None:
+        fields.append("tainted = ?"); vals.append(1 if tainted else 0)
+    if archived is not None:
+        fields.append("archived = ?"); vals.append(1 if archived else 0)
+        fields.append("archived_at = ?"); vals.append(datetime.now(UTC).isoformat() if archived else None)
+    if fields:
+        fields.append("updated_at = ?"); vals.append(datetime.now(UTC).isoformat())
+        vals.append(thread_id)
+        conn.execute(f"UPDATE chat_threads SET {', '.join(fields)} WHERE id = ?", vals)
+        conn.commit()
+        event = "thread.archived" if archived is True else ("thread.unarchived" if archived is False else "thread.updated")
+        record_event(conn, thread.project_id, "thread", thread_id, event)
+    return get_thread(conn, thread_id, include_deleted=False)  # type: ignore[return-value]
+
+
+def archive_thread(conn: sqlite3.Connection, thread_id: str) -> ChatThread:
+    return update_thread(conn, thread_id, archived=True)
+
+
+def unarchive_thread(conn: sqlite3.Connection, thread_id: str) -> ChatThread:
+    return update_thread(conn, thread_id, archived=False)
+
+
+def pin_thread(conn: sqlite3.Connection, thread_id: str, pinned: bool = True) -> ChatThread:
+    return update_thread(conn, thread_id, pinned=pinned)
 
 
 def set_thread_provider(
     conn: sqlite3.Connection, thread_id: str, provider_id: str | None
 ) -> ChatThread:
-    thread = get_thread(conn, thread_id)
-    if thread is None:
-        raise KeyError(f"unknown thread {thread_id}")
-    if provider_id is not None:
-        provider = get_provider(conn, provider_id)
-        if provider is None or provider.project_id != thread.project_id:
-            raise ValueError("provider must belong to the same project")
-        if provider.status != ProviderStatus.ACTIVE:
-            raise ValueError(f"provider {provider_id} is not active")
-    conn.execute("UPDATE chat_threads SET provider_id = ? WHERE id = ?",
-                 (provider_id, thread_id))
-    conn.commit()
-    thread.provider_id = provider_id
-    record_event(conn, thread.project_id, "thread", thread_id, "thread.provider_switched")
-    return thread
+    return update_thread(conn, thread_id, provider_id=provider_id)
 
 
 def set_thread_summary(conn: sqlite3.Connection, thread_id: str, summary: str) -> ChatThread:
-    thread = get_thread(conn, thread_id)
-    if thread is None:
-        raise KeyError(f"unknown thread {thread_id}")
-    conn.execute("UPDATE chat_threads SET summary = ? WHERE id = ?", (summary, thread_id))
-    conn.commit()
-    thread.summary = summary
-    record_event(conn, thread.project_id, "thread", thread_id, "thread.summarized")
-    return thread
+    return update_thread(conn, thread_id, summary=summary)
 
 
 def set_thread_tainted(conn: sqlite3.Connection, thread_id: str, tainted: bool = True) -> ChatThread:
-    thread = get_thread(conn, thread_id)
+    return update_thread(conn, thread_id, tainted=tainted)
+
+
+def delete_thread(conn: sqlite3.Connection, thread_id: str) -> ChatThread:
+    """Soft-delete (safe): hides thread from normal lists; recoverable in-store.
+    Messages are preserved for audit/export safety; hard purge is a separate ops task."""
+    thread = get_thread(conn, thread_id, include_deleted=True)
     if thread is None:
         raise KeyError(f"unknown thread {thread_id}")
-    conn.execute("UPDATE chat_threads SET tainted = ? WHERE id = ?", (1 if tainted else 0, thread_id))
+    now = datetime.now(UTC).isoformat()
+    conn.execute(
+        "UPDATE chat_threads SET deleted_at = ?, archived = 1, archived_at = COALESCE(archived_at, ?), updated_at = ? WHERE id = ?",
+        (now, now, now, thread_id),
+    )
     conn.commit()
-    thread.tainted = tainted
-    return thread
+    record_event(conn, thread.project_id, "thread", thread_id, "thread.deleted")
+    return get_thread(conn, thread_id, include_deleted=True)  # type: ignore[return-value]
+
+
+def restore_thread(conn: sqlite3.Connection, thread_id: str) -> ChatThread:
+    thread = get_thread(conn, thread_id, include_deleted=True)
+    if thread is None:
+        raise KeyError(f"unknown thread {thread_id}")
+    conn.execute(
+        "UPDATE chat_threads SET deleted_at = NULL, updated_at = ? WHERE id = ?",
+        (datetime.now(UTC).isoformat(), thread_id),
+    )
+    conn.commit()
+    record_event(conn, thread.project_id, "thread", thread_id, "thread.restored")
+    return get_thread(conn, thread_id)  # type: ignore[return-value]
+
+
+def move_thread(conn: sqlite3.Connection, thread_id: str, target_project_id: str, *, principal: str | None = None) -> ChatThread:
+    """Move a thread to another project. Only allowed when both projects exist
+    and (if principal given) are owned by the same principal. Provider binding
+    is cleared because providers are project-scoped."""
+    thread = get_thread(conn, thread_id, include_deleted=True)
+    if thread is None:
+        raise KeyError(f"unknown thread {thread_id}")
+    target = get_project(conn, target_project_id)
+    if target is None:
+        raise KeyError(f"unknown project {target_project_id}")
+    if principal is not None:
+        src = get_project(conn, thread.project_id)
+        if src is None or src.owner != principal or target.owner != principal:
+            raise ValueError("move requires ownership of both projects")
+    if thread.project_id == target_project_id:
+        return thread
+    conn.execute(
+        "UPDATE chat_threads SET project_id = ?, provider_id = NULL, updated_at = ? WHERE id = ?",
+        (target_project_id, datetime.now(UTC).isoformat(), thread_id),
+    )
+    conn.commit()
+    record_event(conn, thread.project_id, "thread", thread_id, "thread.moved_out")
+    record_event(conn, target_project_id, "thread", thread_id, "thread.moved_in")
+    return get_thread(conn, thread_id, include_deleted=True)  # type: ignore[return-value]
+
+
+def export_thread(conn: sqlite3.Connection, thread_id: str) -> dict[str, Any]:
+    thread = get_thread(conn, thread_id, include_deleted=True)
+    if thread is None:
+        raise KeyError(f"unknown thread {thread_id}")
+    # export includes all messages (no pagination cap here; bounded by DB)
+    rows = conn.execute(
+        "SELECT * FROM chat_messages WHERE thread_id = ? ORDER BY rowid ASC", (thread_id,)
+    ).fetchall()
+    messages = [_message_from_row(r).model_dump(mode="json") for r in rows]
+    project = get_project(conn, thread.project_id)
+    return {
+        "export_version": 1,
+        "exported_at": datetime.now(UTC).isoformat(),
+        "thread": thread.model_dump(mode="json"),
+        "project": project.model_dump(mode="json") if project else None,
+        "messages": messages,
+        "message_count": len(messages),
+    }
 
 
 def list_thread_summaries(
@@ -5443,7 +5667,8 @@ def list_thread_summaries(
 ) -> list[ChatThread]:
     rows = conn.execute(
         "SELECT * FROM chat_threads WHERE project_id = ? AND id != ? AND summary != ''"
-        " ORDER BY rowid DESC LIMIT ?",
+        " AND (deleted_at IS NULL OR deleted_at = '') AND COALESCE(archived,0) = 0"
+        " ORDER BY COALESCE(updated_at, created_at) DESC, rowid DESC LIMIT ?",
         (project_id, exclude_id, limit),
     ).fetchall()
     return [_thread_from_row(r) for r in rows]
@@ -5471,6 +5696,7 @@ def append_message(
          json.dumps(message.parts), message.teammate_id,
          message.created_at.isoformat()),
     )
+    _touch_thread(conn, thread_id)
     conn.commit()
     return message
 

@@ -340,7 +340,12 @@ class ChatThread(BaseModel):
     provider_id: str | None = None
     summary: str = ""
     tainted: bool = False
+    pinned: bool = False
+    archived: bool = False
+    archived_at: datetime | None = None
+    deleted_at: datetime | None = None
     created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
 
 
 class ChatMessage(BaseModel):

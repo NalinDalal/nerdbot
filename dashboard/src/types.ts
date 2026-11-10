@@ -548,7 +548,13 @@ export interface ChatThread {
   title: string;
   provider_id: string | null;
   summary: string;
+  tainted?: boolean;
+  pinned?: boolean;
+  archived?: boolean;
+  archived_at?: string | null;
+  deleted_at?: string | null;
   created_at: string;
+  updated_at?: string | null;
 }
 
 export interface ChatMessage {

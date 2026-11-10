@@ -710,15 +710,39 @@ export const api = {
   projectMetrics: (projectId: string) =>
     req<Record<string, unknown>>(`/projects/${projectId}/metrics`),
 
-  listThreads: (projectId: string) =>
-    req<{ threads: ChatThread[] }>(`/projects/${projectId}/threads`),
+  listThreads: (projectId: string, params?: { q?: string; include_archived?: boolean; archived_only?: boolean; pinned_only?: boolean; limit?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.q) q.set("q", params.q);
+    if (params?.include_archived) q.set("include_archived", "true");
+    if (params?.archived_only) q.set("archived_only", "true");
+    if (params?.pinned_only) q.set("pinned_only", "true");
+    if (params?.limit != null) q.set("limit", String(params.limit));
+    const s = q.toString();
+    return req<{ threads: ChatThread[] }>(`/projects/${projectId}/threads${s ? `?${s}` : ""}`);
+  },
   /** Recent conversations across every project the caller owns. */
-  listRecentThreads: (limit = 20) =>
-    req<{ threads: ChatThread[] }>(`/threads?limit=${limit}`),
+  listRecentThreads: (limit = 20, params?: { q?: string; include_archived?: boolean }) => {
+    const q = new URLSearchParams({ limit: String(limit) });
+    if (params?.q) q.set("q", params.q);
+    if (params?.include_archived) q.set("include_archived", "true");
+    return req<{ threads: ChatThread[] }>(`/threads?${q.toString()}`);
+  },
   createThread: (projectId: string, body: Record<string, unknown>) =>
     post<ChatThread>(`/projects/${projectId}/threads`, body),
   updateThread: (threadId: string, body: Record<string, unknown>) =>
     patch<ChatThread>(`/threads/${threadId}`, body),
+  renameThread: (threadId: string, title: string) =>
+    patch<ChatThread>(`/threads/${threadId}`, { title }),
+  archiveThread: (threadId: string) => post<{ thread: ChatThread }>(`/threads/${threadId}/archive`, {}),
+  unarchiveThread: (threadId: string) => post<{ thread: ChatThread }>(`/threads/${threadId}/unarchive`, {}),
+  pinThread: (threadId: string, pinned = true) => post<{ thread: ChatThread }>(`/threads/${threadId}/pin`, { pinned }),
+  deleteThread: (threadId: string) => req<{ deleted: boolean; thread: ChatThread }>(`/threads/${threadId}`, { method: "DELETE" }),
+  restoreThread: (threadId: string) => post<{ thread: ChatThread }>(`/threads/${threadId}/restore`, {}),
+  moveThread: (threadId: string, projectId: string) => post<{ thread: ChatThread; provider_cleared: boolean }>(`/threads/${threadId}/move`, { project_id: projectId }),
+  exportThreadUrl: (threadId: string, token = "") => {
+    const base = (getSession()?.baseUrl || "").replace(/\/+$/, "");
+    return `${base}/threads/${threadId}/export${token ? `?token=${encodeURIComponent(token)}` : ""}`;
+  },
   threadView: (threadId: string, limit = 50, before?: string) =>
     req<ThreadView>(
       `/threads/${threadId}?limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ""}`,

@@ -163,6 +163,14 @@ class ThreadUpdate(_Body):
     title: str | None = None
     provider_id: str | None = None
     summary: str | None = None
+    pinned: bool | None = None
+    archived: bool | None = None
+
+
+class ThreadMove(_Body):
+    """Move a conversation to another project (workspace) owned by the same principal."""
+
+    project_id: str | None = None
 
 
 class ProviderCreate(_Body):

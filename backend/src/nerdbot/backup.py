@@ -357,7 +357,20 @@ _IMPORT_COLUMNS: dict[str, frozenset[str]] = {
         }
     ),
     "chat_threads": frozenset(
-        {"id", "project_id", "title", "provider_id", "summary", "tainted", "created_at"}
+        {
+            "id",
+            "project_id",
+            "title",
+            "provider_id",
+            "summary",
+            "tainted",
+            "pinned",
+            "archived",
+            "archived_at",
+            "deleted_at",
+            "created_at",
+            "updated_at",
+        }
     ),
     "chat_messages": frozenset(
         {"id", "thread_id", "role", "content", "parts", "teammate_id", "created_at"}
