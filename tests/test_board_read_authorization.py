@@ -431,7 +431,8 @@ def test_send_message_cannot_target_another_project() -> None:
     out = app_tools.execute_app_tool(
         ctx, "send_message", {"content": "hi", "to_board_id": foreign_id}
     )
-    assert "permission denied" in out, out
+    assert "tool error" in out, out
+    assert "same project" in out, out
     # Nothing was written to the foreign board's feed.
     assert store.list_board_messages(conn, foreign_id) == []
 
@@ -461,7 +462,8 @@ def test_send_message_cannot_address_another_projects_teammate() -> None:
     out = app_tools.execute_app_tool(
         ctx, "send_message", {"content": "hi", "to_teammate_id": stranger.id}
     )
-    assert "permission denied" in out, out
+    assert "tool error" in out, out
+    assert "project" in out, out
     conn.close()
 
 

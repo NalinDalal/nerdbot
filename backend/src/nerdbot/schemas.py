@@ -53,6 +53,8 @@ class TaskCreate(_Body):
     owner_teammate_id: str | None = None
     dependencies: list[str] | None = None
     issue_id: str | None = None
+    # Optional board association (same project). Empty string detaches.
+    board_id: str | None = None
     # "checkout" (default) keeps the isolated per-task workspace; "workspace"
     # executes in the project's live root.
     workspace_mode: str | None = None

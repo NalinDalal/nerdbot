@@ -318,46 +318,51 @@ def create_board_message_service(
 ) -> BoardMessage:
     """Post a message on a board.
 
-    ``acting`` turns this into a bot-scoped call: the teammate must hold a
-    board-messaging permission (compatibly ``board.message`` or ``message.send``),
-    the board must be in the teammate's project, and every bot-supplied target
-    — ``to_board_id`` and ``to_teammate_id`` — is validated against
-    authoritative state instead of being trusted.
+    Acting-bot calls require board-messaging permission, project isolation, and
+    board membership scope per existing auth patterns. Human and bot paths share
+    equivalent recipient/target/project validation: targets must exist and belong
+    to the same project as the source board (no cross-project/inconsistent refs).
     """
     board = store.get_board(conn, board_id)
     if board is None:
         raise HTTPException(status_code=404, detail="board not found")
     if acting is not None:
         board = _authorize_board_message(conn, board_id, acting, permission)
-        if from_teammate_id is None:
-            from_teammate_id = acting.id
-        if to_teammate_id is not None:
-            target = store.get_teammate(conn, to_teammate_id)
-            if target is None:
-                raise HTTPException(status_code=404, detail="teammate not found")
-            if not store.teammate_in_project(conn, target.id, board.project_id):
-                raise HTTPException(
-                    status_code=403,
-                    detail="target teammate belongs to another project",
-                )
-        if to_board_id is not None:
-            target_board = store.get_board(conn, to_board_id)
-            if target_board is None:
-                raise HTTPException(status_code=404, detail="target board not found")
-            if target_board.project_id and not store.teammate_in_project(conn, acting.id, target_board.project_id):
-                raise HTTPException(
-                    status_code=403,
-                    detail="target board belongs to another project",
-                )
-    return store.create_board_message(
-        conn,
-        board_id=board_id,
-        content=content,
-        to_board_id=to_board_id,
-        from_teammate_id=from_teammate_id,
-        to_teammate_id=to_teammate_id,
-        kind=kind,
-    )
+        # Acting bots can only post as themselves.
+        from_teammate_id = acting.id
+    # Equivalent target/recipient validation for human and acting-bot paths.
+    if from_teammate_id is not None:
+        sender = store.get_teammate(conn, from_teammate_id)
+        if sender is None:
+            raise HTTPException(status_code=404, detail="teammate not found")
+        if board.project_id and not store.teammate_in_project(conn, sender.id, board.project_id):
+            raise HTTPException(status_code=400, detail="from_teammate_id must belong to the board's project")
+    if to_teammate_id is not None:
+        target = store.get_teammate(conn, to_teammate_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="teammate not found")
+        if board.project_id and not store.teammate_in_project(conn, target.id, board.project_id):
+            raise HTTPException(status_code=400, detail="target teammate must belong to the board's project")
+    if to_board_id is not None:
+        target_board = store.get_board(conn, to_board_id)
+        if target_board is None:
+            raise HTTPException(status_code=404, detail="target board not found")
+        if board.project_id and target_board.project_id and target_board.project_id != board.project_id:
+            raise HTTPException(status_code=400, detail="target board must belong to the same project")
+    try:
+        return store.create_board_message(
+            conn,
+            board_id=board_id,
+            content=content,
+            to_board_id=to_board_id,
+            from_teammate_id=from_teammate_id,
+            to_teammate_id=to_teammate_id,
+            kind=kind,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def read_board_service(

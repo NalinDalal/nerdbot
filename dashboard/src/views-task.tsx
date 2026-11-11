@@ -425,6 +425,7 @@ export function TaskDetailView({
   const [showReview, setShowReview] = useState(false);
   const [showPackage, setShowPackage] = useState(false);
   const [showKnowledge, setShowKnowledge] = useState(false);
+  const [showBoard, setShowBoard] = useState(false);
   const [rollup, setRollup] = useState<Record<string, unknown> | null>(null);
   const [assignDraft, setAssignDraft] = useState<string | null>(null);
   const [delegateTo, setDelegateTo] = useState("");
@@ -437,9 +438,11 @@ export function TaskDetailView({
   const [watch, setWatch] = useState(false);
   const [pollTick, setPollTick] = useState(0);
   const watchTicks = useRef(0);
+  const [boardDraft, setBoardDraft] = useState<string | null>(null);
   const teammates = useAsync(() => api.listTeammates(projectId), [projectId]);
   const delegations = useAsync(() => api.listTaskDelegations(taskId), [taskId]);
   const projects = useAsync(() => api.listProjects(), [projectId]);
+  const boards = useAsync(() => api.listBoards(projectId), [projectId]);
 
   /* A task in flight is followed by polling, not by holding the request open.
      The server records the run; this page just reads it back. A run started
@@ -583,6 +586,8 @@ export function TaskDetailView({
   /* The select follows the server unless the owner has changed it in this
      session; no effect is needed to mirror the loaded task back into state. */
   const assignTo = assignDraft ?? task.owner_teammate_id ?? "";
+  const boardValue = boardDraft ?? task.board_id ?? "";
+  const boardName = boards.data?.boards.find((b) => b.id === task.board_id)?.name || task.board_id;
   const runPrimary = () => {
     if (terminal) {
       void act("retry", async () => {
@@ -687,8 +692,52 @@ export function TaskDetailView({
           <Button disabled={!!busy} onClick={() => setShowPackage(true)}>PR package</Button>
           <Button disabled={!!busy} onClick={() => void act("package-approval", () => api.requestPackageApproval(taskId))}>Request package approval</Button>
           <Button disabled={!!busy} onClick={() => setShowKnowledge(true)}>Attach knowledge</Button>
+          <Button disabled={!!busy} onClick={() => setShowBoard(true)}>Set board</Button>
           <Button disabled={!!busy} onClick={() => void act("rollup", async () => { const res = await api.buildRollup(taskId); setRollup(res as Record<string, unknown>); return null; })}>Load roll-up</Button>
         </div>
+      ) : null}
+
+      {showBoard ? (
+        <Modal title="Task board" onClose={() => setShowBoard(false)}>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void act("board", async () => {
+                await api.updateTask(taskId, { board_id: boardValue });
+                setBoardDraft(null);
+                setShowBoard(false);
+                toast.success(boardValue ? "Task board updated." : "Task detached from board.");
+                return null;
+              });
+            }}
+            className="flex flex-col gap-3"
+          >
+            <p className="text-step--1 text-[var(--muted)]">
+              Attach, move, or detach this task within the same project. Active or approval-paused executions cannot be moved silently.
+            </p>
+            <label className="flex flex-col gap-1.5">
+              <span className="text-step--1 font-medium text-[var(--text)]">Board</span>
+              <select
+                value={boardValue}
+                onChange={(e) => setBoardDraft(e.target.value)}
+                className={FORM_INPUT}
+              >
+                <option value="">No board</option>
+                {(boards.data?.boards ?? []).map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name || b.id}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button type="button" onClick={() => { setBoardDraft(null); setShowBoard(false); }}>Cancel</Button>
+              <Button variant="primary" type="submit" disabled={!!busy}>
+                {busy === "board" ? "Saving…" : "Save"}
+              </Button>
+            </div>
+          </form>
+        </Modal>
       ) : null}
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
@@ -700,6 +749,7 @@ export function TaskDetailView({
           <div className="grid gap-3 sm:grid-cols-2">
             <div><div className="text-step--2 text-[var(--muted)]">Status</div><div className="mt-0.5 flex items-center gap-2 text-step--1 text-[var(--text)]"><StatusBadge status={task.status} /><span>{humanStatus}</span></div></div>
             <div><div className="text-step--2 text-[var(--muted)]">Owner</div><div className="mt-0.5 text-step--1 text-[var(--text)]">{owner ? (owner.persona || owner.name || "Teammate") : "Unassigned"}</div></div>
+            <div><div className="text-step--2 text-[var(--muted)]">Board</div><div className="mt-0.5 text-step--1 text-[var(--text)]">{task.board_id ? <a className="text-[var(--accent)] hover:underline" href={`/board/${task.board_id}`}>{boardName}</a> : <span className="text-[var(--muted)]">No board</span>}</div></div>
             <div><div className="text-step--2 text-[var(--muted)]">Workspace</div><div className="mt-0.5 text-step--1 text-[var(--text)]"><a className="hover:underline" href={`/p/${projectId}`}>{projectName}</a></div></div>
             <div><div className="text-step--2 text-[var(--muted)]">Task</div><div className="mt-0.5 mono text-step--2 text-[var(--faint)]"><ShortId id={task.id} /></div></div>
           </div>

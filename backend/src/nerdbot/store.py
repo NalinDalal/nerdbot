@@ -2970,6 +2970,10 @@ def delete_board(conn: sqlite3.Connection, board_id: str) -> Board:
     if board is None:
         raise KeyError(f"unknown board {board_id}")
     try:
+        # Detach tasks from this board so deletion never leaves dangling
+        # task.board_id references. Historical tasks/runs/artifacts/approvals
+        # are preserved.
+        conn.execute("UPDATE tasks SET board_id = '' WHERE board_id = ?", (board_id,))
         conn.execute("DELETE FROM board_members WHERE board_id = ?", (board_id,))
         # Remove messages originating from or targeted to this board so deleting
         # a board leaves no dangling inbox references (cross-board to_board_id).
@@ -3103,16 +3107,26 @@ def create_board_message(
     board = get_board(conn, board_id)
     if board is None:
         raise KeyError(f"unknown board {board_id}")
-    if to_board_id is not None and get_board(conn, to_board_id) is None:
-        raise KeyError(f"unknown target board {to_board_id}")
+    target_board = None
+    if to_board_id is not None:
+        target_board = get_board(conn, to_board_id)
+        if target_board is None:
+            raise KeyError(f"unknown target board {to_board_id}")
+        # Keep board-to-board routing within the same project/workspace context.
+        if board.project_id and target_board.project_id and target_board.project_id != board.project_id:
+            raise ValueError("target board must belong to the same project")
     if from_teammate_id is not None:
-        mate = get_teammate(conn, from_teammate_id)
-        if mate is None:
+        from_mate = get_teammate(conn, from_teammate_id)
+        if from_mate is None:
             raise KeyError(f"unknown teammate {from_teammate_id}")
+        if board.project_id and not teammate_in_project(conn, from_mate.id, board.project_id):
+            raise ValueError("from_teammate_id must belong to the board's project")
     if to_teammate_id is not None:
-        mate = get_teammate(conn, to_teammate_id)
-        if mate is None:
+        to_mate = get_teammate(conn, to_teammate_id)
+        if to_mate is None:
             raise KeyError(f"unknown teammate {to_teammate_id}")
+        if board.project_id and not teammate_in_project(conn, to_mate.id, board.project_id):
+            raise ValueError("to_teammate_id must belong to the board's project")
     message = BoardMessage(
         id=new_id("brd_msg"),
         board_id=board_id,
@@ -4436,16 +4450,68 @@ def mark_approval_executed(
     return approval
 
 
+# Task statuses that must not be silently reassigned between boards while an
+# execution is active or parked on a human decision. Dependencies, runs,
+# artifacts, approvals, and history are never rewritten by board association.
+_NON_REASSIGNABLE_TASK_STATUSES = frozenset(
+    {TaskStatus.RUNNING, TaskStatus.AWAITING_APPROVAL}
+)
+
+
+def _validate_task_board_association(
+    conn: sqlite3.Connection, task: Task, board_id: str
+) -> Board | None:
+    """Validate attach/detach/move contract for a task-board association.
+
+    - board_id "" detaches (allowed if task not actively executing).
+    - target board must exist and belong to the same project as the task.
+    - cross-project associations are rejected.
+    - RUNNING and AWAITING_APPROVAL tasks cannot be reassigned silently.
+    """
+    target: Board | None = None
+    if board_id:
+        target = get_board(conn, board_id)
+        if target is None:
+            raise KeyError(f"unknown board {board_id}")
+        if target.project_id != task.project_id:
+            raise ValueError("board must belong to the same project as the task")
+    if (task.board_id or "") == (board_id or ""):
+        return target
+    if task.status in _NON_REASSIGNABLE_TASK_STATUSES:
+        action = "detach task from board" if not board_id else "move task between boards"
+        if not task.board_id:
+            action = "attach task to board"
+        raise ValueError(
+            f"cannot {action} while task status is {task.status.value}; "
+            "active or approval-paused executions must not be moved silently"
+        )
+    return target
+
+
 def set_task_board(conn: sqlite3.Connection, task_id: str, board_id: str) -> Task:
-    if get_task(conn, task_id) is None:
-        raise KeyError(f"unknown task {task_id}")
-    if board_id and get_board(conn, board_id) is None:
-        raise KeyError(f"unknown board {board_id}")
-    conn.execute("UPDATE tasks SET board_id = ? WHERE id = ?", (board_id, task_id))
-    conn.commit()
+    """Attach, detach, or move a task's board association (integrity contract).
+
+    Preserves task identity, dependencies, runs, artifacts, approvals, and
+    history. Enforces same-project compatibility and rejects silent reassignment
+    of RUNNING/AWAITING_APPROVAL tasks. Transactional single-update semantics.
+    """
     task = get_task(conn, task_id)
-    assert task is not None
-    return task
+    if task is None:
+        raise KeyError(f"unknown task {task_id}")
+    normalized = str(board_id or "")
+    _validate_task_board_association(conn, task, normalized)
+    if (task.board_id or "") == normalized:
+        return task
+    try:
+        conn.execute("UPDATE tasks SET board_id = ? WHERE id = ?", (normalized, task_id))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    record_event(conn, task.project_id, "task", task_id, "task.board_changed")
+    updated = get_task(conn, task_id)
+    assert updated is not None
+    return updated
 
 
 def list_events(conn: sqlite3.Connection, project_id: str) -> list[Event]:

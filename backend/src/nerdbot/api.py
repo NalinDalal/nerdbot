@@ -1143,12 +1143,18 @@ def create_app() -> FastAPI:
         board_id: str,
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
+        acting: Any = Depends(boards_mod.acting_teammate_from_header),
     ) -> dict[str, Any]:
         """Aggregated execution + deliverables view for one board (objective)."""
-        board = store.get_board(conn, board_id)
-        if board is None:
-            raise HTTPException(status_code=404, detail="board not found")
-        require_project_owner(conn, board.project_id, principal)
+        if acting is not None:
+            board = boards_mod.authorize_board(
+                conn, board_id, acting, "board.read", require_membership=True
+            )
+        else:
+            board = store.get_board(conn, board_id)
+            if board is None:
+                raise HTTPException(status_code=404, detail="board not found")
+            require_project_owner(conn, board.project_id, principal)
         tasks = [
             t for t in store.list_tasks_for_project(conn, board.project_id)
             if t.board_id == board_id
@@ -1355,11 +1361,17 @@ def create_app() -> FastAPI:
         board_id: str,
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
+        acting: Any = Depends(boards_mod.acting_teammate_from_header),
     ) -> dict[str, Any]:
-        board = store.get_board(conn, board_id)
-        if board is None:
-            raise HTTPException(status_code=404, detail="board not found")
-        require_project_owner(conn, board.project_id, principal)
+        if acting is not None:
+            boards_mod.authorize_board(
+                conn, board_id, acting, "board.read", require_membership=True
+            )
+        else:
+            board = store.get_board(conn, board_id)
+            if board is None:
+                raise HTTPException(status_code=404, detail="board not found")
+            require_project_owner(conn, board.project_id, principal)
         messages = store.list_board_messages(conn, board_id)
         return {"messages": [m.model_dump(mode="json") for m in messages]}
 
@@ -1368,11 +1380,17 @@ def create_app() -> FastAPI:
         board_id: str,
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
+        acting: Any = Depends(boards_mod.acting_teammate_from_header),
     ) -> dict[str, Any]:
-        board = store.get_board(conn, board_id)
-        if board is None:
-            raise HTTPException(status_code=404, detail="board not found")
-        require_project_owner(conn, board.project_id, principal)
+        if acting is not None:
+            boards_mod.authorize_board(
+                conn, board_id, acting, "board.read", require_membership=True
+            )
+        else:
+            board = store.get_board(conn, board_id)
+            if board is None:
+                raise HTTPException(status_code=404, detail="board not found")
+            require_project_owner(conn, board.project_id, principal)
         inbox = store.list_board_messages_to(conn, board_id)
         return {"inbox": [m.model_dump(mode="json") for m in inbox]}
 
@@ -1630,6 +1648,7 @@ def create_app() -> FastAPI:
                 dependencies=list(body.dependencies or []),
                 command=body.command or "",
                 issue_id=body.issue_id or None,
+                board_id=body.board_id or "",
                 workspace_mode=body.workspace_mode or "checkout",
                 title=body.title or "",
             )
@@ -2105,7 +2124,14 @@ def create_app() -> FastAPI:
                 refreshed = store.get_task(conn, task_id)
                 if refreshed is not None:
                     task = refreshed
-        except (KeyError, ValueError) as exc:
+            if "board_id" in body:
+                # Attach, detach (""/null), or move. Store enforces same-project
+                # compatibility, in-flight reassignment safeguards, and
+                # transactional/history-preserving association semantics.
+                task = store.set_task_board(conn, task_id, str(body.get("board_id") or ""))
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return task.model_dump(mode="json")
 
