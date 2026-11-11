@@ -68,6 +68,21 @@ class WorkspaceAttach(_Body):
 class WorkspaceFileWrite(_Body):
     path: str | None = None
     content: str | None = None
+    # Optional optimistic concurrency token (file mtime from read/tree).
+    expected_mtime: float | None = None
+
+
+class WorkspaceFileDelete(_Body):
+    path: str | None = None
+
+
+class WorkspaceFileRename(_Body):
+    from_path: str | None = None
+    to_path: str | None = None
+
+
+class WorkspaceMkdir(_Body):
+    path: str | None = None
 
 
 class TerminalCreate(_Body):

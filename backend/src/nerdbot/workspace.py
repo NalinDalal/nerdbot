@@ -286,6 +286,19 @@ def list_workspace_files(
     return {"files": files, "dirs": dirs, "truncated": truncated}
 
 
+class WorkspaceConflictError(ValueError):
+    """Optimistic concurrency conflict for a workspace file operation."""
+
+
+def _file_meta(path: Path, rel: str) -> dict[str, Any]:
+    st = path.stat()
+    return {
+        "path": Path(rel).as_posix(),
+        "size": st.st_size,
+        "modified": st.st_mtime,
+    }
+
+
 def read_workspace_text(root: Path, relpath: str) -> dict[str, Any]:
     target = safe_workspace_path(Path(root), relpath)
     if not target.is_file():
@@ -297,20 +310,82 @@ def read_workspace_text(root: Path, relpath: str) -> dict[str, Any]:
         content = target.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError("file is not text") from exc
-    return {"path": Path(relpath).as_posix(), "content": content, "size": size}
+    return {
+        "path": Path(relpath).as_posix(),
+        "content": content,
+        "size": size,
+        "modified": target.stat().st_mtime,
+    }
 
 
-def write_workspace_text(root: Path, relpath: str, content: str) -> dict[str, Any]:
+def write_workspace_text(
+    root: Path,
+    relpath: str,
+    content: str,
+    *,
+    expected_mtime: float | None = None,
+) -> dict[str, Any]:
     if not isinstance(content, str):
         raise ValueError("content must be text")
     if len(content.encode("utf-8")) > MAX_TEXT_BYTES:
         raise ValueError("file too large to save")
     target = safe_workspace_path(Path(root), relpath)
+    # Lost-update protection: if caller provides a known mtime, require match.
+    if expected_mtime is not None and target.exists():
+        if target.is_dir():
+            raise ValueError("path is a directory")
+        current = target.stat().st_mtime
+        # Allow small float representation drift while still detecting real edits.
+        if abs(current - float(expected_mtime)) > 1e-6:
+            raise WorkspaceConflictError("file changed since it was loaded")
+    if target.exists() and target.is_dir():
+        raise ValueError("path is a directory")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
+    return _file_meta(target, Path(relpath).as_posix())
+
+
+def create_workspace_dir(root: Path, relpath: str) -> dict[str, Any]:
+    target = safe_workspace_path(Path(root), relpath)
+    if target.exists():
+        if target.is_dir():
+            return {"path": Path(relpath).as_posix(), "created": False}
+        raise ValueError("path already exists")
+    target.mkdir(parents=True, exist_ok=False)
+    return {"path": Path(relpath).as_posix(), "created": True}
+
+
+def delete_workspace_path(root: Path, relpath: str) -> dict[str, Any]:
+    target = safe_workspace_path(Path(root), relpath)
+    if not target.exists():
+        raise FileNotFoundError("path not found")
+    # Refuse deleting workspace root via empty-like edge cases (safe_workspace_path already guards)
+    if target.resolve() == Path(root).resolve():
+        raise ValueError("cannot delete workspace root")
+    if target.is_dir():
+        shutil.rmtree(target)
+        kind = "dir"
+    else:
+        target.unlink()
+        kind = "file"
+    return {"path": Path(relpath).as_posix(), "deleted": True, "kind": kind}
+
+
+def rename_workspace_path(root: Path, from_path: str, to_path: str) -> dict[str, Any]:
+    src = safe_workspace_path(Path(root), from_path)
+    dst = safe_workspace_path(Path(root), to_path)
+    if not src.exists():
+        raise FileNotFoundError("path not found")
+    if src.resolve() == Path(root).resolve():
+        raise ValueError("cannot move workspace root")
+    if dst.exists():
+        raise ValueError("destination already exists")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    src.rename(dst)
     return {
-        "path": Path(relpath).as_posix(),
-        "size": target.stat().st_size,
+        "from": Path(from_path).as_posix(),
+        "to": Path(to_path).as_posix(),
+        "moved": True,
     }
 
 

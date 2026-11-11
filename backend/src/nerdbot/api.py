@@ -5232,13 +5232,89 @@ def create_app() -> FastAPI:
         root = workspace_mgr.configured_project_root(project, _data_dir())
         try:
             result = workspace_mgr.write_workspace_text(
-                root, body.path or "", body.content or ""
+                root,
+                body.path or "",
+                body.content or "",
+                expected_mtime=body.expected_mtime,
             )
+        except workspace_mgr.WorkspaceConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="file not found") from exc
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         store.record_event(
             conn, project_id, "workspace", result["path"], "workspace.file.saved"
         )
+        return result
+
+    @app.post("/projects/{project_id}/workspace/mkdir")
+    def create_project_workspace_dir(
+        project_id: str,
+        body: schemas.WorkspaceMkdir,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        project = store.get_project(conn, project_id)
+        if project is None:  # pragma: no cover
+            raise HTTPException(status_code=404, detail="project not found")
+        if workspace_mgr.workspace_busy(project_id):
+            raise HTTPException(status_code=409, detail="a live run is using this workspace")
+        root = workspace_mgr.configured_project_root(project, _data_dir())
+        try:
+            result = workspace_mgr.create_workspace_dir(root, body.path or "")
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        store.record_event(conn, project_id, "workspace", result["path"], "workspace.dir.created")
+        return result
+
+    @app.delete("/projects/{project_id}/workspace/path")
+    def delete_project_workspace_path(
+        project_id: str,
+        body: schemas.WorkspaceFileDelete,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        project = store.get_project(conn, project_id)
+        if project is None:  # pragma: no cover
+            raise HTTPException(status_code=404, detail="project not found")
+        if workspace_mgr.workspace_busy(project_id):
+            raise HTTPException(status_code=409, detail="a live run is using this workspace")
+        root = workspace_mgr.configured_project_root(project, _data_dir())
+        try:
+            result = workspace_mgr.delete_workspace_path(root, body.path or "")
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        store.record_event(conn, project_id, "workspace", result["path"], "workspace.path.deleted")
+        return result
+
+    @app.post("/projects/{project_id}/workspace/rename")
+    def rename_project_workspace_path(
+        project_id: str,
+        body: schemas.WorkspaceFileRename,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        project = store.get_project(conn, project_id)
+        if project is None:  # pragma: no cover
+            raise HTTPException(status_code=404, detail="project not found")
+        if workspace_mgr.workspace_busy(project_id):
+            raise HTTPException(status_code=409, detail="a live run is using this workspace")
+        root = workspace_mgr.configured_project_root(project, _data_dir())
+        try:
+            result = workspace_mgr.rename_workspace_path(
+                root, body.from_path or "", body.to_path or ""
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        store.record_event(conn, project_id, "workspace", result["to"], "workspace.path.renamed")
         return result
 
     @app.get("/projects/{project_id}/workspace/diff")
