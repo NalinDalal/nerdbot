@@ -99,6 +99,11 @@ AMBIENT_TOOLS = frozenset(
     }
 )
 
+# Board messaging permissions are explicitly backward-compatible:
+# either canonical board.message or legacy/alternate message.send grants
+# board-scoped messaging. Do not weaken: at least one is required.
+BOARD_MESSAGE_PERMISSIONS = frozenset({"board.message", "message.send"})
+
 # tool name -> required permission (ambient tools are absent from this map).
 TOOL_PERMISSIONS: dict[str, str] = {
     "create_task": "task.create",
@@ -350,7 +355,7 @@ def app_tool_schemas(permissions: frozenset[str] | set[str]) -> list[dict[str, A
                 ["delegation_id"],
             )
         )
-    if "message.send" in granted:
+    if any(p in granted for p in BOARD_MESSAGE_PERMISSIONS):
         schemas.append(
             _schemas(
                 "send_message",
@@ -803,7 +808,12 @@ def _dispatch(
 
     # -- Permission-gated tools ---------------------------------------------
     permission = TOOL_PERMISSIONS.get(name)
-    if permission is not None:
+    if name == "send_message":
+        if not any(gates.has_permission(mate, p) for p in BOARD_MESSAGE_PERMISSIONS):
+            raise gates.GateDenied(
+                f"teammate {mate.id} lacks permission 'message.send'/'board.message'"
+            )
+    elif permission is not None:
         gates.check_permission(mate, permission)
 
     if name == "create_task":

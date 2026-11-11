@@ -1769,10 +1769,13 @@ def create_team_member(
 def add_teammate_to_team(
     conn: sqlite3.Connection, team_id: str, teammate_id: str
 ) -> TeamMember:
-    """Add a bot (teammate) to a team.
+    """Add a global bot (teammate) to a team.
 
-    The bot must belong to a project owned by the team owner. Idempotent:
-    adding the same bot twice returns the existing membership row.
+    Eligibility is workspace-membership-aware: the teammate must actually
+    participate in at least one workspace owned by the team owner. Origin/home
+    ``teammates.project_id`` is not treated as proof of current workspace
+    participation except through normal membership resolution. Team membership
+    is organizational only and grants no permissions/access. Idempotent.
     """
     team = get_team(conn, team_id)
     if team is None:
@@ -1780,9 +1783,18 @@ def add_teammate_to_team(
     mate = get_teammate(conn, teammate_id)
     if mate is None:
         raise ValueError(f"unknown teammate {teammate_id}")
-    project = get_project(conn, mate.project_id)
-    if project is None or project.owner != team.owner:
-        raise ValueError("teammate's project must belong to the team owner")
+
+    eligible_project_id = ""
+    for pid in list_project_ids_for_teammate(conn, teammate_id):
+        project = get_project(conn, pid)
+        if project is not None and project.owner == team.owner:
+            eligible_project_id = pid
+            break
+    if not eligible_project_id:
+        raise ValueError(
+            "teammate must participate in a workspace owned by the team owner"
+        )
+
     existing = conn.execute(
         "SELECT * FROM team_members WHERE team_id = ? AND teammate_id = ?",
         (team_id, teammate_id),
@@ -1796,7 +1808,7 @@ def add_teammate_to_team(
         (member_id, team_id, teammate_id, _now_iso()),
     )
     conn.commit()
-    record_event(conn, mate.project_id, "team_member", member_id, "team_member.created")
+    record_event(conn, eligible_project_id, "team_member", member_id, "team_member.created")
     return TeamMember(
         id=member_id, team_id=team_id, project_id="", teammate_id=teammate_id
     )
@@ -2814,10 +2826,19 @@ def delete_board(conn: sqlite3.Connection, board_id: str) -> Board:
     board = get_board(conn, board_id)
     if board is None:
         raise KeyError(f"unknown board {board_id}")
-    conn.execute("DELETE FROM board_members WHERE board_id = ?", (board_id,))
-    conn.execute("DELETE FROM board_messages WHERE board_id = ?", (board_id,))
-    conn.execute("DELETE FROM boards WHERE id = ?", (board_id,))
-    conn.commit()
+    try:
+        conn.execute("DELETE FROM board_members WHERE board_id = ?", (board_id,))
+        # Remove messages originating from or targeted to this board so deleting
+        # a board leaves no dangling inbox references (cross-board to_board_id).
+        conn.execute(
+            "DELETE FROM board_messages WHERE board_id = ? OR to_board_id = ?",
+            (board_id, board_id),
+        )
+        conn.execute("DELETE FROM boards WHERE id = ?", (board_id,))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     record_event(conn, board.project_id, "board", board_id, "board.deleted")
     return board
 

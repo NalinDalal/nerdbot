@@ -48,6 +48,7 @@ from pydantic import BaseModel, Field
 from starlette.responses import Response
 
 from . import approval_flow, auth as auth_mod, orchestrator, research as research_mod, run_events, schemas, store
+from .models import BoardStatus
 from . import backup as backup_mod
 from . import boards as boards_mod
 from . import capabilities as capabilities_mod
@@ -585,17 +586,51 @@ def create_app() -> FastAPI:
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
-        """Add an existing global teammate to this workspace without duplicating identity."""
+        """Add an existing global teammate to this workspace without duplicating identity.
+
+        Fails closed: caller must own the target workspace and be able to
+        establish authorized access to the global teammate (owns a workspace the
+        teammate actually participates in). Origin/home ownership is not treated
+        as a substitute for current workspace membership.
+        """
         require_project_owner(conn, project_id, principal)
         mate = store.get_teammate(conn, teammate_id)
         if mate is None:
             raise HTTPException(status_code=404, detail="teammate not found")
-        # allow if principal can access the global teammate (owns origin or another participating workspace)
+        # Authorized if principal owns any workspace the teammate currently
+        # participates in (defensible access to the global identity). Fail closed
+        # without exposing inaccessible workspace details.
+        authorized = False
         try:
-            _require_teammate_access(conn, mate, principal)
-        except HTTPException:
-            # also allow adding if caller owns target workspace (local-owner model) and teammate exists
-            pass
+            for pid in store.list_project_ids_for_teammate(conn, teammate_id):
+                project = store.get_project(conn, pid)
+                if project is not None and project.owner == principal:
+                    authorized = True
+                    break
+        except Exception:
+            authorized = False
+        # Local-owner compatibility: same principal owns target workspace (already
+        # verified) and can add a teammate they legitimately control in this
+        # ownership context. This does not rely on origin equality; it requires
+        # teammate to exist and access to be established via participating
+        # workspaces owned by principal, or the teammate having no other owners.
+        if not authorized:
+            # Allow if all currently participating workspaces are owned by this
+            # principal (or none beyond inaccessible state resolved to principal-
+            # owned context) - preserves valid local-owner workflows.
+            pids = [pid for pid in store.list_project_ids_for_teammate(conn, teammate_id) if pid]
+            if pids:
+                owners_ok = True
+                for pid in pids:
+                    project = store.get_project(conn, pid)
+                    if project is None or project.owner != principal:
+                        owners_ok = False
+                        break
+                authorized = owners_ok
+            else:
+                authorized = False
+        if not authorized:
+            raise HTTPException(status_code=403, detail="not authorized to add this teammate")
         try:
             mate = store.add_teammate_to_project(conn, teammate_id, project_id)
         except KeyError as exc:
@@ -1076,6 +1111,17 @@ def create_app() -> FastAPI:
         if board is None:
             raise HTTPException(status_code=404, detail="board not found")
         require_project_owner(conn, board.project_id, principal)
+        status: BoardStatus | None = None
+        if "status" in body and body.get("status") is not None:
+            raw_status = str(body.get("status"))
+            try:
+                status = BoardStatus(raw_status)
+            except ValueError as exc:
+                valid = ", ".join(s.value for s in BoardStatus)
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"invalid board status {raw_status!r}; expected one of: {valid}",
+                ) from exc
         try:
             updated = store.update_board(
                 conn,
@@ -1083,7 +1129,7 @@ def create_app() -> FastAPI:
                 name=body.get("name"),
                 description=body.get("description"),
                 team_id=body.get("team_id"),
-                status=None,
+                status=status,
             )
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

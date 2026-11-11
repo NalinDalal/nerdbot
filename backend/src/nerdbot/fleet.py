@@ -278,6 +278,20 @@ def create_team_service(
     return team
 
 
+def _team_owner_shared_workspace_ids(
+    conn: sqlite3.Connection, team_owner: str, acting_id: str, target_id: str
+) -> list[str]:
+    """Workspaces owned by team owner where both acting and target participate."""
+    shared: list[str] = []
+    for pid in store.list_project_ids_for_teammate(conn, acting_id):
+        project = store.get_project(conn, pid)
+        if project is None or project.owner != team_owner:
+            continue
+        if store.teammate_in_project(conn, target_id, pid):
+            shared.append(pid)
+    return shared
+
+
 def add_teammate_to_team_service(
     conn: sqlite3.Connection,
     team_id: str,
@@ -292,11 +306,13 @@ def add_teammate_to_team_service(
     if target is None:
         raise HTTPException(status_code=404, detail="teammate not found")
     if acting is not None:
-        # Workspace isolation: a bot may only regroup bots from its own
-        # project, never reach into another workspace's fleet.
-        if not (store.teammate_in_project(conn, acting.id, target.project_id) or store.teammate_in_project(conn, target.id, acting.project_id)):
+        # Least-privilege, explicit workspace-scoped rule: acting and target
+        # must actually share at least one workspace owned by the team owner.
+        # Origin project equality/accessibility is not sufficient.
+        if not _team_owner_shared_workspace_ids(conn, team.owner, acting.id, target.id):
             raise HTTPException(
-                status_code=403, detail="teammate is not accessible in this context"
+                status_code=403,
+                detail="teammate is not accessible in this workspace context",
             )
         try:
             gates.require(
@@ -327,9 +343,13 @@ def remove_teammate_from_team_service(
     if target is None:
         raise HTTPException(status_code=404, detail="teammate not found")
     if acting is not None:
-        if not (store.teammate_in_project(conn, acting.id, target.project_id) or store.teammate_in_project(conn, target.id, acting.project_id)):
+        # Least-privilege workspace-scoped rule: acting must operate in a
+        # workspace owned by the team owner that is also a workspace context
+        # shared with the target (actual membership), not origin/accessibility.
+        if not _team_owner_shared_workspace_ids(conn, team.owner, acting.id, target.id):
             raise HTTPException(
-                status_code=403, detail="teammate is not accessible in this context"
+                status_code=403,
+                detail="teammate is not accessible in this workspace context",
             )
         try:
             gates.require(

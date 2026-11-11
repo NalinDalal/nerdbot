@@ -165,28 +165,26 @@ def delete_board_service(
     require_approval: bool = False,
     approved_approval_id: str | None = None,
 ) -> Board:
+    """Delete a board.
+
+    Acting-bot deletion is authorized via ``board.delete`` scope checks here;
+    admin approval (digest-bound, one-use unless policy-auto) must be satisfied
+    by the canonical gate path (``gates.require``) before calling this service.
+    Legacy manual approval parameters are not a substitute for gate validation.
+    """
     board = store.get_board(conn, board_id)
     if board is None:
         raise HTTPException(status_code=404, detail="board not found")
     if acting is not None:
-        # Project isolation is part of the delete, not just the permission:
-        # a bot may not delete a board outside its own workspace.
+        # Project isolation is part of the delete, not just the permission.
         authorize_board(conn, board_id, acting, "board.delete")
-    if require_approval:
-        if not approved_approval_id:
-            raise HTTPException(
-                status_code=409,
-                detail="board deletion requires approval; request one first",
-            )
-        approval = store.get_approval(conn, approved_approval_id)
-        if approval is None:
-            raise HTTPException(status_code=404, detail="approval not found")
-        if approval.board_id != board_id:
-            raise HTTPException(status_code=400, detail="approval is not for this board")
-        if approval.decision != Decision.APPROVED:
-            raise HTTPException(
-                status_code=409, detail="board deletion approval not granted"
-            )
+    if require_approval or approved_approval_id:
+        # Fail closed: ambiguous/manual approval paths must not bypass or
+        # duplicate digest-bound gate consumption.
+        raise HTTPException(
+            status_code=400,
+            detail="board deletion approval must be validated via the gate flow",
+        )
     return store.delete_board(conn, board_id)
 
 
@@ -267,6 +265,45 @@ def remove_board_member_service(
     store.remove_board_member(conn, board_id, teammate_id)
 
 
+BOARD_MESSAGE_PERMISSIONS = frozenset({"board.message", "message.send"})
+
+
+def _has_any_board_message_permission(mate: Teammate) -> bool:
+    return any(gates.has_permission(mate, perm) for perm in BOARD_MESSAGE_PERMISSIONS)
+
+
+def _authorize_board_message(
+    conn: sqlite3.Connection,
+    board_id: str,
+    acting: Teammate,
+    permission: str,
+) -> Board:
+    """Authorize board messaging with backward-compatible permission mapping.
+
+    Canonical behavior: messaging on a board requires an explicit messaging
+    permission and project/membership scope. For compatibility, either
+    ``board.message`` or ``message.send`` satisfies board messaging
+    authorization (explicit mapping; no silent weakening).
+    """
+    if permission not in gates.ALL_PERMISSIONS:
+        raise HTTPException(status_code=400, detail=f"unknown board permission {permission!r}")
+    if permission in BOARD_MESSAGE_PERMISSIONS:
+        if not _has_any_board_message_permission(acting):
+            raise HTTPException(
+                status_code=403,
+                detail=f"teammate {acting.id} lacks permission {permission!r}",
+            )
+        board = store.get_board(conn, board_id)
+        if board is None:
+            raise HTTPException(status_code=404, detail="board not found")
+        if board.project_id and not store.teammate_in_project(conn, acting.id, board.project_id):
+            raise HTTPException(
+                status_code=403, detail="acting teammate belongs to another project"
+            )
+        return board
+    return authorize_board(conn, board_id, acting, permission)
+
+
 def create_board_message_service(
     conn: sqlite3.Connection,
     board_id: str,
@@ -281,18 +318,17 @@ def create_board_message_service(
 ) -> BoardMessage:
     """Post a message on a board.
 
-    ``acting`` turns this into a bot-scoped call: the teammate must hold
-    ``permission`` (the HTTP route uses ``board.message``, the agent tool
-    uses its own ``message.send``), the board must be in the teammate's
-    project, and every bot-supplied target — ``to_board_id`` and
-    ``to_teammate_id`` — is validated against authoritative state instead
-    of being trusted, so a bot cannot address another workspace.
+    ``acting`` turns this into a bot-scoped call: the teammate must hold a
+    board-messaging permission (compatibly ``board.message`` or ``message.send``),
+    the board must be in the teammate's project, and every bot-supplied target
+    — ``to_board_id`` and ``to_teammate_id`` — is validated against
+    authoritative state instead of being trusted.
     """
     board = store.get_board(conn, board_id)
     if board is None:
         raise HTTPException(status_code=404, detail="board not found")
     if acting is not None:
-        authorize_board(conn, board_id, acting, permission)
+        board = _authorize_board_message(conn, board_id, acting, permission)
         if from_teammate_id is None:
             from_teammate_id = acting.id
         if to_teammate_id is not None:
