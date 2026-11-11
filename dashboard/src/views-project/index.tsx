@@ -71,7 +71,6 @@ export function ProjectDetailView({
 }) {
   const projects = useAsync(() => api.listProjects(), []);
   const project = projects.data?.projects.find((item) => item.id === projectId);
-  const counts = projects.data?.counts?.[projectId];
   const workspaceName = project?.repository || "Project";
 
   /* The tab lives in the hash, so a shared link, a refresh, and the browser
@@ -88,33 +87,26 @@ export function ProjectDetailView({
 
   return (
     <Page width="fill">
-      <a
-        href="/projects"
-        className="mb-3 inline-flex items-center gap-1 text-step--1 text-[var(--muted)] transition-colors hover:text-[var(--text)]"
-      >
-        <span aria-hidden>←</span> Workspaces
-      </a>
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="mb-1 text-step--2 uppercase tracking-[0.16em] text-[var(--faint)]">
-            Workspace
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <a
+          href="/projects"
+          className="inline-flex items-center gap-1 text-step--1 text-[var(--muted)] transition-colors hover:text-[var(--text)]"
+        >
+          <span aria-hidden>←</span> Workspaces
+        </a>
+        {tab !== "Overview" ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button onClick={() => selectTab("Chat")}>Chat</Button>
+            <Button variant="primary" onClick={() => selectTab("Work")}>Start work</Button>
           </div>
-          <h1 className="truncate text-step-2 font-semibold tracking-tight text-[var(--text)]">
-            {workspaceName}
-          </h1>
-          <p className="mt-1 text-step--1 text-[var(--muted)]">
-            {counts
-              ? `${counts.bots} agent${counts.bots === 1 ? "" : "s"} · ${counts.tasks} task${
-                  counts.tasks === 1 ? "" : "s"
-                } · ${counts.running} running`
-              : "Operating overview for this workspace"}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button onClick={() => selectTab("Chat")}>Open chat</Button>
-          <Button variant="primary" onClick={() => selectTab("Work")}>Open work</Button>
-        </div>
+        ) : null}
       </div>
+      {tab !== "Overview" ? (
+        <div className="mb-4 min-w-0">
+          <div className="mb-1 text-step--2 uppercase tracking-[0.16em] text-[var(--faint)]">Workspace</div>
+          <h1 className="truncate text-step-2 font-semibold tracking-tight text-[var(--text)]">{workspaceName}</h1>
+        </div>
+      ) : null}
 
       <div
         role="tablist"
