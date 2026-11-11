@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { api } from "../api";
 import { notifyError } from "../app";
-import { Button, CHIP_SHELL, EmptyState, ErrorState, Field, FORM_INPUT, LoadingState, Modal, PageSection, StatusBadge, ERROR_BOX, relativeTime, useAsync } from "../components";
+import { Button, EmptyState, ErrorState, Field, FORM_INPUT, LoadingState, Modal, PageSection, StatusBadge, ERROR_BOX, relativeTime, useAsync } from "../components";
 import { DataTable } from "../DataTable";
 import { EntityPicker } from "../EntityPicker";
-import { taskTitle, taskPreview } from "../taskTitle";
+import { taskTitle } from "../taskTitle";
 import { explainRunError } from "../explainRunError";
 import type { Run, Task } from "../types";
 
@@ -182,108 +182,107 @@ export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenT
         </Modal>
       ) : null}
       <PageSection
-        title="Tasks"
+        title="Work"
+        description="Assignments, progress, blockers, and completed outcomes in this workspace."
         actions={
           <>
-            <Button variant="primary" onClick={() => setShowCreate(true)}>
-              New task
-            </Button>
             <Button onClick={reload}>Refresh</Button>
+            <Button variant="primary" onClick={() => setShowCreate(true)}>Start new work</Button>
           </>
         }
       >
-        <div className="mb-3 flex flex-wrap items-center gap-1.5">
-          {STATUS_FILTERS.map(({ id, label }) => {
-            const count =
-              id === "all"
-                ? allTasks.length
-                : allTasks.filter((task) => FILTER_STATUSES[id].has(task.status)).length;
-            const active = statusFilter === id;
-            return (
-              <button
-                key={id}
-                type="button"
-                aria-pressed={active}
-                onClick={() => setStatusFilter(id)}
-                className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-step--2 font-medium transition-colors ${
-                  active
-                    ? "bg-[var(--surface-3)] text-[var(--text)] shadow-sm"
-                    : "bg-[var(--surface-2)] text-[var(--muted)] hover:text-[var(--text)]"
-                }`}
-              >
-                {label}
-                <span className="tabular-nums text-[var(--faint)]">{count}</span>
-              </button>
-            );
-          })}
-        </div>
         {tasks.loading ? (
           <LoadingState />
         ) : tasks.error ? (
           <ErrorState error={tasks.error} onRetry={tasks.reload} />
-        ) : filteredTasks.length > 0 ? (
-          <DataTable
-            columns={[
-              { key: "task", header: "Task", render: (task) => (
-                <div>
-                  <a href={`/p/${projectId}/t/${task.id}`} onClick={() => onOpenTask(task.id)} className="line-clamp-2 break-words">
-                    {task.title || taskTitle(task.description)}
-                  </a>
-                  <div className="text-[var(--muted)] text-step--2 truncate">{taskPreview(task.description)}</div>
-                  {task.description && task.description.length > 1000 ? <span className={CHIP_SHELL}>{(task.description.length/1000).toFixed(1)}k chars</span> : null}
-                </div>
-              ) },
-              { key: "status", header: "Status", render: (task) => {
-                const failedRun = task.status === "failed" ? latestFailedRun(task) : null;
-                const failure = failedRun ? explainRunError(task, failedRun) : null;
-                return (
-                  <div>
-                    <StatusBadge status={task.status} />
-                    {task.blocked_reason ? (
-                      <div className="text-step--2 text-[var(--muted)]">{task.blocked_reason}</div>
-                    ) : failure && failure.message && failedRun ? (
-                      /* The failure explanation: guidance for the
-                         empty-command case, the run's own error text for
-                         anything else. Full text on hover, line-clamped to
-                         two lines so a long diagnosis stays row-height. */
-                      <div
-                        className="max-w-[22rem] line-clamp-2 text-step--2 text-[var(--muted)]"
-                        title={failure.message}
-                      >
-                        {failure.message}
-                      </div>
-                    ) : null}
-                  </div>
-                );
-              } },
-              { key: "owner", header: "Owner", render: (task) => ownerName(task.owner_teammate_id) },
-            ]}
-            rows={filteredTasks}
-            onRowClick={(task) => onOpenTask(task.id)}
-            stack={{ title: "task", badge: "status", meta: ["owner"] }}
-          />
         ) : (
-          <EmptyState
-            title={allTasks.length > 0 ? "No tasks match this filter" : "No tasks yet"}
-            hint={
-              allTasks.length > 0
-                ? "Nothing with that status right now."
-                : "Create a task, or let a bot decompose an objective into one."
-            }
-            action={
-              allTasks.length === 0 ? (
-                <Button variant="primary" onClick={() => setShowCreate(true)}>
-                  New task
-                </Button>
-              ) : undefined
-            }
-          />
+          <>
+            <div className="mb-4 flex flex-wrap items-center gap-2 text-step--1 text-[var(--muted)]">
+              <span>{allTasks.filter((t) => ["running", "ready", "pending", "queued"].includes(t.status)).length} in progress</span>
+              <span className="text-[var(--faint)]">·</span>
+              <span>{allTasks.filter((t) => t.status === "blocked" || t.status === "awaiting_approval").length} need attention</span>
+              <span className="text-[var(--faint)]">·</span>
+              <span>{allTasks.filter((t) => t.status === "done").length} completed</span>
+              <span className="text-[var(--faint)]">·</span>
+              <span>{allTasks.filter((t) => t.status === "failed").length} failed</span>
+            </div>
+            <div className="mb-3 flex flex-wrap items-center gap-1.5">
+              {STATUS_FILTERS.map(({ id, label }) => {
+                const count =
+                  id === "all"
+                    ? allTasks.length
+                    : allTasks.filter((task) => FILTER_STATUSES[id].has(task.status)).length;
+                const active = statusFilter === id;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => setStatusFilter(id)}
+                    className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-step--2 font-medium transition-colors ${
+                      active
+                        ? "bg-[var(--surface-3)] text-[var(--text)] shadow-sm"
+                        : "bg-[var(--surface-2)] text-[var(--muted)] hover:text-[var(--text)]"
+                    }`}
+                  >
+                    {label}
+                    <span className="tabular-nums text-[var(--faint)]">{count}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {filteredTasks.length > 0 ? (
+              <div className="flex flex-col divide-y divide-[var(--border-dim)] rounded-lg bg-[var(--surface)]">
+                {filteredTasks.map((task) => {
+                  const failedRun = task.status === "failed" ? latestFailedRun(task) : null;
+                  const failure = failedRun ? explainRunError(task, failedRun) : null;
+                  const needsAction = ["blocked", "awaiting_approval", "failed"].includes(task.status);
+                  const completed = task.status === "done";
+                  return (
+                    <button
+                      key={task.id}
+                      className={`flex w-full items-start justify-between gap-4 px-4 py-3 text-left transition-colors hover:bg-[var(--surface-2)] ${needsAction ? "bg-[var(--warn-dim)]/30" : ""}`}
+                      onClick={() => onOpenTask(task.id)}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="truncate text-step--1 font-medium text-[var(--text)]">{task.title || taskTitle(task.description)}</span>
+                          <StatusBadge status={task.status} />
+                        </div>
+                        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-step--2 text-[var(--muted)]">
+                          <span>Owner: {ownerName(task.owner_teammate_id)}</span>
+                          {completed ? <><span>·</span><span>Outcome ready for review</span></> : null}
+                          {task.blocked_reason ? <><span>·</span><span className="truncate">{task.blocked_reason}</span></> : null}
+                          {failure && failure.message ? <><span>·</span><span className="truncate max-w-[28rem]" title={failure.message}>{failure.message}</span></> : null}
+                        </div>
+                      </div>
+                      <span className="shrink-0 text-step--2 text-[var(--accent)]">Open</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <EmptyState
+                title={allTasks.length > 0 ? "No work matches this view" : "No work yet"}
+                hint={
+                  allTasks.length > 0
+                    ? "Try another filter to see different assignments and outcomes."
+                    : "Start work for this workspace or ask an AI teammate to help."
+                }
+                action={
+                  <div className="flex flex-wrap justify-center gap-2">
+                    <Button variant="primary" onClick={() => setShowCreate(true)}>Start new work</Button>
+                  </div>
+                }
+              />
+            )}
+          </>
         )}
       </PageSection>
 
       <PageSection
-        title="Runs across tasks"
-        description="Execution evidence for every task in this project."
+        title="Execution evidence"
+        description="Run history and technical details, available when you need them."
       >
         {runs.loading ? (
           <LoadingState />
@@ -307,7 +306,7 @@ export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenT
             stack={{ title: "task", badge: "status", meta: ["run", "exit", "runtime"] }}
           />
         ) : (
-          <EmptyState title="No runs yet" hint="Create a task, then run it from the task page." />
+          <EmptyState title="No execution history yet" hint="When work runs, its history and evidence will appear here." />
         )}
       </PageSection>
     </div>

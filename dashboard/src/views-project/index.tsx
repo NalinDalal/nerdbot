@@ -25,7 +25,7 @@ const PRIMARY_TAB_LABELS: Record<(typeof PRIMARY_TABS)[number], string> = {
   Work: "Work",
   Agents: "Agents",
   Chat: "Chat",
-  Knowledge: "Knowledge",
+  Knowledge: "Library",
   Files: "Files & tools",
 };
 // Backward-compatible aliases: keep old tab names working for deep links.

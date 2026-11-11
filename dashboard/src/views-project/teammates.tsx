@@ -4,55 +4,85 @@ import { notifyError, navigate } from "../app";
 import { FacePicker } from "../bot/FacePicker";
 import { DEFAULT_FACE, normalizeFace, type BotFace as FaceChoice } from "../bot/face";
 import { faceStateFor } from "../bot/status";
-import { Provider, Teammate as TeammateT } from "../types";
-import { BotFace, Button, CARD_SHELL, ERROR_BOX, EmptyState, ErrorState, Field, FORM_INPUT, LoadingState, Modal, PILL_SHELL, StatusBadge, useAsync, usePermissionCatalogue } from "../components";
+import { Provider, Task, Teammate as TeammateT } from "../types";
+import { BotFace, Button, ERROR_BOX, EmptyState, ErrorState, Field, FORM_INPUT, LoadingState, Modal, PageSection, StatusBadge, useAsync, usePermissionCatalogue } from "../components";
+import { taskTitle } from "../taskTitle";
+
+function teammateWorkSummary(teammateId: string, tasks: Task[]) {
+  const mine = tasks.filter((t) => t.owner_teammate_id === teammateId);
+  const active = mine.find((t) => t.status === "running") || mine.find((t) => t.status === "awaiting_approval" || t.status === "blocked") || mine.find((t) => t.status === "ready" || t.status === "pending" || t.status === "queued");
+  const running = mine.filter((t) => t.status === "running").length;
+  const needsAttention = mine.filter((t) => t.status === "blocked" || t.status === "awaiting_approval" || t.status === "failed").length;
+  const queued = mine.filter((t) => ["ready", "pending", "queued"].includes(t.status)).length;
+  const done = mine.filter((t) => t.status === "done").length;
+  let state = "Available";
+  if (running > 0) state = "Working now";
+  else if (needsAttention > 0) state = "Needs attention";
+  else if (queued > 0) state = "Queued work";
+  else if (done > 0) state = "Idle";
+  return { active, state, running, needsAttention, queued, done, total: mine.length };
+}
+
 export function TeammatesTab({ projectId }: { projectId: string }) {
   const list = useAsync(() => api.listTeammates(projectId), [projectId]);
   const providers = useAsync(() => api.listProviders(projectId), [projectId]);
+  const tasks = useAsync(() => api.projectTasks(projectId).catch(() => ({ tasks: [] as Task[] })), [projectId]);
   const [showCreate, setShowCreate] = useState(false);
 
+  const taskList = tasks.data?.tasks ?? [];
+
   return (
-    <div>
-      <div className="flex items-center gap-3" style={{ marginBottom: 12 }}>
-        <Button variant="primary" onClick={() => setShowCreate(true)}>
-          New bot
-        </Button>
-        <Button onClick={list.reload}>Refresh</Button>
-      </div>
-      {showCreate ? (
-        <Modal title="New bot" onClose={() => setShowCreate(false)}>
-          <BotForm
-            projectId={projectId}
-            providers={providers.data?.providers ?? []}
-            onDone={() => {
-              setShowCreate(false);
-              list.reload();
-            }}
+    <div className="flex flex-col gap-6">
+      <PageSection
+        title="AI teammates"
+        description="Collaborators in this workspace, what they’re responsible for, and how to work with them."
+        actions={
+          <>
+            <Button onClick={() => { list.reload(); providers.reload(); tasks.reload(); }}>Refresh</Button>
+            <Button variant="primary" onClick={() => setShowCreate(true)}>Add teammate</Button>
+          </>
+        }
+      >
+        {showCreate ? (
+          <Modal title="Add AI teammate" onClose={() => setShowCreate(false)}>
+            <BotForm
+              projectId={projectId}
+              providers={providers.data?.providers ?? []}
+              onDone={() => {
+                setShowCreate(false);
+                list.reload();
+              }}
+            />
+          </Modal>
+        ) : null}
+        {list.loading ? (
+          <LoadingState />
+        ) : list.error ? (
+          <ErrorState error={list.error} onRetry={list.reload} />
+        ) : list.data && list.data.teammates.length > 0 ? (
+          <div className="flex flex-col gap-3">
+            {list.data.teammates.map((mate) => (
+              <BotCard
+                key={mate.id}
+                mate={mate}
+                providers={providers.data?.providers ?? []}
+                tasks={taskList}
+                onChanged={() => {
+                  list.reload();
+                  providers.reload();
+                  tasks.reload();
+                }}
+              />
+            ))}
+          </div>
+        ) : (
+          <EmptyState
+            title="No teammates yet"
+            hint="Add an AI teammate to collaborate on work in this workspace."
+            action={<Button variant="primary" onClick={() => setShowCreate(true)}>Add teammate</Button>}
           />
-        </Modal>
-      ) : null}
-      {list.loading ? (
-        <LoadingState />
-      ) : list.error ? (
-        <ErrorState error={list.error} onRetry={list.reload} />
-      ) : list.data && list.data.teammates.length > 0 ? (
-        list.data.teammates.map((mate) => (
-          <BotCard
-            key={mate.id}
-            mate={mate}
-            providers={providers.data?.providers ?? []}
-            onChanged={() => {
-              list.reload();
-              providers.reload();
-            }}
-          />
-        ))
-      ) : (
-        <EmptyState
-          title="No bots yet"
-          hint="Create a bot with a persona and instructions, then attach a model connection so it can think. Bots own and run tasks."
-        />
-      )}
+        )}
+      </PageSection>
     </div>
   );
 }
@@ -60,19 +90,20 @@ export function TeammatesTab({ projectId }: { projectId: string }) {
 function BotCard({
   mate,
   providers,
+  tasks,
   onChanged,
 }: {
   mate: TeammateT;
   providers: Provider[];
+  tasks: Task[];
   onChanged: () => void;
 }) {
   const [showAttach, setShowAttach] = useState(false);
   const [showPerms, setShowPerms] = useState(false);
   const [showFace, setShowFace] = useState(false);
   const [showModelSettings, setShowModelSettings] = useState(false);
+  const [showConfig, setShowConfig] = useState(false);
   const [faceDraft, setFaceDraft] = useState<FaceChoice>(DEFAULT_FACE);
-  const [hovered, setHovered] = useState(false);
-  const catalogue = usePermissionCatalogue();
   const act = async (fn: () => Promise<unknown>) => {
     try {
       await fn();
@@ -82,111 +113,76 @@ function BotCard({
     }
   };
   const attached = providers.find((p) => p.id === mate.provider_id);
+  const work = teammateWorkSummary(mate.id, tasks);
 
   return (
-    <div
-      className={CARD_SHELL}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
-      <div className="flex items-center gap-3" style={{ justifyContent: "space-between" }}>
-        <div className="flex items-center gap-2.5">
-          <BotFace face={mate.face} size={32} state={faceStateFor(mate.status)} animated={hovered} />
-          <div>
-            <strong>{mate.persona || "Unnamed bot"}</strong>{" "}
-            <span className="mono text-[var(--muted)]">{mate.id}</span> <StatusBadge status={mate.status} />
-            <div className="mt-1">
-              <button
-                type="button"
-                onClick={() => navigate(`/bot/${mate.id}`)}
-                className="text-step--2 text-[var(--accent)] hover:underline"
-              >
-                Open agent →
-              </button>
+    <div className="rounded-lg bg-[var(--surface)] px-4 py-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex min-w-0 items-start gap-3">
+          <BotFace face={mate.face} size={36} state={faceStateFor(mate.status)} animated />
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="truncate text-step-0 font-medium text-[var(--text)]">{mate.persona || mate.name || "Teammate"}</span>
+              <span className="text-step--2 text-[var(--muted)]">{work.state}</span>
+              <StatusBadge status={mate.status} />
+            </div>
+            <div className="mt-1 text-step--1 text-[var(--muted)] line-clamp-2">
+              {mate.instructions || "No role or instructions set yet."}
+            </div>
+            <div className="mt-2 text-step--2 text-[var(--text-soft)]">
+              {work.active ? (
+                <>Current: <span className="text-[var(--text)]">{taskTitle(work.active.description)}</span> <span className="text-[var(--muted)]">· {work.active.status.replace("_", " ")}</span></>
+              ) : work.total > 0 ? (
+                <>{work.done} completed · {work.total} assigned in this workspace</>
+              ) : (
+                <>No work assigned in this workspace yet</>
+              )}
+            </div>
+            <div className="mt-1 text-step--2 text-[var(--faint)]">
+              {attached ? `Model: ${attached.name || attached.id}${mate.model ? ` (override ${mate.model})` : ""}` : mate.provider_id ? `Model: ${mate.provider_id} (connection not found)` : "No model connected"}
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-3">
-          <Button onClick={() => setShowAttach(true)}>
-            {attached ? "Switch model" : "Attach model"}
-          </Button>
-          <Button onClick={() => setShowModelSettings(true)}>Model settings</Button>
-          <Button onClick={() => setShowPerms(true)}>Permissions</Button>
-          <Button
-            onClick={() => {
-              setFaceDraft(normalizeFace(mate.face));
-              setShowFace(true);
-            }}
-          >
-            Face
-          </Button>
-          <Button onClick={() => void act(() => api.disableTeammate(mate.id))}>Disable</Button>
-          <Button onClick={() => void act(() => api.archiveTeammate(mate.id))}>Archive</Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button onClick={() => navigate(`/bot/${mate.id}`)}>Open</Button>
+          <Button variant="primary" onClick={() => navigate(`/p/${mate.project_id}?tab=Chat`)}>Chat</Button>
+          <Button onClick={() => setShowConfig((v) => !v)}>{showConfig ? "Hide settings" : "Configure"}</Button>
         </div>
       </div>
-      <div className="text-[var(--muted)]">{mate.instructions || "No instructions yet."}</div>
-      <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-        <span className="mono text-[var(--muted)]" style={{ fontSize: 12 }}>
-          memory: {mate.memory_scope}
-        </span>
-        {(mate.permissions ?? []).length === 0 ? (
-          <span className={PILL_SHELL} title="No permissions: every gated tool call is denied.">
-            no permissions
-          </span>
-        ) : (
-          mate.permissions.map((perm) => (
-            <span
-              className={PILL_SHELL}
-              key={perm}
-              title={
-                catalogue.isAdmin(perm)
-                  ? "admin (approval-gated)"
-                  : catalogue.byName.has(perm)
-                    ? "agent permission"
-                    : "unknown permission, grants nothing"
-              }
-            >
-              {perm}
-            </span>
-          ))
-        )}
-        {Object.keys(mate.tool_policy ?? {}).length > 0
-          ? Object.entries(mate.tool_policy).map(([tool, mode]) => (
-              <span className={PILL_SHELL} key={tool} title={`tool_policy.${tool}`}>
-                {tool}: {String(mode)}
-              </span>
-            ))
-          : null}
-      </div>
-      <div className="mono text-[var(--muted)]" style={{ marginTop: 8 }}>
-        brain:{" "}
-        {attached ? (
-          <>
-            {attached.name} · {String(attached.config.model ?? "model not set")}
-            {mate.model ? <> · override {mate.model}</> : null}
-            {mate.fallback_provider_id ? <> · fallback {mate.fallback_model || mate.fallback_provider_id}</> : null}
-          </>
-        ) : mate.provider_id ? (
-          <>{mate.provider_id} (connection not found)</>
-        ) : (
-          <span style={{ color: "#b58a00" }}>none, the bot cannot think until one is attached</span>
-        )}
-      </div>
+
+      {showConfig ? (
+        <div className="mt-4 border-t border-[var(--border-dim)] pt-3">
+          <div className="mb-3 flex flex-wrap items-center gap-2 text-step--2 text-[var(--muted)]">
+            <span>memory: {mate.memory_scope}</span>
+            <span>·</span>
+            <span>{(mate.permissions ?? []).length} permission{(mate.permissions ?? []).length === 1 ? "" : "s"}</span>
+            {attached ? <><span>·</span><span>{String(attached.config.model ?? "model not set")}</span></> : null}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button onClick={() => setShowAttach(true)}>{attached ? "Switch model" : "Attach model"}</Button>
+            <Button onClick={() => setShowModelSettings(true)}>Model settings</Button>
+            <Button onClick={() => setShowPerms(true)}>Permissions</Button>
+            <Button onClick={() => { setFaceDraft(normalizeFace(mate.face)); setShowFace(true); }}>Face</Button>
+            <Button onClick={() => void act(() => api.disableTeammate(mate.id))}>Disable</Button>
+            <Button onClick={() => void act(() => api.archiveTeammate(mate.id))}>Archive</Button>
+          </div>
+          <div className="mt-2 text-step--2 text-[var(--faint)]">
+            Advanced configuration and access controls remain available here and in the full agent view.
+          </div>
+        </div>
+      ) : null}
+
       {showAttach ? (
         <Modal title={`Model for ${mate.persona || mate.id}`} onClose={() => setShowAttach(false)}>
           {providers.length === 0 ? (
-            <div className={ERROR_BOX}>
+            <div className="rounded-md border border-[var(--warn)] bg-[var(--warn-dim)] px-3 py-2 text-step--1">
               This project has no model connections yet. Create one under the{" "}
               <strong>Providers</strong> tab first.
             </div>
           ) : (
             <div>
               {providers.map((p) => (
-                <div
-                  key={p.id}
-                  className="flex items-center gap-3"
-                  style={{ justifyContent: "space-between", padding: "6px 0" }}
-                >
+                <div key={p.id} className="flex items-center justify-between gap-3 py-1.5">
                   <span>
                     <strong>{p.name || p.id}</strong>{" "}
                     <span className="mono text-[var(--muted)]">{String(p.config.model ?? "")}</span>
@@ -195,8 +191,6 @@ function BotCard({
                   <Button
                     onClick={() =>
                       void act(() => api.patchTeammate(mate.id, {
-                        // current connection → explicit detach (null);
-                        // another connection → attach it
                         provider_id: mate.provider_id === p.id ? null : p.id,
                       }))
                     }
