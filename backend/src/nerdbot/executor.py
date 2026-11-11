@@ -47,7 +47,7 @@ def _available_bot(
     block. The task stays pending until the key is configured.
     """
     for mate in store.list_all_teammates(conn):
-        if mate.project_id != project_id:
+        if not store.teammate_in_project(conn, mate.id, project_id):
             continue
         if mate.status != TeammateStatus.ACTIVE:
             continue
@@ -74,7 +74,7 @@ def _provider_block_reason(conn: sqlite3.Connection, project_id: str) -> str | N
     Otherwise the task simply stays pending and the owner sees nothing.
     """
     for mate in store.list_all_teammates(conn):
-        if mate.project_id != project_id:
+        if not store.teammate_in_project(conn, mate.id, project_id):
             continue
         if mate.status != TeammateStatus.ACTIVE:
             continue

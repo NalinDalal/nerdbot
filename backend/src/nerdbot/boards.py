@@ -106,7 +106,7 @@ def authorize_board(
     board = store.get_board(conn, board_id)
     if board is None:
         raise HTTPException(status_code=404, detail="board not found")
-    if board.project_id and acting.project_id != board.project_id:
+    if board.project_id and not store.teammate_in_project(conn, acting.id, board.project_id):
         raise HTTPException(
             status_code=403, detail="acting teammate belongs to another project"
         )
@@ -128,7 +128,7 @@ def create_board_service(
 ) -> Board:
     if acting is not None:
         _require_board_permission(acting, "board.create")
-        if acting.project_id and project_id and acting.project_id != project_id:
+        if project_id and not store.teammate_in_project(conn, acting.id, project_id):
             raise HTTPException(
                 status_code=403, detail="acting teammate belongs to another project"
             )
@@ -299,7 +299,7 @@ def create_board_message_service(
             target = store.get_teammate(conn, to_teammate_id)
             if target is None:
                 raise HTTPException(status_code=404, detail="teammate not found")
-            if target.project_id != acting.project_id:
+            if not store.teammate_in_project(conn, target.id, board.project_id):
                 raise HTTPException(
                     status_code=403,
                     detail="target teammate belongs to another project",
@@ -308,7 +308,7 @@ def create_board_message_service(
             target_board = store.get_board(conn, to_board_id)
             if target_board is None:
                 raise HTTPException(status_code=404, detail="target board not found")
-            if target_board.project_id != acting.project_id:
+            if target_board.project_id and not store.teammate_in_project(conn, acting.id, target_board.project_id):
                 raise HTTPException(
                     status_code=403,
                     detail="target board belongs to another project",

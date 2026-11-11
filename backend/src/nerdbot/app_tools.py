@@ -660,9 +660,9 @@ def _resolve_actor(ctx: AgentContext) -> Teammate:
         raise gates.GateDenied(f"acting teammate {claimed.id} does not exist")
     if mate.status != TeammateStatus.ACTIVE:
         raise gates.GateDenied(f"acting teammate {mate.id} is not active")
-    if mate.project_id != ctx.task.project_id:
+    if not store.teammate_in_project(ctx.conn, mate.id, ctx.task.project_id):
         raise gates.GateDenied(
-            f"acting teammate {mate.id} belongs to another project"
+            f"acting teammate {mate.id} is not a member of this workspace"
         )
     owner_id = ctx.task.owner_teammate_id
     if owner_id and owner_id != mate.id:
@@ -834,7 +834,7 @@ def _dispatch(
         teammate_id = _opt_str(args.get("teammate_id"))
         if teammate_id is not None:
             assignee = store.get_teammate(conn, teammate_id)
-            if assignee is None or assignee.project_id != task.project_id:
+            if assignee is None or not store.teammate_in_project(conn, assignee.id, task.project_id):
                 return "tool error: teammate not found in this project"
         try:
             updated = store.assign_task_owner(conn, target_id, teammate_id)

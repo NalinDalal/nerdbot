@@ -190,7 +190,7 @@ def materialize_plan(
         )
         if acting_teammate_id:
             mate = store.get_teammate(conn, acting_teammate_id)
-            if mate is not None and mate.project_id == project_id:
+            if mate is not None and store.teammate_in_project(conn, mate.id, project_id):
                 # Membership is convenience; the board row is canonical.
                 with contextlib.suppress(KeyError, ValueError):
                     store.create_board_member(

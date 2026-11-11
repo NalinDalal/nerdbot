@@ -228,7 +228,7 @@ def test_delegation_to_a_bot_in_another_project_is_refused() -> None:
         "delegate_task",
         {"to_teammate_id": stranger.id, "description": "do it"},
     )
-    assert "another project" in out
+    assert "not a member of this workspace" in out or "another project" in out
     conn.close()
 
 

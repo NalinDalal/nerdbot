@@ -45,9 +45,9 @@ def create_teammate_service(
     acting: Teammate | None = None,
 ) -> Teammate:
     if acting is not None:
-        if acting.project_id != project_id:
+        if not store.teammate_in_project(conn, acting.id, project_id):
             raise HTTPException(
-                status_code=403, detail="acting teammate belongs to another project"
+                status_code=403, detail="acting teammate is not a member of this workspace"
             )
         # A bot may not create a teammate with more power than itself. This
         # runs before the gate: no approval can authorize an escalation, so
@@ -152,9 +152,9 @@ def update_teammate_service(
     if mate is None:
         raise HTTPException(status_code=404, detail="teammate not found")
     if acting is not None:
-        if acting.project_id != mate.project_id:
+        if not store.teammate_in_project(conn, acting.id, mate.project_id):
             raise HTTPException(
-                status_code=403, detail="acting teammate belongs to another project"
+                status_code=403, detail="acting teammate is not a member of this workspace"
             )
         # Escalation guard, before any gate: a bot may not hand out (or
         # auto-approve) a permission it does not itself hold. No approval can
@@ -197,9 +197,9 @@ def set_teammate_status_service(
     if mate.status == TeammateStatus.ARCHIVED and status != TeammateStatus.ARCHIVED:
         raise HTTPException(status_code=400, detail="archived teammates cannot be reactivated")
     if acting is not None:
-        if acting.project_id != mate.project_id:
+        if not store.teammate_in_project(conn, acting.id, mate.project_id):
             raise HTTPException(
-                status_code=403, detail="acting teammate belongs to another project"
+                status_code=403, detail="acting teammate is not a member of this workspace"
             )
         perm = "teammate.delete" if status == TeammateStatus.ARCHIVED else "teammate.update"
         try:
@@ -241,9 +241,9 @@ def create_team_service(
     if acting is not None:
         if not project_id:
             project_id = acting.project_id
-        if acting.project_id != project_id:
+        if not store.teammate_in_project(conn, acting.id, project_id):
             raise HTTPException(
-                status_code=403, detail="acting teammate belongs to another project"
+                status_code=403, detail="acting teammate is not a member of this workspace"
             )
         # A bot creates a team on behalf of its workspace owner, so the team's
         # owner is the human principal (the project owner), not the bot. This
@@ -294,9 +294,9 @@ def add_teammate_to_team_service(
     if acting is not None:
         # Workspace isolation: a bot may only regroup bots from its own
         # project, never reach into another workspace's fleet.
-        if target.project_id != acting.project_id:
+        if not (store.teammate_in_project(conn, acting.id, target.project_id) or store.teammate_in_project(conn, target.id, acting.project_id)):
             raise HTTPException(
-                status_code=403, detail="teammate belongs to another project"
+                status_code=403, detail="teammate is not accessible in this context"
             )
         try:
             gates.require(
@@ -327,9 +327,9 @@ def remove_teammate_from_team_service(
     if target is None:
         raise HTTPException(status_code=404, detail="teammate not found")
     if acting is not None:
-        if target.project_id != acting.project_id:
+        if not (store.teammate_in_project(conn, acting.id, target.project_id) or store.teammate_in_project(conn, target.id, acting.project_id)):
             raise HTTPException(
-                status_code=403, detail="teammate belongs to another project"
+                status_code=403, detail="teammate is not accessible in this context"
             )
         try:
             gates.require(

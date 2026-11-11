@@ -150,6 +150,14 @@ def require(
     pending = _find_pending_approval(conn, permission, digest)
     if pending is not None:
         raise GateApprovalRequired(pending)
+    approval_project_id = mate.project_id
+    if task_id:
+        try:
+            task = store.get_task(conn, task_id)
+            if task is not None and task.project_id:
+                approval_project_id = task.project_id
+        except Exception:
+            pass
     approval = store.request_approval(
         conn,
         action=permission,
@@ -158,7 +166,7 @@ def require(
         ttl_s=ttl_s,
         task_id=task_id,
         digest=digest,
-        project_id=mate.project_id,
+        project_id=approval_project_id,
     )
     raise GateApprovalRequired(approval)
 
@@ -203,6 +211,14 @@ def require_many(
         if found is not None:
             pending.append(found)
             continue
+        approval_project_id = mate.project_id
+        if task_id:
+            try:
+                task = store.get_task(conn, task_id)
+                if task is not None and task.project_id:
+                    approval_project_id = task.project_id
+            except Exception:
+                pass
         pending.append(
             store.request_approval(
                 conn,
@@ -212,7 +228,7 @@ def require_many(
                 ttl_s=ttl_s,
                 task_id=task_id,
                 digest=digest,
-                project_id=mate.project_id,
+                project_id=approval_project_id,
             )
         )
     if pending:

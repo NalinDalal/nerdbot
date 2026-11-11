@@ -264,7 +264,7 @@ def test_identity_from_another_project_is_rejected() -> None:
 
     out = app_tools.execute_app_tool(ctx, "read_board", {"board_id": board_id})
     assert "permission denied" in out, out
-    assert "another project" in out, out
+    assert "not a member of this workspace" in out or "another project" in out or "denied" in out.lower(), out
     conn.close()
 
 

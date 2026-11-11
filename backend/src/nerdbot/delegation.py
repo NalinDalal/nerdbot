@@ -116,7 +116,7 @@ def delegate(
     The delegatee is *not* assumed to accept. The record starts ``pending``
     and only the delegatee (or the owner) resolves it.
     """
-    if requester.project_id != parent_task.project_id:
+    if not store.teammate_in_project(conn, requester.id, parent_task.project_id):
         raise DelegationError("you may only delegate tasks in your own project")
     if requester.status != TeammateStatus.ACTIVE:
         raise DelegationError("you are not active")
@@ -129,8 +129,8 @@ def delegate(
     target = store.get_teammate(conn, to_teammate_id)
     if target is None:
         raise DelegationError(f"teammate {to_teammate_id} does not exist")
-    if target.project_id != parent_task.project_id:
-        raise DelegationError("that teammate belongs to another project")
+    if not store.teammate_in_project(conn, target.id, parent_task.project_id):
+        raise DelegationError("that teammate is not a member of this workspace")
     if target.status != TeammateStatus.ACTIVE:
         raise DelegationError(f"teammate {to_teammate_id} is {target.status.value}")
 

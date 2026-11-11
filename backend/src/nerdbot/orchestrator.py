@@ -1023,7 +1023,7 @@ def create_scheduled(
         project = store.get_project(conn, project_id)
         if project is None:
             raise KeyError(f"unknown project {project_id}")
-        if mate is None or mate.project_id != project_id:
+        if mate is None or not store.teammate_in_project(conn, mate.id, project_id):
             raise ValueError("schedule owner teammate must belong to the same project")
         template.setdefault("owner_teammate_id", str(owner))
     if target_action == "task":

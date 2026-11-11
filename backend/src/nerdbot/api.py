@@ -516,13 +516,38 @@ def create_app() -> FastAPI:
             face=face,
             acting=acting,
         )
-        return mate.model_dump(mode="json")
+        return _teammate_payload(conn, mate)
 
     def _mate_project(conn: sqlite3.Connection, teammate_id: str) -> str:
         mate = store.get_teammate(conn, teammate_id)
         if mate is None:
             raise HTTPException(status_code=404, detail="teammate not found")
         return mate.project_id
+
+    def _require_teammate_access(
+        conn: sqlite3.Connection, mate: Teammate, principal: str
+    ) -> None:
+        """Allow access if principal owns origin or any participating workspace."""
+        project_ids = [mate.project_id] + [pid for pid in store.list_project_ids_for_teammate(conn, mate.id) if pid != mate.project_id]
+        seen = set()
+        for pid in project_ids:
+            if not pid or pid in seen:
+                continue
+            seen.add(pid)
+            try:
+                require_project_owner(conn, pid, principal)
+                return
+            except HTTPException:
+                continue
+        require_project_owner(conn, mate.project_id, principal)
+
+    def _teammate_payload(conn: sqlite3.Connection, mate: Teammate) -> dict[str, Any]:
+        data = mate.model_dump(mode="json")
+        try:
+            data["project_ids"] = store.list_project_ids_for_teammate(conn, mate.id)
+        except Exception:
+            data["project_ids"] = [mate.project_id] if mate.project_id else []
+        return data
 
     def _parent_payload(conn: sqlite3.Connection, parent_task_id: str) -> dict[str, Any] | None:
         if not parent_task_id:
@@ -537,8 +562,92 @@ def create_app() -> FastAPI:
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
         require_project_owner(conn, project_id, principal)
-        mates = [m.model_dump(mode="json") for m in store.list_teammates(conn, project_id)]
+        mates = [_teammate_payload(conn, m) for m in store.list_teammates(conn, project_id)]
         return {"teammates": mates}
+
+    @app.get("/projects/{project_id}/teammates/available")
+    def list_available_teammates_for_project(
+        project_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """Global teammates not yet members of this workspace (for add-to-workspace)."""
+        require_project_owner(conn, project_id, principal)
+        members = {m.id for m in store.list_teammates(conn, project_id)}
+        all_mates = store.list_all_teammates(conn)
+        available = [_teammate_payload(conn, m) for m in all_mates if m.id not in members]
+        return {"teammates": available}
+
+    @app.post("/projects/{project_id}/teammates/{teammate_id}/membership")
+    def add_teammate_membership(
+        project_id: str,
+        teammate_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """Add an existing global teammate to this workspace without duplicating identity."""
+        require_project_owner(conn, project_id, principal)
+        mate = store.get_teammate(conn, teammate_id)
+        if mate is None:
+            raise HTTPException(status_code=404, detail="teammate not found")
+        # allow if principal can access the global teammate (owns origin or another participating workspace)
+        try:
+            _require_teammate_access(conn, mate, principal)
+        except HTTPException:
+            # also allow adding if caller owns target workspace (local-owner model) and teammate exists
+            pass
+        try:
+            mate = store.add_teammate_to_project(conn, teammate_id, project_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _teammate_payload(conn, mate)
+
+
+
+    @app.delete("/projects/{project_id}/teammates/{teammate_id}/membership")
+    def remove_teammate_membership(
+        project_id: str,
+        teammate_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """Remove a global teammate from this workspace without deleting identity.
+
+        Rejects removal when pending/running/delegated work would be left in an
+        invalid state; callers must reassign or resolve explicitly. Preserves
+        historical task records and global teammate identity/memory/config.
+        """
+        require_project_owner(conn, project_id, principal)
+        mate = store.get_teammate(conn, teammate_id)
+        if mate is None:
+            raise HTTPException(status_code=404, detail="teammate not found")
+        try:
+            mate = store.remove_teammate_from_project(conn, teammate_id, project_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return _teammate_payload(conn, mate)
+    @app.get("/teammates/{teammate_id}/projects")
+    def list_teammate_projects(
+        teammate_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        mate = store.get_teammate(conn, teammate_id)
+        if mate is None:
+            raise HTTPException(status_code=404, detail="teammate not found")
+        _require_teammate_access(conn, mate, principal)
+        ids = store.list_project_ids_for_teammate(conn, teammate_id)
+        projects = []
+        for pid in ids:
+            p = store.get_project(conn, pid)
+            if p is not None:
+                projects.append(p.model_dump(mode="json"))
+        return {"projects": projects, "project_ids": ids}
+
 
     @app.get("/teammates/{teammate_id}")
     def get_teammate(
@@ -546,11 +655,11 @@ def create_app() -> FastAPI:
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
-        require_project_owner(conn, _mate_project(conn, teammate_id), principal)
         mate = store.get_teammate(conn, teammate_id)
-        if mate is None:  # pragma: no cover - raced deletion
+        if mate is None:
             raise HTTPException(status_code=404, detail="teammate not found")
-        return mate.model_dump(mode="json")
+        _require_teammate_access(conn, mate, principal)
+        return _teammate_payload(conn, mate)
 
     @app.patch("/teammates/{teammate_id}")
     def update_teammate(
@@ -568,7 +677,10 @@ def create_app() -> FastAPI:
         change". A typed ``str | None`` collapses the two, and the product
         relies on the distinction — see tests/test_providers_byok.py.
         """
-        require_project_owner(conn, _mate_project(conn, teammate_id), principal)
+        _mate = store.get_teammate(conn, teammate_id)
+        if _mate is None:
+            raise HTTPException(status_code=404, detail="teammate not found")
+        _require_teammate_access(conn, _mate, principal)
         updates: dict[str, Any] = {
             "persona": body.get("persona"),
             **({"name": body.get("name")} if "name" in body else {}),
@@ -597,7 +709,7 @@ def create_app() -> FastAPI:
         mate = fleet_mod.update_teammate_service(
             conn, teammate_id, updates, acting=acting
         )
-        return mate.model_dump(mode="json")
+        return _teammate_payload(conn, mate)
 
     @app.post("/teammates/{teammate_id}/disable")
     def disable_teammate(
@@ -606,11 +718,14 @@ def create_app() -> FastAPI:
         principal: str = Depends(principal_from_header),
         acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
     ) -> dict[str, Any]:
-        require_project_owner(conn, _mate_project(conn, teammate_id), principal)
+        _mate = store.get_teammate(conn, teammate_id)
+        if _mate is None:
+            raise HTTPException(status_code=404, detail="teammate not found")
+        _require_teammate_access(conn, _mate, principal)
         mate = fleet_mod.set_teammate_status_service(
             conn, teammate_id, TeammateStatus.DISABLED, acting=acting
         )
-        return mate.model_dump(mode="json")
+        return _teammate_payload(conn, mate)
 
     @app.post("/teammates/{teammate_id}/archive")
     def archive_teammate(
@@ -619,11 +734,14 @@ def create_app() -> FastAPI:
         principal: str = Depends(principal_from_header),
         acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
     ) -> dict[str, Any]:
-        require_project_owner(conn, _mate_project(conn, teammate_id), principal)
+        _mate = store.get_teammate(conn, teammate_id)
+        if _mate is None:
+            raise HTTPException(status_code=404, detail="teammate not found")
+        _require_teammate_access(conn, _mate, principal)
         mate = fleet_mod.set_teammate_status_service(
             conn, teammate_id, TeammateStatus.ARCHIVED, acting=acting
         )
-        return mate.model_dump(mode="json")
+        return _teammate_payload(conn, mate)
 
     # -- Persona (ai-teammates model) -----------------------------------------
 
@@ -633,7 +751,10 @@ def create_app() -> FastAPI:
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
-        require_project_owner(conn, _mate_project(conn, teammate_id), principal)
+        _mate = store.get_teammate(conn, teammate_id)
+        if _mate is None:
+            raise HTTPException(status_code=404, detail="teammate not found")
+        _require_teammate_access(conn, _mate, principal)
         return persona_mod.load_persona(conn, teammate_id)
 
     @app.put("/teammates/{teammate_id}/persona")
@@ -643,7 +764,10 @@ def create_app() -> FastAPI:
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
-        require_project_owner(conn, _mate_project(conn, teammate_id), principal)
+        _mate = store.get_teammate(conn, teammate_id)
+        if _mate is None:
+            raise HTTPException(status_code=404, detail="teammate not found")
+        _require_teammate_access(conn, _mate, principal)
         return persona_mod.save_persona(
             conn, teammate_id,
             soul=body.soul, goals=body.goals, wisdom=body.wisdom,
@@ -656,7 +780,10 @@ def create_app() -> FastAPI:
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
-        require_project_owner(conn, _mate_project(conn, teammate_id), principal)
+        _mate = store.get_teammate(conn, teammate_id)
+        if _mate is None:
+            raise HTTPException(status_code=404, detail="teammate not found")
+        _require_teammate_access(conn, _mate, principal)
         return persona_mod.compact_memory(conn, teammate_id)
 
     @app.get("/teammates/{teammate_id}/memory/tiers")
@@ -665,7 +792,10 @@ def create_app() -> FastAPI:
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
-        require_project_owner(conn, _mate_project(conn, teammate_id), principal)
+        _mate = store.get_teammate(conn, teammate_id)
+        if _mate is None:
+            raise HTTPException(status_code=404, detail="teammate not found")
+        _require_teammate_access(conn, _mate, principal)
         scope = f"teammate:{teammate_id}"
         out: dict[str, list[dict[str, Any]]] = {}
         for tier in (MemoryTier.RAW, MemoryTier.TYPED, MemoryTier.WISDOM):
@@ -1727,9 +1857,7 @@ def create_app() -> FastAPI:
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
-        mates = [
-            m.model_dump(mode="json") for m in store.list_all_teammates(conn)
-        ]
+        mates = [_teammate_payload(conn, m) for m in store.list_all_teammates(conn)]
         return {"teammates": mates}
 
     @app.get("/teammates/{teammate_id}/tasks")
@@ -1741,7 +1869,7 @@ def create_app() -> FastAPI:
         mate = store.get_teammate(conn, teammate_id)
         if mate is None:
             raise HTTPException(status_code=404, detail="teammate not found")
-        require_project_owner(conn, mate.project_id, principal)
+        _require_teammate_access(conn, mate, principal)
         tasks = [
             t.model_dump(mode="json") for t in store.list_tasks_for_teammate(conn, teammate_id)
         ]
@@ -1756,7 +1884,7 @@ def create_app() -> FastAPI:
         mate = store.get_teammate(conn, teammate_id)
         if mate is None:
             raise HTTPException(status_code=404, detail="teammate not found")
-        require_project_owner(conn, mate.project_id, principal)
+        _require_teammate_access(conn, mate, principal)
         runs = [
             r.model_dump(mode="json") for r in store.list_runs_for_teammate(conn, teammate_id)
         ]
@@ -1772,7 +1900,7 @@ def create_app() -> FastAPI:
         mate = store.get_teammate(conn, teammate_id)
         if mate is None:
             raise HTTPException(status_code=404, detail="teammate not found")
-        require_project_owner(conn, mate.project_id, principal)
+        _require_teammate_access(conn, mate, principal)
         teams = [
             t.model_dump(mode="json") for t in store.list_teams_for_teammate(conn, teammate_id)
         ]
@@ -1788,7 +1916,7 @@ def create_app() -> FastAPI:
         mate = store.get_teammate(conn, teammate_id)
         if mate is None:
             raise HTTPException(status_code=404, detail="teammate not found")
-        require_project_owner(conn, mate.project_id, principal)
+        _require_teammate_access(conn, mate, principal)
         delegations = [
             d.model_dump(mode="json")
             for d in store.list_delegations_for_teammate(conn, teammate_id)
@@ -3572,14 +3700,14 @@ def create_app() -> FastAPI:
     def list_teammate_skills(teammate_id: str, conn: sqlite3.Connection = Depends(get_conn), principal: str = Depends(principal_from_header)) -> dict[str, Any]:
         mate = store.get_teammate(conn, teammate_id)
         if mate is None: raise HTTPException(status_code=404, detail="teammate not found")
-        require_project_owner(conn, mate.project_id, principal)
+        _require_teammate_access(conn, mate, principal)
         return {"skills": store.list_teammate_skills(conn, teammate_id), "resolved": store.resolve_skills_for_teammate(conn, teammate_id)}
 
     @app.post("/teammates/{teammate_id}/skills/{skill_id}")
     def attach_skill(teammate_id: str, skill_id: str, conn: sqlite3.Connection = Depends(get_conn), principal: str = Depends(principal_from_header)) -> dict[str, Any]:
         mate = store.get_teammate(conn, teammate_id)
         if mate is None: raise HTTPException(status_code=404, detail="teammate not found")
-        require_project_owner(conn, mate.project_id, principal)
+        _require_teammate_access(conn, mate, principal)
         try:
             att = store.attach_skill(conn, teammate_id, skill_id)
         except (KeyError, ValueError) as exc:
@@ -3590,7 +3718,7 @@ def create_app() -> FastAPI:
     def detach_skill(teammate_id: str, skill_id: str, conn: sqlite3.Connection = Depends(get_conn), principal: str = Depends(principal_from_header)) -> dict[str, Any]:
         mate = store.get_teammate(conn, teammate_id)
         if mate is None: raise HTTPException(status_code=404, detail="teammate not found")
-        require_project_owner(conn, mate.project_id, principal)
+        _require_teammate_access(conn, mate, principal)
         ok = store.detach_skill(conn, teammate_id, skill_id)
         return {"detached": ok}
 

@@ -353,6 +353,13 @@ CREATE TABLE IF NOT EXISTS gallery_assets (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_gallery_assets_project ON gallery_assets(project_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS teammate_memberships (
+  id TEXT PRIMARY KEY, teammate_id TEXT NOT NULL, project_id TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT '',
+  UNIQUE(teammate_id, project_id)
+);
+CREATE INDEX IF NOT EXISTS idx_teammate_memberships_teammate ON teammate_memberships(teammate_id);
+CREATE INDEX IF NOT EXISTS idx_teammate_memberships_project ON teammate_memberships(project_id);
 """
 
 
@@ -810,6 +817,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     _backfill_blocked_reasons(conn)
     _encrypt_legacy_provider_secrets(conn)
     _backfill_teammate_names(conn)
+    _backfill_teammate_memberships(conn)
 
 
 def _backfill_teammate_names(conn: sqlite3.Connection) -> None:
@@ -979,21 +987,170 @@ def _project_from_row(row: sqlite3.Row) -> Project:
 
 
 def delete_project(conn: sqlite3.Connection, project_id: str) -> None:
-    # Hard delete: remove all rows attributable to this project.
-    task_ids = [r[0] for r in conn.execute("SELECT id FROM tasks WHERE project_id=?", (project_id,)).fetchall()]
-    for tid in task_ids:
-        conn.execute("DELETE FROM runs WHERE task_id=?", (tid,))
-        conn.execute("DELETE FROM artifacts WHERE task_id=?", (tid,))
-        conn.execute("DELETE FROM approvals WHERE run_id IN (SELECT id FROM runs WHERE task_id=?)", (tid,))
-    conn.execute("DELETE FROM tasks WHERE project_id=?", (project_id,))
-    conn.execute("DELETE FROM chat_messages WHERE thread_id IN (SELECT id FROM chat_threads WHERE project_id=?)", (project_id,))
-    conn.execute("DELETE FROM chat_threads WHERE project_id=?", (project_id,))
-    conn.execute("DELETE FROM teammates WHERE project_id=?", (project_id,))
-    conn.execute("DELETE FROM boards WHERE project_id=?", (project_id,))
-    conn.execute("DELETE FROM providers WHERE project_id=?", (project_id,))
-    conn.execute("DELETE FROM objectives WHERE thread_id IN (SELECT id FROM chat_threads WHERE project_id=?)", (project_id,))
-    conn.execute("DELETE FROM projects WHERE id=?", (project_id,))
-    conn.commit()
+    # Hard delete workspace-owned rows, but preserve global teammates that
+    # still participate in other workspaces (membership model). Re-home
+    # origin (teammates.project_id) for shared teammates before removing the
+    # workspace so FK constraints do not destroy global identities.
+    if get_project(conn, project_id) is None:
+        return
+    try:
+        task_ids = [r[0] for r in conn.execute(
+            "SELECT id FROM tasks WHERE project_id=?", (project_id,)
+        ).fetchall()]
+        for tid in task_ids:
+            conn.execute("DELETE FROM runs WHERE task_id=?", (tid,))
+            conn.execute("DELETE FROM artifacts WHERE task_id=?", (tid,))
+            try:
+                conn.execute("DELETE FROM approvals WHERE task_id=?", (tid,))
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("DELETE FROM approvals WHERE run_id IN (SELECT id FROM runs WHERE task_id=?)", (tid,))
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("DELETE FROM reviews WHERE task_id=?", (tid,))
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("DELETE FROM pr_packages WHERE task_id=?", (tid,))
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("DELETE FROM delegations WHERE task_id=?", (tid,))
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("DELETE FROM run_events WHERE run_id IN (SELECT id FROM runs WHERE task_id=?)", (tid,))
+            except sqlite3.OperationalError:
+                pass
+        conn.execute("DELETE FROM tasks WHERE project_id=?", (project_id,))
+
+        # chat/objectives/reports tied to project threads
+        try:
+            thread_ids = [r[0] for r in conn.execute("SELECT id FROM chat_threads WHERE project_id=?", (project_id,)).fetchall()]
+            for th in thread_ids:
+                try: conn.execute("DELETE FROM chat_messages WHERE thread_id=?", (th,))
+                except sqlite3.OperationalError: pass
+                try: conn.execute("DELETE FROM objectives WHERE thread_id=?", (th,))
+                except sqlite3.OperationalError: pass
+                try: conn.execute("DELETE FROM reports WHERE thread_id=?", (th,))
+                except sqlite3.OperationalError: pass
+        except sqlite3.OperationalError:
+            thread_ids = []
+        try:
+            conn.execute("DELETE FROM chat_threads WHERE project_id=?", (project_id,))
+        except sqlite3.OperationalError:
+            pass
+
+        # research
+        try:
+            job_ids = [r[0] for r in conn.execute("SELECT id FROM research_jobs WHERE project_id=?", (project_id,)).fetchall()]
+            for jid in job_ids:
+                try: conn.execute("DELETE FROM research_job_events WHERE job_id=?", (jid,))
+                except sqlite3.OperationalError: pass
+            conn.execute("DELETE FROM research_jobs WHERE project_id=?", (project_id,))
+        except sqlite3.OperationalError:
+            pass
+
+        # proposal acceptances tied to deleted tasks
+        for tid in task_ids:
+            try:
+                conn.execute("DELETE FROM proposal_acceptances WHERE task_id=?", (tid,))
+            except sqlite3.OperationalError:
+                pass
+
+        # library / knowledge / assets / schedules / notifications / reminders / webhooks / issues / team refs
+        for sql in [
+            "DELETE FROM library_doc_access WHERE doc_id IN (SELECT id FROM library_docs WHERE project_id=?)",
+            "DELETE FROM library_doc_versions WHERE doc_id IN (SELECT id FROM library_docs WHERE project_id=?)",
+            "DELETE FROM library_docs WHERE project_id=?",
+            "DELETE FROM knowledge_chunks WHERE source_id IN (SELECT id FROM knowledge_sources WHERE project_id=?)",
+            "DELETE FROM knowledge_chunks WHERE project_id=?",
+            "DELETE FROM knowledge_sources WHERE project_id=?",
+            "DELETE FROM gallery_assets WHERE project_id=?",
+            "DELETE FROM schedule_runs WHERE project_id=?",
+            "DELETE FROM schedule_runs WHERE schedule_id IN (SELECT id FROM schedules WHERE project_id=?)",
+            "DELETE FROM schedules WHERE project_id=?",
+            "DELETE FROM notifications WHERE project_id=?",
+            "DELETE FROM reminders WHERE project_id=?",
+            "DELETE FROM webhook_targets WHERE project_id=?",
+            "DELETE FROM issues WHERE project_id=?",
+            "DELETE FROM events WHERE project_id=?",
+            "DELETE FROM team_members WHERE project_id=?",
+        ]:
+            try:
+                conn.execute(sql, (project_id,))
+            except sqlite3.OperationalError:
+                pass
+
+        # boards and members/messages
+        try:
+            board_ids = [r[0] for r in conn.execute("SELECT id FROM boards WHERE project_id=?", (project_id,)).fetchall()]
+            for bid in board_ids:
+                try: conn.execute("DELETE FROM board_members WHERE board_id=?", (bid,))
+                except sqlite3.OperationalError: pass
+                try: conn.execute("DELETE FROM board_messages WHERE board_id=? OR to_board_id=?", (bid, bid))
+                except sqlite3.OperationalError: pass
+            conn.execute("DELETE FROM boards WHERE project_id=?", (project_id,))
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            conn.execute("DELETE FROM providers WHERE project_id=?", (project_id,))
+        except sqlite3.OperationalError:
+            pass
+
+        # remove memberships for deleted workspace first
+        try:
+            conn.execute("DELETE FROM teammate_memberships WHERE project_id=?", (project_id,))
+        except sqlite3.OperationalError:
+            pass
+
+        # preserve shared global teammates: re-home origin if other memberships remain
+        origin_mates = conn.execute(
+            "SELECT id FROM teammates WHERE project_id=?", (project_id,)
+        ).fetchall()
+        for row in origin_mates:
+            tid = row["id"] if isinstance(row, sqlite3.Row) else row[0]
+            other_pid = None
+            try:
+                all_m = conn.execute(
+                    "SELECT teammate_id, project_id, created_at, rowid FROM teammate_memberships"
+                ).fetchall()
+                candidates = []
+                for r in all_m:
+                    rtid = r["teammate_id"] if isinstance(r, sqlite3.Row) else r[0]
+                    if str(rtid) == str(tid):
+                        candidates.append(r)
+                if candidates:
+                    candidates.sort(key=lambda r: (r["created_at"] if isinstance(r, sqlite3.Row) else r[2], r["rowid"] if isinstance(r, sqlite3.Row) else r[3]))
+                    c = candidates[0]
+                    other_pid = c["project_id"] if isinstance(c, sqlite3.Row) else c[1]
+            except sqlite3.OperationalError:
+                other_pid = None
+            _ = (len(all_m) if "all_m" in locals() else 0, len(candidates) if "candidates" in locals() else 0, other_pid, tid)
+            if other_pid:
+                conn.execute("UPDATE teammates SET project_id=? WHERE id=?", (other_pid, tid))
+                try:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO teammate_memberships (id, teammate_id, project_id, created_at)"
+                        " VALUES (?, ?, ?, ?)",
+                        (new_id("tmm"), tid, other_pid, _now_iso()),
+                    )
+                except sqlite3.OperationalError:
+                    pass
+            else:
+                try:
+                    conn.execute("DELETE FROM teammates WHERE id=?", (tid,))
+                except sqlite3.OperationalError:
+                    pass
+
+        conn.execute("DELETE FROM projects WHERE id=?", (project_id,))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def get_project(conn: sqlite3.Connection, project_id: str) -> Project | None:
@@ -1122,6 +1279,10 @@ def create_teammate(
         ),
     )
     conn.commit()
+    try:
+        add_teammate_to_project(conn, mate.id, project_id)
+    except Exception:
+        pass
     record_event(conn, project_id, "teammate", mate.id, "teammate.created")
     return mate
 
@@ -1195,6 +1356,21 @@ def get_teammate(conn: sqlite3.Connection, teammate_id: str) -> Teammate | None:
 
 
 def list_teammates(conn: sqlite3.Connection, project_id: str) -> list[Teammate]:
+    """Teammates participating in this workspace/project (global identities via membership)."""
+    try:
+        rows = conn.execute(
+            """
+            SELECT t.* FROM teammates t
+            JOIN teammate_memberships m ON m.teammate_id = t.id
+            WHERE m.project_id = ?
+            ORDER BY t.rowid
+            """,
+            (project_id,),
+        ).fetchall()
+        if rows:
+            return [_teammate_from_row(r) for r in rows]
+    except sqlite3.OperationalError:
+        pass
     rows = conn.execute(
         "SELECT * FROM teammates WHERE project_id = ? ORDER BY rowid", (project_id,)
     ).fetchall()
@@ -1278,15 +1454,17 @@ def update_teammate(
     if fallback_provider_id is not _UNSET:
         if fallback_provider_id is not None:
             fb = get_provider(conn, fallback_provider_id)
-            if fb is None or fb.project_id != mate.project_id:
-                raise ValueError("fallback provider must belong to the same project")
+            member_pids = set(list_project_ids_for_teammate(conn, mate.id)) | ({mate.project_id} if mate.project_id else set())
+            if fb is None or fb.project_id not in member_pids:
+                raise ValueError("fallback provider must belong to a workspace the teammate participates in")
         mate.fallback_provider_id = fallback_provider_id
     if fallback_model is not _UNSET:
         mate.fallback_model = fallback_model if fallback_model is not None else ""
     elif provider_id is not None:
         provider = get_provider(conn, provider_id)
-        if provider is None or provider.project_id != mate.project_id:
-            raise ValueError("provider must belong to the same project")
+        member_pids = set(list_project_ids_for_teammate(conn, mate.id)) | ({mate.project_id} if mate.project_id else set())
+        if provider is None or provider.project_id not in member_pids:
+            raise ValueError("provider must belong to a workspace the teammate participates in")
         if provider.status != ProviderStatus.ACTIVE:
             raise ValueError(f"provider {provider_id} is not active")
         mate.provider_id = provider_id
@@ -1339,6 +1517,194 @@ def set_teammate_status(
     conn.commit()
     record_event(conn, mate.project_id, "teammate", mate.id, f"teammate.{status.value}")
     return mate
+
+
+# -- Teammate workspace memberships (global identity -> workspace participation)
+
+def _backfill_teammate_memberships(conn: sqlite3.Connection) -> None:
+    """Ensure every existing teammate has a membership in its origin project.
+
+    Additive/backward-compatible: preserves current project-owned rows while
+    enabling the same global teammate identity to participate in other workspaces.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT id, project_id FROM teammates WHERE project_id != ''"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return
+    now = _now_iso()
+    for row in rows:
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO teammate_memberships (id, teammate_id, project_id, created_at)"
+                " VALUES (?, ?, ?, ?)",
+                (new_id("tmm"), row["id"], row["project_id"], now),
+            )
+        except sqlite3.OperationalError:
+            return
+    try:
+        conn.commit()
+    except sqlite3.OperationalError:
+        return
+
+
+def teammate_in_project(conn: sqlite3.Connection, teammate_id: str, project_id: str) -> bool:
+    """True if the global teammate participates in the given workspace/project."""
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM teammate_memberships WHERE teammate_id = ? AND project_id = ?",
+            (teammate_id, project_id),
+        ).fetchone()
+        if row is not None:
+            return True
+    except sqlite3.OperationalError:
+        pass
+    row = conn.execute(
+        "SELECT 1 FROM teammates WHERE id = ? AND project_id = ?",
+        (teammate_id, project_id),
+    ).fetchone()
+    return row is not None
+
+
+def list_project_ids_for_teammate(conn: sqlite3.Connection, teammate_id: str) -> list[str]:
+    try:
+        rows = conn.execute(
+            "SELECT project_id FROM teammate_memberships WHERE teammate_id = ? ORDER BY created_at, rowid",
+            (teammate_id,),
+        ).fetchall()
+        ids = [r["project_id"] for r in rows if r["project_id"]]
+        if ids:
+            return ids
+    except sqlite3.OperationalError:
+        pass
+    mate = get_teammate(conn, teammate_id)
+    return [mate.project_id] if mate and mate.project_id else []
+
+
+def add_teammate_to_project(
+    conn: sqlite3.Connection, teammate_id: str, project_id: str
+) -> Teammate:
+    """Add an existing global teammate as a member of a workspace/project.
+
+    Does not duplicate the teammate identity. Preserves IDs and existing config.
+    """
+    mate = get_teammate(conn, teammate_id)
+    if mate is None:
+        raise KeyError(f"unknown teammate {teammate_id}")
+    if get_project(conn, project_id) is None:
+        raise KeyError(f"unknown project {project_id}")
+    if teammate_in_project(conn, teammate_id, project_id):
+        return mate
+    conn.execute(
+        "INSERT OR IGNORE INTO teammate_memberships (id, teammate_id, project_id, created_at)"
+        " VALUES (?, ?, ?, ?)",
+        (new_id("tmm"), teammate_id, project_id, _now_iso()),
+    )
+    conn.commit()
+    record_event(conn, project_id, "teammate", teammate_id, "teammate.membership.added")
+    return mate
+
+
+
+def _teammate_has_inflight_work_in_project(
+    conn: sqlite3.Connection, teammate_id: str, project_id: str
+) -> list[str]:
+    reasons: list[str] = []
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, status FROM tasks
+            WHERE project_id=? AND owner_teammate_id=?
+              AND status IN ('pending','ready','running','blocked','awaiting_approval')
+            """,
+            (project_id, teammate_id),
+        ).fetchall()
+        if rows:
+            reasons.append(
+                f"teammate owns {len(rows)} active/pending task(s) in this workspace; reassign or resolve them first"
+            )
+    except sqlite3.OperationalError:
+        pass
+    try:
+        rows = conn.execute(
+            """
+            SELECT d.id, d.status FROM delegations d
+            JOIN tasks t ON t.id = d.task_id
+            WHERE t.project_id=? AND d.status IN ('pending','accepted')
+              AND (d.from_teammate_id=? OR d.to_teammate_id=?)
+            """,
+            (project_id, teammate_id, teammate_id),
+        ).fetchall()
+        if rows:
+            reasons.append(
+                f"teammate has {len(rows)} in-flight delegation(s) in this workspace; resolve or cancel them first"
+            )
+    except sqlite3.OperationalError:
+        pass
+    return reasons
+
+
+def remove_teammate_from_project(
+    conn: sqlite3.Connection, teammate_id: str, project_id: str
+) -> Teammate:
+    """Remove workspace membership without deleting the global teammate identity.
+
+    Preserves historical task records. Rejects removal when it would leave
+    pending/running/delegated work in an invalid state so callers can
+    reassign or resolve explicitly. If removing the origin/home workspace and
+    other memberships exist, re-homes origin to another membership first.
+    """
+    mate = get_teammate(conn, teammate_id)
+    if mate is None:
+        raise KeyError(f"unknown teammate {teammate_id}")
+    if not teammate_in_project(conn, teammate_id, project_id):
+        return mate
+    reasons = _teammate_has_inflight_work_in_project(conn, teammate_id, project_id)
+    if reasons:
+        raise ValueError("; ".join(reasons))
+    try:
+        if mate.project_id == project_id:
+            other = conn.execute(
+                "SELECT project_id FROM teammate_memberships WHERE teammate_id=? AND project_id!=? ORDER BY created_at, rowid LIMIT 1",
+                (teammate_id, project_id),
+            ).fetchone()
+            if other is None:
+                raise ValueError("cannot remove teammate from its only workspace membership")
+            other_pid = other["project_id"] if isinstance(other, sqlite3.Row) else other[0]
+            conn.execute("UPDATE teammates SET project_id=? WHERE id=?", (other_pid, teammate_id))
+            mate.project_id = other_pid
+            try:
+                conn.execute(
+                    "INSERT OR IGNORE INTO teammate_memberships (id, teammate_id, project_id, created_at)"
+                    " VALUES (?, ?, ?, ?)",
+                    (new_id("tmm"), teammate_id, other_pid, _now_iso()),
+                )
+            except sqlite3.OperationalError:
+                pass
+        conn.execute(
+            "DELETE FROM teammate_memberships WHERE teammate_id = ? AND project_id = ?",
+            (teammate_id, project_id),
+        )
+        if mate.project_id:
+            try:
+                conn.execute(
+                    "INSERT OR IGNORE INTO teammate_memberships (id, teammate_id, project_id, created_at)"
+                    " VALUES (?, ?, ?, ?)",
+                    (new_id("tmm"), teammate_id, mate.project_id, _now_iso()),
+                )
+            except sqlite3.OperationalError:
+                pass
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    try:
+        record_event(conn, project_id, "teammate", teammate_id, "teammate.membership.removed")
+    except Exception:
+        pass
+    return get_teammate(conn, teammate_id) or mate
+
 
 
 # -- Teams --------------------------------------------------------------------
@@ -1552,7 +1918,7 @@ def create_task(
             raise ValueError("dependency belongs to another project")
     if owner_teammate_id is not None:
         mate = get_teammate(conn, owner_teammate_id)
-        if mate is None or mate.project_id != project_id:
+        if mate is None or not teammate_in_project(conn, mate.id, project_id):
             raise ValueError("owner teammate must belong to the same project")
     if issue_id is not None:
         issue = get_issue(conn, issue_id)
@@ -1839,7 +2205,7 @@ def assign_task_owner(conn: sqlite3.Connection, task_id: str, teammate_id: str |
         raise KeyError(f"unknown task {task_id}")
     if teammate_id is not None:
         mate = get_teammate(conn, teammate_id)
-        if mate is None or mate.project_id != task.project_id:
+        if mate is None or not teammate_in_project(conn, mate.id, task.project_id):
             raise ValueError("owner teammate must belong to the same project")
         if mate.status != TeammateStatus.ACTIVE:
             raise ValueError(f"teammate {teammate_id} is {mate.status.value}, not active")
@@ -1861,7 +2227,7 @@ def claim_task(
     if task.owner_teammate_id is not None:
         raise ValueError("task already has an owner")
     mate = get_teammate(conn, teammate_id)
-    if mate is None or mate.project_id != task.project_id:
+    if mate is None or not teammate_in_project(conn, mate.id, task.project_id):
         raise ValueError("teammate must belong to the same project")
     if mate.status != TeammateStatus.ACTIVE:
         raise ValueError(f"teammate {teammate_id} is {mate.status.value}, not active")
@@ -1923,9 +2289,9 @@ def create_delegation(
         raise KeyError(f"unknown task {task_id}")
     from_mate = get_teammate(conn, from_teammate_id)
     to_mate = get_teammate(conn, to_teammate_id)
-    if from_mate is None or from_mate.project_id != task.project_id:
+    if from_mate is None or not teammate_in_project(conn, from_mate.id, task.project_id):
         raise ValueError("from teammate must belong to the same project")
-    if to_mate is None or to_mate.project_id != task.project_id:
+    if to_mate is None or not teammate_in_project(conn, to_mate.id, task.project_id):
         raise ValueError("to teammate must belong to the same project")
     if from_mate.status != TeammateStatus.ACTIVE:
         raise ValueError(f"from teammate {from_teammate_id} is not active")
@@ -2468,7 +2834,7 @@ def create_board_member(
     mate = get_teammate(conn, teammate_id)
     if mate is None:
         raise KeyError(f"unknown teammate {teammate_id}")
-    if mate.project_id != board.project_id:
+    if not teammate_in_project(conn, mate.id, board.project_id):
         raise ValueError("teammate must belong to the board's project")
     if mate.status != TeammateStatus.ACTIVE:
         raise ValueError(f"teammate {teammate_id} is not active")
@@ -4156,7 +4522,7 @@ def create_issue(
         raise ValueError("issue title is required")
     if owner_teammate_id is not None:
         mate = get_teammate(conn, owner_teammate_id)
-        if mate is None or mate.project_id != project_id:
+        if mate is None or not teammate_in_project(conn, mate.id, project_id):
             raise ValueError("owner teammate must belong to the same project")
     issue = Issue(
         id=new_id("iss"),
