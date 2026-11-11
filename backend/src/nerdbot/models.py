@@ -694,6 +694,11 @@ class PRPackage(BaseModel):
     created_at: datetime = Field(default_factory=_utcnow)
 
 
+class TeamStatus(StrEnum):
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
 class Team(BaseModel):
     """A fleet grouping under one owner: projects and/or bots around a purpose.
 
@@ -706,6 +711,7 @@ class Team(BaseModel):
     owner: str
     name: str = ""
     description: str = ""
+    status: TeamStatus = TeamStatus.ACTIVE
     created_at: datetime = Field(default_factory=_utcnow)
 
 

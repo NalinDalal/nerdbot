@@ -70,6 +70,7 @@ from .models import (
     Task,
     TaskStatus,
     Team,
+    TeamStatus,
     Teammate,
     TeammateStatus,
     TeamMember,
@@ -280,7 +281,8 @@ CREATE TABLE IF NOT EXISTS proposal_acceptances (
 CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages(thread_id);
 CREATE TABLE IF NOT EXISTS teams (
   id TEXT PRIMARY KEY, owner TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
-  description TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+  description TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'active',
+  created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS team_members (
   id TEXT PRIMARY KEY, team_id TEXT NOT NULL REFERENCES teams(id),
@@ -771,6 +773,13 @@ _PHASE32_COLUMNS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
+_PHASE33_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    # P4 Stage 2: team lifecycle (archive/restore). Additive and backward-compatible.
+    "teams": [
+        ("status", "TEXT NOT NULL DEFAULT 'active'"),
+    ],
+}
+
 
 _PHASE20_COLUMNS: dict[str, list[tuple[str, str]]] = {
     # Bot persona files (ai-teammates model): a bot's identity, its active
@@ -804,7 +813,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
                   _PHASE18_COLUMNS, _PHASE19_COLUMNS, _PHASE20_COLUMNS,
                   _PHASE21_COLUMNS, _PHASE22_COLUMNS, _PHASE23_COLUMNS, _PHASE24_COLUMNS,
                   _PHASE25_COLUMNS, _PHASE26_COLUMNS, _PHASE27_COLUMNS, _PHASE28_COLUMNS,
-                  _PHASE29_COLUMNS, _PHASE30_COLUMNS, _PHASE31_COLUMNS, _PHASE32_COLUMNS):
+                  _PHASE29_COLUMNS, _PHASE30_COLUMNS, _PHASE31_COLUMNS, _PHASE32_COLUMNS,
+                  _PHASE33_COLUMNS):
         for table, columns in phase.items():
             phases.setdefault(table, []).extend(columns)
     for table, columns in phases.items():
@@ -1710,24 +1720,63 @@ def remove_teammate_from_project(
 # -- Teams --------------------------------------------------------------------
 
 
+def _normalize_team_name(name: str) -> str:
+    cleaned = " ".join(str(name or "").strip().split())
+    if not cleaned:
+        raise ValueError("team name is required")
+    if len(cleaned) > 120:
+        raise ValueError("team name must be 120 characters or fewer")
+    return cleaned
+
+
+def _normalize_team_description(description: str) -> str:
+    text = str(description or "").strip()
+    if len(text) > 2000:
+        raise ValueError("team description must be 2000 characters or fewer")
+    return text
+
+
+def _require_team_active(team: Team) -> None:
+    if team.status == TeamStatus.ARCHIVED:
+        raise ValueError("archived teams cannot be modified")
+
+
 def create_team(
     conn: sqlite3.Connection, owner: str, name: str = "", description: str = ""
 ) -> Team:
+    clean_name = _normalize_team_name(name)
+    clean_description = _normalize_team_description(description)
     team_id = new_id("tm_team")
+    now = _now_iso()
     conn.execute(
-        "INSERT INTO teams (id, owner, name, description, created_at)"
-        " VALUES (?, ?, ?, ?, ?)",
-        (team_id, owner, name, description, _now_iso()),
+        "INSERT INTO teams (id, owner, name, description, status, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        (team_id, owner, clean_name, clean_description, TeamStatus.ACTIVE.value, now),
     )
     conn.commit()
     record_event(conn, "", "team", team_id, "team.created")
-    return Team(id=team_id, owner=owner, name=name, description=description)
+    return Team(
+        id=team_id,
+        owner=owner,
+        name=clean_name,
+        description=clean_description,
+        status=TeamStatus.ACTIVE,
+        created_at=datetime.fromisoformat(now),
+    )
 
 
-def list_teams(conn: sqlite3.Connection, owner: str) -> list[Team]:
-    rows = conn.execute(
-        "SELECT * FROM teams WHERE owner = ? ORDER BY created_at", (owner,)
-    ).fetchall()
+def list_teams(
+    conn: sqlite3.Connection, owner: str, *, include_archived: bool = False
+) -> list[Team]:
+    if include_archived:
+        rows = conn.execute(
+            "SELECT * FROM teams WHERE owner = ? ORDER BY created_at", (owner,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM teams WHERE owner = ? AND status = ? ORDER BY created_at",
+            (owner, TeamStatus.ACTIVE.value),
+        ).fetchall()
     return [_team_from_row(r) for r in rows]
 
 
@@ -1738,21 +1787,105 @@ def get_team(conn: sqlite3.Connection, team_id: str) -> Team | None:
     return _team_from_row(row)
 
 
-def create_team_member(
-    conn: sqlite3.Connection, team_id: str, project_id: str
-) -> TeamMember:
-    """Add a project to a team.
+def update_team(
+    conn: sqlite3.Connection,
+    team_id: str,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+) -> Team:
+    team = get_team(conn, team_id)
+    if team is None:
+        raise KeyError(f"unknown team {team_id}")
+    if name is not None:
+        team.name = _normalize_team_name(name)
+    if description is not None:
+        team.description = _normalize_team_description(description)
+    conn.execute(
+        "UPDATE teams SET name = ?, description = ? WHERE id = ?",
+        (team.name, team.description, team.id),
+    )
+    conn.commit()
+    record_event(conn, "", "team", team.id, "team.updated")
+    return team
 
-    Retained for backward compatibility. The ``owner`` check is relaxed to
-    accept any project the team owner owns; a project may belong to several
-    teams of the same owner.
+
+def archive_team(conn: sqlite3.Connection, team_id: str) -> Team:
+    team = get_team(conn, team_id)
+    if team is None:
+        raise KeyError(f"unknown team {team_id}")
+    if team.status == TeamStatus.ARCHIVED:
+        return team
+    conn.execute(
+        "UPDATE teams SET status = ? WHERE id = ?",
+        (TeamStatus.ARCHIVED.value, team_id),
+    )
+    conn.commit()
+    record_event(conn, "", "team", team_id, "team.archived")
+    return get_team(conn, team_id) or team
+
+
+def restore_team(conn: sqlite3.Connection, team_id: str) -> Team:
+    team = get_team(conn, team_id)
+    if team is None:
+        raise KeyError(f"unknown team {team_id}")
+    if team.status == TeamStatus.ACTIVE:
+        return team
+    conn.execute(
+        "UPDATE teams SET status = ? WHERE id = ?",
+        (TeamStatus.ACTIVE.value, team_id),
+    )
+    conn.commit()
+    record_event(conn, "", "team", team_id, "team.restored")
+    return get_team(conn, team_id) or team
+
+
+def delete_team(conn: sqlite3.Connection, team_id: str) -> Team:
+    """Safely delete a team grouping.
+
+    Transactional: removes team membership associations and clears explicit
+    references from boards (team_id -> NULL), then deletes the team row.
+    Does not delete teammates, projects, boards, tasks, runs, artifacts, or
+    other historical records.
     """
     team = get_team(conn, team_id)
     if team is None:
         raise KeyError(f"unknown team {team_id}")
+    try:
+        conn.execute("DELETE FROM team_members WHERE team_id = ?", (team_id,))
+        # Boards may reference this team; clear the reference explicitly.
+        conn.execute("UPDATE boards SET team_id = NULL WHERE team_id = ?", (team_id,))
+        conn.execute("DELETE FROM teams WHERE id = ?", (team_id,))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    record_event(conn, "", "team", team_id, "team.deleted")
+    return team
+
+
+def create_team_member(
+    conn: sqlite3.Connection, team_id: str, project_id: str
+) -> TeamMember:
+    """Add a project/workspace to a team.
+
+    Retained for backward compatibility. The project must belong to the team
+    owner. Archived teams cannot receive new members. Idempotent for existing
+    (team, project) membership.
+    """
+    team = get_team(conn, team_id)
+    if team is None:
+        raise KeyError(f"unknown team {team_id}")
+    _require_team_active(team)
     project = get_project(conn, project_id)
     if project is None or project.owner != team.owner:
         raise ValueError("project must belong to the team owner")
+    existing = conn.execute(
+        "SELECT * FROM team_members WHERE team_id = ? AND project_id = ? AND teammate_id = ''",
+        (team_id, project_id),
+    ).fetchone()
+    if existing is not None:
+        return _team_member_from_row(existing)
     member_id = new_id("tm_member")
     conn.execute(
         "INSERT INTO team_members (id, team_id, project_id, teammate_id, created_at)"
@@ -1780,6 +1913,7 @@ def add_teammate_to_team(
     team = get_team(conn, team_id)
     if team is None:
         raise KeyError(f"unknown team {team_id}")
+    _require_team_active(team)
     mate = get_teammate(conn, teammate_id)
     if mate is None:
         raise ValueError(f"unknown teammate {teammate_id}")
@@ -1882,9 +2016,18 @@ def remove_team_member(
 
 
 def _team_from_row(row: sqlite3.Row) -> Team:
+    keys = row.keys()
+    raw_status = (row["status"] if "status" in keys else TeamStatus.ACTIVE.value) or TeamStatus.ACTIVE.value
+    try:
+        status = TeamStatus(str(raw_status))
+    except ValueError:
+        status = TeamStatus.ACTIVE
     return Team(
-        id=row["id"], owner=row["owner"], name=row["name"] or "",
+        id=row["id"],
+        owner=row["owner"],
+        name=row["name"] or "",
         description=row["description"] or "",
+        status=status,
         created_at=datetime.fromisoformat(row["created_at"]),
     )
 

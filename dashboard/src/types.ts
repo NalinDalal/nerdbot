@@ -359,6 +359,7 @@ export interface Team {
   owner: string;
   name: string;
   description: string;
+  status?: "active" | "archived";
   created_at: string;
 }
 

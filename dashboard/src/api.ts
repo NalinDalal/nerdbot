@@ -272,11 +272,20 @@ export const api = {
   putPersona: (id: string, body: Record<string, unknown>) => req<{ soul: string; goals: string; wisdom: string; version: string }>(`/teammates/${id}/persona`, { method: "PUT", body }),
 
   createTeam: (body: Record<string, unknown>) => post<Team>("/teams", body),
-  listTeams: () => req<{ teams: Team[]; counts: Record<string, TeamCounts> }>("/teams"),
+  listTeams: (status: "active" | "archived" | "all" = "active") =>
+    req<{ teams: Team[]; counts: Record<string, TeamCounts> }>(
+      `/teams?status=${encodeURIComponent(status)}`,
+    ),
   getTeam: (teamId: string) =>
     req<{ team: Team; projects: Project[]; teammates: Teammate[]; members: TeamMember[] }>(
       `/teams/${teamId}`,
     ),
+  updateTeam: (teamId: string, body: Record<string, unknown>) =>
+    patch<Team>(`/teams/${teamId}`, body),
+  archiveTeam: (teamId: string) => post<Team>(`/teams/${teamId}/archive`),
+  restoreTeam: (teamId: string) => post<Team>(`/teams/${teamId}/restore`),
+  deleteTeam: (teamId: string) =>
+    req<{ deleted: boolean; team: Team }>(`/teams/${teamId}`, { method: "DELETE" }),
   addTeamProject: (teamId: string, projectId: string) =>
     post<TeamMember>(`/teams/${teamId}/projects`, { project_id: projectId }),
   removeTeamProject: (teamId: string, projectId: string) =>

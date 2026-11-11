@@ -27,8 +27,26 @@ function openBot(id: string): void {
   navigate(`/bot/${id}`);
 }
 
+type TeamListMode = "active" | "archived";
+
+function TeamStatusPill({ status }: { status?: string }) {
+  const archived = status === "archived";
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-step--2 ${
+        archived
+          ? "bg-[var(--surface-3)] text-[var(--muted)]"
+          : "bg-[var(--success-bg,rgba(16,185,129,0.12))] text-[var(--success,#059669)]"
+      }`}
+    >
+      {archived ? "Archived" : "Active"}
+    </span>
+  );
+}
+
 export function TeamsView() {
-  const list = useAsync(() => api.listTeams(), []);
+  const [mode, setMode] = useState<TeamListMode>("active");
+  const list = useAsync(() => api.listTeams(mode), [mode]);
   const [showCreate, setShowCreate] = useState(false);
 
   const createTeam = async (values: Record<string, string>) => {
@@ -49,6 +67,12 @@ export function TeamsView() {
         description="Group workspaces for a shared roll-up. Membership grants no permissions."
         actions={
           <>
+            <Button variant={mode === "active" ? "default" : "ghost"} onClick={() => setMode("active")}>
+              Active
+            </Button>
+            <Button variant={mode === "archived" ? "default" : "ghost"} onClick={() => setMode("archived")}>
+              Archived
+            </Button>
             <Button variant="primary" onClick={() => setShowCreate(true)}>
               New team
             </Button>
@@ -76,12 +100,13 @@ export function TeamsView() {
         <ErrorState error={list.error} onRetry={list.reload} />
       ) : list.data && list.data.teams.length > 0 ? (
         <div className={TABLE_SHELL}>
-          <table className="w-full min-w-[560px] table-fixed">
+          <table className="w-full min-w-[640px] table-fixed">
             <thead>
               <tr>
-                <th className={`${TABLE_TH} w-[46%]`}>Team</th>
-                <th className={`${TABLE_TH} w-[8rem]`}>Bots</th>
-                <th className={`${TABLE_TH} w-[10rem]`}>Workspaces</th>
+                <th className={`${TABLE_TH} w-[42%]`}>Team</th>
+                <th className={`${TABLE_TH} w-[7rem]`}>Status</th>
+                <th className={`${TABLE_TH} w-[7rem]`}>Bots</th>
+                <th className={`${TABLE_TH} w-[8rem]`}>Workspaces</th>
                 <th className={`${TABLE_TH} w-[6rem]`}><span className="sr-only">Open</span></th>
               </tr>
             </thead>
@@ -89,34 +114,23 @@ export function TeamsView() {
               {list.data.teams.map((team) => {
                 const count = (list.data?.counts ?? {})[team.id];
                 return (
-                  <tr
-                    key={team.id}
-                    className="transition-colors hover:bg-[var(--surface-2)]"
-                  >
+                  <tr key={team.id} className="transition-colors hover:bg-[var(--surface-2)]">
                     <td className={TABLE_TD}>
                       <button
-                        onClick={() => {
-                          navigate(`/team/${team.id}`);
-                        }}
+                        onClick={() => navigate(`/team/${team.id}`)}
                         className="text-left font-medium text-[var(--text)] hover:underline"
                       >
                         {team.name || "Unnamed team"}
                       </button>
                       {team.description ? (
-                        <div className="text-step--1 text-[var(--muted)]">
-                          {team.description}
-                        </div>
+                        <div className="text-step--1 text-[var(--muted)]">{team.description}</div>
                       ) : null}
                     </td>
+                    <td className={TABLE_TD}><TeamStatusPill status={team.status} /></td>
                     <td className={TABLE_TD}>{count?.bots ?? 0}</td>
                     <td className={TABLE_TD}>{count?.workspaces ?? 0}</td>
                     <td className={TABLE_TD}>
-                      <Button
-                        variant="ghost"
-                        onClick={() => {
-                          navigate(`/team/${team.id}`);
-                        }}
-                      >
+                      <Button variant="ghost" onClick={() => navigate(`/team/${team.id}`)}>
                         Open →
                       </Button>
                     </td>
@@ -128,12 +142,18 @@ export function TeamsView() {
         </div>
       ) : (
         <EmptyState
-          title="No teams yet"
-          hint="Create a team to group bots and workspaces around a purpose, then assign bots to tasks and hand work off between them."
+          title={mode === "archived" ? "No archived teams" : "No active teams"}
+          hint={
+            mode === "archived"
+              ? "Archived teams will appear here. You can restore or delete them from the team page."
+              : "Create a team to group bots and workspaces around a purpose, then assign bots to tasks and hand work off between them."
+          }
           action={
-            <Button variant="primary" onClick={() => setShowCreate(true)}>
-              Create your first team
-            </Button>
+            mode === "active" ? (
+              <Button variant="primary" onClick={() => setShowCreate(true)}>
+                Create your first team
+              </Button>
+            ) : undefined
           }
         />
       )}
@@ -149,7 +169,6 @@ interface RollupEntry {
   blocked: number;
   done: number;
   failed: number;
-  /** Waiting on a human decision. */
   awaiting: number;
   handoffs: Array<{
     fromId: string;
@@ -162,20 +181,11 @@ interface RollupEntry {
   }>;
 }
 
-/** Aggregate the tasks owned by the team's bots. Handoffs (agent-to-agent
- *  delegation) are visible as child tasks: a child's parent owner is "from",
- *  the child's owner is "to". */
 function teamRollup(
   members: Array<{ id: string; persona: string; face: BotFace | null; tasks: Task[] }>,
 ): RollupEntry {
   const entry: RollupEntry = {
-    running: 0,
-    queued: 0,
-    blocked: 0,
-    done: 0,
-    failed: 0,
-    awaiting: 0,
-    handoffs: [],
+    running: 0, queued: 0, blocked: 0, done: 0, failed: 0, awaiting: 0, handoffs: [],
   };
   const ownerByTaskId = new Map<string, { id: string; persona: string; face: BotFace | null }>();
   for (const member of members) {
@@ -196,13 +206,8 @@ function teamRollup(
         const parent = ownerByTaskId.get(task.parent_task_id);
         if (parent && parent.id !== member.id) {
           entry.handoffs.push({
-            fromId: parent.id,
-            fromPersona: parent.persona,
-            fromFace: parent.face,
-            toId: member.id,
-            toPersona: member.persona,
-            toFace: member.face,
-            child: task,
+            fromId: parent.id, fromPersona: parent.persona, fromFace: parent.face,
+            toId: member.id, toPersona: member.persona, toFace: member.face, child: task,
           });
         }
       }
@@ -213,12 +218,7 @@ function teamRollup(
 
 function OpenTaskLink({ projectId, taskId, children }: { projectId: string; taskId: string; children: string }) {
   return (
-    <button
-      className="text-[var(--accent)] hover:underline"
-      onClick={() => {
-        navigate(`/p/${projectId}/t/${taskId}`);
-      }}
-    >
+    <button className="text-[var(--accent)] hover:underline" onClick={() => navigate(`/p/${projectId}/t/${taskId}`)}>
       {children}
     </button>
   );
@@ -233,6 +233,7 @@ export function TeamDetailView({
   const detail = useAsync(() => api.getTeam(teamId), [teamId]);
   const allBots = useAsync(() => api.listAllTeammates(), []);
   const [attachProjectId, setAttachProjectId] = useState("");
+  const [showEdit, setShowEdit] = useState(false);
 
   const memberTasks = useAsync(async () => {
     if (!detail.data) return [];
@@ -270,9 +271,20 @@ export function TeamDetailView({
   }
 
   const { team, projects, teammates = [], members } = detail.data;
+  const archived = team.status === "archived";
   const memberBotIds = new Set(teammates.map((t) => t.id));
   const addable = (allBots.data?.teammates ?? []).filter((b) => !memberBotIds.has(b.id));
   const rollup = memberTasks.data ? teamRollup(memberTasks.data) : null;
+
+  const onSaveEdit = async (values: Record<string, string>) => {
+    try {
+      await api.updateTeam(teamId, { name: values.name ?? "", description: values.description ?? "" });
+      setShowEdit(false);
+      detail.reload();
+    } catch (err) {
+      notifyError(err);
+    }
+  };
 
   return (
     <Page>
@@ -281,10 +293,50 @@ export function TeamDetailView({
         title={team.name || "Unnamed team"}
         description={team.description}
         back={{ label: "Teams", onClick: () => { navigate("/teams"); } }}
-        actions={<Button onClick={detail.reload}>Refresh</Button>}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <TeamStatusPill status={team.status} />
+            <Button onClick={() => setShowEdit(true)} disabled={false}>Edit</Button>
+            {archived ? (
+              <Button onClick={async () => {
+                try { await api.restoreTeam(teamId); detail.reload(); } catch (e) { notifyError(e); }
+              }}>Restore</Button>
+            ) : (
+              <Button onClick={async () => {
+                if (window.confirm(`Archive team "${team.name || team.id}"? It will be hidden from active team lists and cannot receive new members while archived.`)) {
+                  try { await api.archiveTeam(teamId); detail.reload(); } catch (e) { notifyError(e); }
+                }
+              }}>Archive</Button>
+            )}
+            <Button variant="danger" onClick={async () => {
+              if (window.confirm(`Delete team "${team.name || team.id}"? This removes the team grouping and its membership associations, but does not delete bots, workspaces, boards, tasks, runs, or history.`)) {
+                try { await api.deleteTeam(teamId); navigate("/teams"); } catch (e) { notifyError(e); }
+              }
+            }}>Delete</Button>
+            <Button onClick={detail.reload}>Refresh</Button>
+          </div>
+        }
       />
 
-      {/* Rollup */}
+      {showEdit ? (
+        <Modal title="Edit team" onClose={() => setShowEdit(false)}>
+          <EntityForm
+            submitLabel="Save changes"
+            fields={[
+              { name: "name", label: "Name", required: true, placeholder: team.name || "platform" },
+              { name: "description", label: "Description", placeholder: team.description || "What this team owns" },
+            ]}
+            onSubmit={onSaveEdit}
+          />
+        </Modal>
+      ) : null}
+
+      {archived ? (
+        <div className="mb-6 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-step--1 text-[var(--muted)]">
+          This team is archived. Membership and history are preserved, but new workspace/bot members cannot be added until it is restored.
+        </div>
+      ) : null}
+
       <section className="mb-8">
         <SectionLabel className="mb-2">Execution rollup</SectionLabel>
         <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
@@ -294,30 +346,18 @@ export function TeamDetailView({
                 <StatusBadge status="running" label={`${rollup.running} running`} />
                 <StatusBadge status="pending" label={`${rollup.queued} queued`} />
                 {rollup.awaiting > 0 && (
-                  <StatusBadge
-                    status="awaiting_approval"
-                    label={`${rollup.awaiting} awaiting approval`}
-                  />
+                  <StatusBadge status="awaiting_approval" label={`${rollup.awaiting} awaiting approval`} />
                 )}
-                {rollup.blocked > 0 && (
-                  <StatusBadge status="blocked" label={`${rollup.blocked} blocked`} />
-                )}
+                {rollup.blocked > 0 && <StatusBadge status="blocked" label={`${rollup.blocked} blocked`} />}
                 <StatusBadge status="done" label={`${rollup.done} completed`} />
-                {rollup.failed > 0 && (
-                  <StatusBadge status="failed" label={`${rollup.failed} failed`} />
-                )}
+                {rollup.failed > 0 && <StatusBadge status="failed" label={`${rollup.failed} failed`} />}
               </div>
               {rollup.handoffs.length > 0 && (
                 <div>
-                  <div className="text-step--2 uppercase tracking-[0.14em] text-[var(--faint)]">
-                    Agent-to-agent handoffs
-                  </div>
+                  <div className="text-step--2 uppercase tracking-[0.14em] text-[var(--faint)]">Agent-to-agent handoffs</div>
                   <div className="mt-1.5 flex flex-col gap-1.5">
                     {rollup.handoffs.map(({ fromPersona, fromFace, toPersona, toFace, child }) => (
-                      <div
-                        key={`${child.id}`}
-                        className="flex flex-wrap items-center gap-2 rounded-lg bg-[var(--surface-2)] px-3 py-2 text-step--1"
-                      >
+                      <div key={`${child.id}`} className="flex flex-wrap items-center gap-2 rounded-lg bg-[var(--surface-2)] px-3 py-2 text-step--1">
                         <BotChip persona={fromPersona} id={fromPersona} status="done" face={fromFace} />
                         <span className="text-[var(--faint)]" aria-hidden>→</span>
                         <BotChip persona={toPersona} id={toPersona} status={child.status} face={toFace} />
@@ -325,9 +365,7 @@ export function TeamDetailView({
                         <span className="truncate text-[var(--text-soft)]">{child.description}</span>
                         <span className="ml-auto flex items-center gap-2">
                           <StatusBadge status={child.status} label={taskStatusLabel(child.status)} />
-                          <OpenTaskLink projectId={child.project_id} taskId={child.id}>
-                            open →
-                          </OpenTaskLink>
+                          <OpenTaskLink projectId={child.project_id} taskId={child.id}>open →</OpenTaskLink>
                         </span>
                       </div>
                     ))}
@@ -335,9 +373,7 @@ export function TeamDetailView({
                 </div>
               )}
               {rollup.running === 0 && rollup.queued === 0 && rollup.blocked === 0 && rollup.handoffs.length === 0 && (
-                <p className="text-step--1 text-[var(--muted)]">
-                  Nothing in flight for this team right now.
-                </p>
+                <p className="text-step--1 text-[var(--muted)]">Nothing in flight for this team right now.</p>
               )}
             </div>
           ) : (
@@ -346,7 +382,6 @@ export function TeamDetailView({
         </div>
       </section>
 
-      {/* Bots */}
       <section className="mb-8">
         <SectionLabel className="mb-2">Bots in this team</SectionLabel>
         <p className="mb-3 max-w-[72ch] text-step--1 text-[var(--muted)]">
@@ -356,12 +391,7 @@ export function TeamDetailView({
         {teammates.length > 0 ? (
           <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
             {teammates.map((bot, index) => (
-              <div
-                key={bot.id}
-                className={`flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 ${
-                  index > 0 ? "border-t border-[var(--border-dim)]" : ""
-                }`}
-              >
+              <div key={bot.id} className={`flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 ${index > 0 ? "border-t border-[var(--border-dim)]" : ""}`}>
                 <div className="min-w-0 flex-1">
                   <BotChip persona={bot.persona || "Unnamed bot"} id={bot.id} status={bot.status} face={bot.face} />
                   <div className="mt-1 truncate text-step--2 text-[var(--faint)]" title={bot.instructions || ""}>
@@ -372,17 +402,12 @@ export function TeamDetailView({
                   {bot.permissions.length > 0 ? `${bot.permissions.length} perms` : "no perms"}
                 </div>
                 <div className="flex items-center gap-2">
-                  <Button variant="ghost" onClick={() => openBot(bot.id)}>
-                    Open
-                  </Button>
+                  <Button variant="ghost" onClick={() => openBot(bot.id)}>Open</Button>
                   <Button
                     variant="danger"
                     onClick={() => {
-                      if (window.confirm(`Remove bot ${bot.persona || bot.id} from this team?`)) {
-                        void api
-                          .removeTeamTeammate(teamId, bot.id)
-                          .then(() => detail.reload())
-                          .catch(notifyError);
+                      if (window.confirm(`Remove bot ${bot.persona || bot.id} from this team? This does not delete the bot or its workspace memberships.`)) {
+                        void api.removeTeamTeammate(teamId, bot.id).then(() => detail.reload()).catch(notifyError);
                       }
                     }}
                   >
@@ -393,62 +418,37 @@ export function TeamDetailView({
             ))}
           </div>
         ) : (
-          <EmptyState
-            title="No bots in this team"
-            hint="Add bots to group them into a fleet around a purpose or workflow."
-          />
+          <EmptyState title="No bots in this team" hint="Add bots to group them into a fleet around a purpose or workflow." />
         )}
         <div className="mt-3 flex items-center gap-3">
           <select
             value=""
+            disabled={archived}
             onChange={(e) => {
               const id = e.target.value;
               if (!id) return;
-              void api
-                .addTeamTeammate(teamId, id)
-                .then(() => {
-                  detail.reload();
-                  allBots.reload();
-                })
-                .catch(notifyError);
+              void api.addTeamTeammate(teamId, id).then(() => { detail.reload(); allBots.reload(); }).catch(notifyError);
             }}
             aria-label="Bot to add"
-            className="max-w-xs rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step--1 outline-none focus:border-[var(--border-focus)]"
+            className="max-w-xs rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step--1 outline-none focus:border-[var(--border-focus)] disabled:opacity-50"
           >
-            <option value="">Add a bot…</option>
-            {addable.map((bot) => (
-              <option key={bot.id} value={bot.id}>
-                {bot.persona || bot.id} ({bot.id.slice(0, 8)})
-              </option>
+            <option value="">{archived ? "Restore team to add bots" : "Add a bot…"}</option>
+            {!archived && addable.map((bot) => (
+              <option key={bot.id} value={bot.id}>{bot.persona || bot.id} ({bot.id.slice(0, 8)})</option>
             ))}
           </select>
-          {addable.length === 0 && teammates.length === 0 && (
-            <span className="text-step--1 text-[var(--faint)]">
-              No bots available to add.
-            </span>
-          )}
+          {archived ? <span className="text-step--1 text-[var(--faint)]">Archived teams cannot receive new members.</span> : null}
         </div>
       </section>
 
-      {/* Workspaces */}
       <section className="mb-8">
         <SectionLabel className="mb-2">Workspaces in this team</SectionLabel>
         {projects.length > 0 ? (
           <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
             {projects.map((project, index) => (
-              <div
-                key={project.id}
-                className={`flex items-center justify-between gap-3 px-4 py-3 ${
-                  index > 0 ? "border-t border-[var(--border-dim)]" : ""
-                }`}
-              >
+              <div key={project.id} className={`flex items-center justify-between gap-3 px-4 py-3 ${index > 0 ? "border-t border-[var(--border-dim)]" : ""}`}>
                 <div className="min-w-0">
-                  <button
-                    className="mono truncate font-medium text-[var(--text)] hover:underline"
-                    onClick={() => {
-                      navigate(`/p/${project.id}`);
-                    }}
-                  >
+                  <button className="mono truncate font-medium text-[var(--text)] hover:underline" onClick={() => navigate(`/p/${project.id}`)}>
                     {project.repository || "workspace"}
                   </button>
                   <div className="mono text-step--2 text-[var(--faint)]">{project.id}</div>
@@ -456,15 +456,8 @@ export function TeamDetailView({
                 <Button
                   variant="danger"
                   onClick={() => {
-                    if (
-                      window.confirm(
-                        `Detach workspace ${project.repository || project.id} from this team?`,
-                      )
-                    ) {
-                      void api
-                        .removeTeamProject(teamId, project.id)
-                        .then(() => detail.reload())
-                        .catch(notifyError);
+                    if (window.confirm(`Detach workspace ${project.repository || project.id} from this team? This does not delete the workspace.`)) {
+                      void api.removeTeamProject(teamId, project.id).then(() => detail.reload()).catch(notifyError);
                     }
                   }}
                 >
@@ -474,29 +467,20 @@ export function TeamDetailView({
             ))}
           </div>
         ) : (
-          <EmptyState
-            title="No workspaces"
-            hint="Attach a workspace to this team so its bots and tasks belong to the team."
-          />
+          <EmptyState title="No workspaces" hint="Attach a workspace to this team so its bots and tasks belong to the team." />
         )}
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            attachProject();
-          }}
-          className="mt-3 flex items-center gap-2"
-        >
+        <form onSubmit={(e) => { e.preventDefault(); attachProject(); }} className="mt-3 flex items-center gap-2">
           <input
             value={attachProjectId}
             onChange={(e) => setAttachProjectId(e.target.value)}
             placeholder="prj_…"
             aria-label="Project ID to attach"
-            className="w-64 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step--1 outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
+            disabled={archived}
+            className="w-64 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step--1 outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)] disabled:opacity-50"
           />
-          <Button type="submit" variant="default">
-            Attach workspace
-          </Button>
+          <Button type="submit" variant="default" disabled={archived}>Attach workspace</Button>
         </form>
+        {archived ? <p className="mt-2 text-step--2 text-[var(--faint)]">Archived teams cannot receive new workspace associations.</p> : null}
       </section>
 
       {members.length > 0 ? (

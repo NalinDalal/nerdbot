@@ -840,6 +840,14 @@ def create_app() -> FastAPI:
 
     # -- Teams -----------------------------------------------------------------
 
+    def _require_team_owner(
+        conn: sqlite3.Connection, team_id: str, principal: str
+    ) -> Team:
+        team = store.get_team(conn, team_id)
+        if team is None or team.owner != principal:
+            raise HTTPException(status_code=404, detail="team not found")
+        return team
+
     @app.post("/teams")
     def create_team(
         body: dict[str, Any],
@@ -861,32 +869,38 @@ def create_app() -> FastAPI:
                 acting=acting,
             )
             return team.model_dump(mode="json")
-        team = store.create_team(
-            conn,
-            owner=principal,
-            name=str(body.get("name", "")),
-            description=str(body.get("description", "")),
-        )
-        for member_id in body.get("member_ids", []) or []:
-            try:
+        try:
+            team = store.create_team(
+                conn,
+                owner=principal,
+                name=str(body.get("name", "")),
+                description=str(body.get("description", "")),
+            )
+            for member_id in body.get("member_ids", []) or []:
                 store.add_teammate_to_team(conn, team.id, str(member_id))
-            except (KeyError, ValueError) as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-        for project_member_id in body.get("project_member_ids", []) or []:
-            try:
+            for project_member_id in body.get("project_member_ids", []) or []:
                 store.create_team_member(conn, team.id, str(project_member_id))
-            except (KeyError, ValueError) as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return team.model_dump(mode="json")
 
     @app.get("/teams")
     def list_teams(
+        status: str | None = None,
+        include_archived: bool = False,
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
-        teams = [t.model_dump(mode="json") for t in store.list_teams(conn, principal)]
-        # Membership counts travel beside the list so a team can be described
-        # without opening it.
+        # Active by default. status=archived lists archived; status=all includes both.
+        want = (status or "").strip().lower()
+        if want == "archived":
+            all_owned = store.list_teams(conn, principal, include_archived=True)
+            teams_models = [t for t in all_owned if getattr(t, "status", None) and t.status.value == "archived"]
+        elif want == "all" or include_archived:
+            teams_models = store.list_teams(conn, principal, include_archived=True)
+        else:
+            teams_models = store.list_teams(conn, principal, include_archived=False)
+        teams = [t.model_dump(mode="json") for t in teams_models]
         counts = {team["id"]: _team_counts(conn, team["id"]) for team in teams}
         return {"teams": teams, "counts": counts}
 
@@ -896,9 +910,7 @@ def create_app() -> FastAPI:
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
-        team = store.get_team(conn, team_id)
-        if team is None or team.owner != principal:
-            raise HTTPException(status_code=404, detail="team not found")
+        team = _require_team_owner(conn, team_id, principal)
         members = store.list_team_members(conn, team_id)
         projects = store.list_projects_for_team(conn, team_id)
         teammates = store.list_teammates_for_team(conn, team_id)
@@ -908,6 +920,81 @@ def create_app() -> FastAPI:
             "teammates": [t.model_dump(mode="json") for t in teammates],
             "members": [m.model_dump(mode="json") for m in members],
         }
+
+    @app.patch("/teams/{team_id}")
+    def update_team(
+        team_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        # Team lifecycle is owner-scoped; acting bots must not gain privileges via team membership.
+        if acting is not None:
+            raise HTTPException(status_code=403, detail="acting bots cannot manage team lifecycle")
+        _require_team_owner(conn, team_id, principal)
+        try:
+            team = store.update_team(
+                conn,
+                team_id,
+                name=body.get("name") if "name" in body else None,
+                description=body.get("description") if "description" in body else None,
+            )
+        except KeyError:
+            raise HTTPException(status_code=404, detail="team not found")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return team.model_dump(mode="json")
+
+    @app.post("/teams/{team_id}/archive")
+    def archive_team(
+        team_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        if acting is not None:
+            raise HTTPException(status_code=403, detail="acting bots cannot manage team lifecycle")
+        _require_team_owner(conn, team_id, principal)
+        try:
+            team = store.archive_team(conn, team_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="team not found")
+        return team.model_dump(mode="json")
+
+    @app.post("/teams/{team_id}/restore")
+    def restore_team(
+        team_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        if acting is not None:
+            raise HTTPException(status_code=403, detail="acting bots cannot manage team lifecycle")
+        _require_team_owner(conn, team_id, principal)
+        try:
+            team = store.restore_team(conn, team_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="team not found")
+        return team.model_dump(mode="json")
+
+    @app.delete("/teams/{team_id}")
+    def delete_team(
+        team_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
+    ) -> dict[str, Any]:
+        if acting is not None:
+            raise HTTPException(status_code=403, detail="acting bots cannot manage team lifecycle")
+        _require_team_owner(conn, team_id, principal)
+        try:
+            deleted = store.delete_team(conn, team_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="team not found")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"deleted": True, "team": deleted.model_dump(mode="json")}
 
     @app.post("/teams/{team_id}/teammates")
     def add_team_teammate(
@@ -963,10 +1050,12 @@ def create_app() -> FastAPI:
         body: dict[str, Any],
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
     ) -> dict[str, Any]:
-        team = store.get_team(conn, team_id)
-        if team is None or team.owner != principal:
-            raise HTTPException(status_code=404, detail="team not found")
+        # Acting bots cannot manage team lifecycle/membership via project association here.
+        if acting is not None:
+            raise HTTPException(status_code=403, detail="acting bots cannot manage team membership")
+        team = _require_team_owner(conn, team_id, principal)
         project_id = str(body.get("project_id", ""))
         if not project_id:
             raise HTTPException(status_code=400, detail="project_id is required")
@@ -982,10 +1071,11 @@ def create_app() -> FastAPI:
         project_id: str,
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
+        acting: Teammate | None = Depends(boards_mod.acting_teammate_from_header),
     ) -> dict[str, Any]:
-        team = store.get_team(conn, team_id)
-        if team is None or team.owner != principal:
-            raise HTTPException(status_code=404, detail="team not found")
+        if acting is not None:
+            raise HTTPException(status_code=403, detail="acting bots cannot manage team membership")
+        _require_team_owner(conn, team_id, principal)
         store.remove_team_member(conn, team_id, project_id)
         return {"removed": True}
 
