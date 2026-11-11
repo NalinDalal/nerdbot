@@ -555,7 +555,6 @@ export function TaskDetailView({
   const latestRun = runs.length > 0 ? runs[runs.length - 1] : null;
   // The run that can still be stopped: the newest one that has not ended.
   const liveRun = [...runs].reverse().find((run) => run.status === "running") ?? null;
-  const latestPackage = pr_packages.length > 0 ? pr_packages[pr_packages.length - 1] : null;
   const owner = task.owner_teammate_id
     ? teammates.data?.teammates.find((m) => m.id === task.owner_teammate_id)
     : undefined;
@@ -603,853 +602,352 @@ export function TaskDetailView({
     });
   };
 
+  const failedExplanation = bestFailureExplanation(task, runs);
+  const hasResults = Boolean(
+    latestOutput ||
+      (artifacts && artifacts.length > 0) ||
+      (task.status === "done" && (pr_packages.length > 0 || reviews.some((r) => r.verdict === "accepted")))
+  );
+  const statusLabel: Record<string, string> = {
+    pending: "Not started",
+    ready: "Ready to start",
+    queued: "Queued",
+    running: "In progress",
+    blocked: "Blocked",
+    awaiting_approval: "Awaiting your decision",
+    done: "Completed",
+    failed: "Needs attention",
+    cancelled: "Cancelled",
+    paused: "Paused",
+  };
+  const humanStatus = statusLabel[task.status] || task.status.replace(/_/g, " ");
+  let nextAction = "Review progress and details below.";
+  if (task.status === "running" || (watch && !terminal)) nextAction = "Work is in progress. You can monitor updates or stop it if needed.";
+  else if (pendingApprovals.length > 0) nextAction = "Review and decide on the pending approval below to continue.";
+  else if (task.status === "blocked") nextAction = task.blocked_reason?.includes("provider") ? "Connect a working model in this workspace, then run again." : "Resolve the blocker, then continue or run again.";
+  else if (task.status === "failed") nextAction = "Review what happened and run again or adjust the request.";
+  else if (task.status === "done") nextAction = "Review the results and deliverables below.";
+  else if (!owner) nextAction = "Assign an owner, then start the work.";
+  else nextAction = "Start or continue this work when ready.";
+
+  const attentionItems: Array<{ key: string; title: string; detail?: string; tone: "warn" | "danger" | "info" }> = [];
+  if (pendingApprovals.length > 0) attentionItems.push({ key: "approvals", title: `${pendingApprovals.length} decision${pendingApprovals.length === 1 ? "" : "s"} needed`, detail: "This work is waiting for your approval.", tone: "warn" });
+  if (task.status === "blocked" && task.blocked_reason) attentionItems.push({ key: "blocked", title: "Blocked", detail: task.blocked_reason, tone: "warn" });
+  if (task.status === "failed" && failedExplanation?.message) attentionItems.push({ key: "failed", title: "Last run did not complete", detail: failedExplanation.message, tone: "danger" });
+  if (!owner) attentionItems.push({ key: "owner", title: "No owner assigned", detail: "Assign a teammate so this work has clear responsibility.", tone: "info" });
+
+  const onDecideApproval = (id: string, decision: "approved" | "approved_forever" | "denied") =>
+    void act(`approval-${id}`, async () => {
+      await api.decideApproval(id, decision);
+      view.reload();
+      return null;
+    });
+  const onReaskApproval = (id: string) =>
+    void act(`reask-${id}`, async () => {
+      await api.reaskApproval(id);
+      view.reload();
+      return null;
+    });
+
   return (
-    <Page>
+    <Page width="data">
       <PageHeader
-        eyebrow="Work in progress"
+        eyebrow="Task"
         title={heading}
         description={
           <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span>{projectName}</span>
+            <a className="hover:text-[var(--text)] hover:underline" href={`/p/${projectId}`}>{projectName}</a>
             <span className="text-[var(--faint)]" aria-hidden>·</span>
-            <span className="text-[var(--muted)]">
-              {owner ? (owner.persona || owner.name || "Teammate") : "Unassigned"}
-            </span>
-            <span className="text-[var(--faint)]" aria-hidden>·</span>
-            <span className="mono text-step--2 text-[var(--faint)]" title={task.id}>
-              <ShortId id={task.id} />
-            </span>
+            <span>{humanStatus}</span>
+            {owner ? <><span className="text-[var(--faint)]" aria-hidden>·</span><span>Owner: {owner.persona || owner.name || "Teammate"}</span></> : null}
           </span>
         }
         back={{ label: `Back to ${projectName}`, onClick: onBack }}
         actions={
           <>
             <StatusBadge status={task.status} />
-            {owner ? (
-              <BotChip
-                persona={owner.persona || "bot"}
-                id={owner.id}
-                status={owner.status}
-                face={owner.face}
-              />
-            ) : (
-              <Badge variant="warn">Unassigned</Badge>
-            )}
             {liveRun ? (
-              <Button
-                variant="danger"
-                disabled={!!busy}
-                onClick={() => void act("stop", () => api.cancelRun(liveRun.id))}
-              >
-                {busy === "stop" ? "Stopping…" : "Stop run"}
+              <Button variant="danger" disabled={!!busy} onClick={() => void act("stop", () => api.cancelRun(liveRun.id))}>
+                {busy === "stop" ? "Stopping…" : "Stop"}
               </Button>
             ) : (
-              <Button
-                variant="primary"
-                disabled={!!busy || watching || task.status === "running"}
-                onClick={runPrimary}
-              >
-                {busy === "run" || watching || task.status === "running"
-                  ? "Running…"
-                  : terminal
-                    ? "Run again"
-                    : "Run"}
+              <Button variant="primary" disabled={!!busy || watching || task.status === "running"} onClick={runPrimary}>
+                {busy === "run" || watching || task.status === "running" ? "Working…" : terminal ? "Run again" : "Start work"}
               </Button>
             )}
-            <Button onClick={() => setShowMore((value) => !value)}>
-              {showMore ? "Close" : "More actions"}
-            </Button>
+            <Button onClick={() => setShowMore((value) => !value)}>{showMore ? "Close" : "More actions"}</Button>
           </>
         }
       />
 
       {showMore ? (
-        <div className="mb-6 flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
-          <Button disabled={!!busy} onClick={() => void act("retry", () => api.retryTask(taskId))}>
-            {busy === "retry" ? "Retrying…" : "Retry (new run)"}
-          </Button>
-          <Button
-            variant="danger"
-            disabled={!!busy}
-            onClick={() => void act("cancel", () => api.cancelTask(taskId, "cancelled from the task view"))}
-          >
-            {busy === "cancel" ? "Cancelling…" : "Cancel task"}
-          </Button>
-          <Button disabled={!!busy} onClick={() => void act("workspace", () => api.ensureWorkspace(taskId))}>
-            Ensure workspace
-          </Button>
-          <Button disabled={!!busy} onClick={() => setShowKnowledge(true)}>
-            Attach knowledge
-          </Button>
-          <Button disabled={!!busy} onClick={() => setShowReview(true)}>
-            Submit review
-          </Button>
-          <Button disabled={!!busy} onClick={() => setShowPackage(true)}>
-            Generate PR package
-          </Button>
-          <Button
-            disabled={!!busy || !latestPackage}
-            onClick={() => void act("approval", () => api.requestPackageApproval(taskId))}
-          >
-            Request package approval
-          </Button>
-          {latestRun ? (
-            <>
-              <Button
-                disabled={!!busy}
-                onClick={() =>
-                  void act("patch", () => api.capturePatch(taskId, latestRun.id).then(() => null))
-                }
-              >
-                Capture patch
-              </Button>
-              <Button
-                disabled={!!busy}
-                onClick={() =>
-                  void act("approval", () =>
-                    api.requestApproval(latestRun.id, "deploy").then(() => null),
-                  )
-                }
-              >
-                Request run approval
-              </Button>
-            </>
-          ) : null}
-          <Button
-            disabled={!!busy}
-            onClick={() =>
-              void act("rollup", async () => {
-                setRollup((await api.buildRollup(taskId)) as Record<string, unknown>);
-              })
-            }
-          >
-            Build roll-up
-          </Button>
-          <Button disabled={!!busy} onClick={() => view.reload()}>
-            Refresh
-          </Button>
+        <div className="mb-6 flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
+          <Button disabled={!!busy} onClick={() => void act("create", () => api.ensureWorkspace(taskId))}>Ensure workspace</Button>
+          <Button disabled={!!busy} onClick={() => setShowReview(true)}>Review</Button>
+          <Button disabled={!!busy} onClick={() => setShowPackage(true)}>PR package</Button>
+          <Button disabled={!!busy} onClick={() => void act("package-approval", () => api.requestPackageApproval(taskId))}>Request package approval</Button>
+          <Button disabled={!!busy} onClick={() => setShowKnowledge(true)}>Attach knowledge</Button>
+          <Button disabled={!!busy} onClick={() => void act("rollup", async () => { const res = await api.buildRollup(taskId); setRollup(res as Record<string, unknown>); return null; })}>Load roll-up</Button>
         </div>
       ) : null}
 
-      {pendingApprovals.length > 0 ? (
-        <section className="mb-6 rounded-xl border border-[var(--warn)] bg-[var(--warn-dim)] px-4 py-4" aria-label="Approval needed">
-          <div className="mb-3">
-            <div className="flex items-center justify-between gap-2">
-              <h2 className="text-step-0 font-semibold text-[var(--text)]">Needs your approval</h2>
-              <span className="mono text-step--2 text-[var(--faint)]">
-                {pendingApprovals.length} request{pendingApprovals.length === 1 ? "" : "s"}
-              </span>
-            </div>
-            <p className="mt-1 text-step--1 text-[var(--text-soft)]">
-              Review the exact action below. Approve only if you want that action carried out.
-            </p>
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+        <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5">
+          <div className="mb-4">
+            <div className="text-step--2 font-medium uppercase tracking-wide text-[var(--muted)]">Requested</div>
+            <div className="mt-1 whitespace-pre-wrap text-step-0 leading-relaxed text-[var(--text)]">{description || "No description provided."}</div>
           </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div><div className="text-step--2 text-[var(--muted)]">Status</div><div className="mt-0.5 flex items-center gap-2 text-step--1 text-[var(--text)]"><StatusBadge status={task.status} /><span>{humanStatus}</span></div></div>
+            <div><div className="text-step--2 text-[var(--muted)]">Owner</div><div className="mt-0.5 text-step--1 text-[var(--text)]">{owner ? (owner.persona || owner.name || "Teammate") : "Unassigned"}</div></div>
+            <div><div className="text-step--2 text-[var(--muted)]">Workspace</div><div className="mt-0.5 text-step--1 text-[var(--text)]"><a className="hover:underline" href={`/p/${projectId}`}>{projectName}</a></div></div>
+            <div><div className="text-step--2 text-[var(--muted)]">Task</div><div className="mt-0.5 mono text-step--2 text-[var(--faint)]"><ShortId id={task.id} /></div></div>
+          </div>
+          {parent ? <div className="mt-3 text-step--2 text-[var(--muted)]">Part of: <a className="text-[var(--accent)] hover:underline" href={`/p/${projectId}/t/${parent.id}`}>{parent.description || "Parent task"}</a></div> : null}
+          {issue ? <div className="mt-3 text-step--2 text-[var(--muted)]">Source: <span className="text-[var(--text-soft)]">{issue.title}</span> <span className="mono text-[var(--faint)]">{issue.source}{issue.external_id ? ` · ${issue.external_id}` : ""}</span></div> : null}
+        </section>
+
+        <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5">
+          <div className="text-step--2 font-medium uppercase tracking-wide text-[var(--muted)]">Progress & next step</div>
+          <div className="mt-2 text-step-0 text-[var(--text)]">{nextAction}</div>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            {owner ? <BotChip persona={owner.persona || "bot"} id={owner.id} status={owner.status} face={owner.face} /> : <Badge variant="warn">Unassigned</Badge>}
+          </div>
+          <div className="mt-4 flex flex-col gap-2">
+            {attentionItems.length === 0 ? (
+              <div className="rounded-lg bg-[var(--surface-2)] px-3 py-2 text-step--1 text-[var(--muted)]">No decisions needed right now.</div>
+            ) : attentionItems.map((item) => (
+              <div key={item.key} className={`rounded-lg border px-3 py-2 ${item.tone === "danger" ? "border-[var(--danger)] bg-[var(--danger-dim)]" : item.tone === "warn" ? "border-[var(--warn)] bg-[var(--warn-dim)]" : "border-[var(--border)] bg-[var(--surface-2)]"}`}>
+                <div className="text-step--1 font-medium text-[var(--text)]">{item.title}</div>
+                {item.detail ? <div className="mt-0.5 text-step--2 text-[var(--text-soft)]">{item.detail}</div> : null}
+                {item.key === "blocked" && task.blocked_reason?.includes("provider") ? <a className="mt-1 inline-block text-step--2 text-[var(--accent)] hover:underline" href={`/p/${task.project_id}?tab=Providers`}>Open Providers</a> : null}
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+
+      {pendingApprovals.length > 0 ? (
+        <section className="mt-6 rounded-xl border border-[var(--warn)] bg-[var(--warn-dim)] p-4 sm:p-5">
+          <div className="mb-2 text-step--1 font-medium text-[var(--text)]">Needs your decision</div>
           <div className="flex flex-col gap-2">
-            {pendingApprovals.map((approval) => (
-              <div key={approval.id} className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
-                <div className="mb-2 text-step--2 uppercase tracking-[0.12em] text-[var(--faint)]">Exact action</div>
-                <div className="mb-3 text-step--1 font-medium text-[var(--text)] break-words">
-                  {approval.action || "Requested action"}
-                </div>
-                <ApprovalRow
-                  approval={approval}
-                  busy={busy !== null}
-                  onDecide={async (decision) => {
-                    const result = await act("approval", () =>
-                      api.decideApproval(approval.id, decision),
-                    );
-                    const resume =
-                      result && typeof result === "object" && "resume" in result
-                        ? result.resume
-                        : null;
-                    if (resume && resume.outcome === "carried_out") {
-                      toast.success("Approved. The action was carried out.");
-                    } else if (resume && resume.outcome === "refused") {
-                      toast.error(`Approved, but the action did not run: ${resume.output}`);
-                    } else if (resume && resume.outcome === "waiting") {
-                      toast.message("Approved. One more decision is still needed.");
-                    } else if (decision === "denied") {
-                      toast.message("Rejected. Nothing was performed.");
-                    }
-                  }}
-                  onReask={
-                    approval.tool_name
-                      ? async () => {
-                          await act("approval", () => api.reaskApproval(approval.id));
-                          toast.message("Asked again. A new request is waiting for you.");
-                        }
-                      : undefined
-                  }
-                />
+            {pendingApprovals.map((a) => (
+              <div key={a.id} className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2">
+                <ApprovalRow approval={a} onDecide={(d) => onDecideApproval(a.id, d)} onReask={() => onReaskApproval(a.id)} busy={!!busy} />
               </div>
             ))}
           </div>
         </section>
       ) : null}
 
-      {/* Status at a glance: what this task is and where it stands. */}
-      <section className="mb-6 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-step--1">
-          <span className="font-medium text-[var(--text)]">{task.status}</span>
-          <span className="text-[var(--muted)]">
-            {owner ? owner.persona || owner.id : "Unassigned"}
-          </span>
-          {latestRun ? (
-            <span className="text-[var(--muted)]">
-              latest run: {runStatusLabel(latestRun.status)} · {Number(latestRun.duration_s ?? 0).toFixed(1)}s
-            </span>
-          ) : (
-            <span className="text-[var(--faint)]">no runs yet</span>
-          )}
-          {latestRun?.exit_code !== null && latestRun?.exit_code !== undefined ? (
-            <span className="mono text-[var(--faint)]">exit {latestRun.exit_code}</span>
-          ) : null}
+      <section className="mt-6 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="text-step--1 font-medium text-[var(--text)]">Results & deliverables</div>
+            <div className="text-step--2 text-[var(--muted)]">{hasResults ? (task.status === "done" ? "Produced work and outputs for this task." : "Outputs so far. Work may still be in progress.") : "No results yet."}</div>
+          </div>
+          {task.status !== "done" && hasResults ? <Badge variant="neutral">In progress</Badge> : null}
+          {task.status === "done" && hasResults ? <Badge variant="ok">Ready for review</Badge> : null}
         </div>
-        {task.blocked_reason ? (
-          <div className="mt-2 text-step--1 text-[var(--warn)]">{task.blocked_reason}</div>
+
+        {latestOutput ? (
+          <div className="mb-4">
+            <div className="mb-1 text-step--2 font-medium text-[var(--muted)]">Latest output</div>
+            <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
+              <Markdown text={latestOutput} />
+              {latestOutput.length > 4000 ? <div className="mt-2 text-step--2 text-[var(--faint)]">Showing the first 4000 characters. Full output is available in execution details below.</div> : null}
+            </div>
+          </div>
+        ) : null}
+
+        {artifacts && artifacts.length > 0 ? (
+          <div className="mb-4">
+            <div className="mb-1 text-step--2 font-medium text-[var(--muted)]">Produced artifacts</div>
+            <div className="flex flex-col gap-2">
+              {artifacts.map((artifact) => (
+                <a key={artifact.id} href={`/artifacts/${artifact.id}`} className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 transition-colors hover:border-[var(--border-strong)]">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2"><span className="truncate text-step--1 font-medium text-[var(--text)]">{artifact.summary || artifact.type}</span><Badge variant="neutral">{artifact.type}</Badge></div>
+                    <div className="text-step--2 text-[var(--muted)]">Verification: {artifact.verification_status}</div>
+                  </div>
+                  <span className="text-step--2 text-[var(--accent)]">Open</span>
+                </a>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {pr_packages.length > 0 ? (
+          <div className="mb-4">
+            <div className="mb-1 text-step--2 font-medium text-[var(--muted)]">PR packages</div>
+            <div className="flex flex-col gap-2">
+              {pr_packages.map((pkg) => (
+                <div key={pkg.id} className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2">
+                  <strong className="text-[var(--text)]">{pkg.title}</strong>
+                  <div className="mono mt-1 text-step--2 text-[var(--faint)]">{pkg.base_branch} ← {pkg.head_branch}</div>
+                  <div className="mt-1 text-step--2 text-[var(--muted)]">{pkg.patch_summary}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {reviews.length > 0 ? (
+          <div>
+            <div className="mb-1 text-step--2 font-medium text-[var(--muted)]">Reviews</div>
+            <div className="flex flex-col gap-2">
+              {reviews.map((review) => (
+                <div key={review.id} className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2">
+                  <div className="flex items-center justify-between gap-2"><ShortId id={review.id} /><StatusBadge status={review.verdict} /></div>
+                  <div className="mt-1 text-step--1 text-[var(--text-soft)]">{review.notes || "No notes"}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {!hasResults ? (
+          <EmptyState title="No results yet" hint={owner ? "Start the work to produce outputs and deliverables." : "Assign an owner and start the work to produce outputs."} action={(!watching && task.status !== "running") ? <Button variant="primary" disabled={!!busy} onClick={runPrimary}>{terminal ? "Run again" : "Start work"}</Button> : undefined} />
         ) : null}
       </section>
 
-      {/* Deliverables: what this task actually produced. */}
-      {artifacts && artifacts.length > 0 ? (
-        <section className="mb-6">
-          <SectionLabel>Deliverables</SectionLabel>
-          <div className="mt-2 flex flex-col gap-2">
-            {artifacts.map((artifact) => (
-              <a
-                key={artifact.id}
-                href={`/artifacts/${artifact.id}`}
-                className="flex items-center justify-between rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step--1 hover:bg-[var(--surface-2)]"
-              >
-                <span className="font-medium text-[var(--text)]">{artifact.type}</span>
-                <span className="text-[var(--muted)]">{artifact.summary || artifact.location}</span>
-              </a>
-            ))}
-          </div>
-        </section>
-      ) : null}
-
-      {/* The answer comes before the machinery. A run that produced a result
-          is the point of the task; the runs, approvals and evidence are how
-          it got there. */}
-      <section className="mb-8">
-        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-3">
-          <SectionLabel>Output</SectionLabel>
-          {latestRun ? (
-            <span className="text-step--2 text-[var(--faint)]">
-              {runStatusLabel(latestRun.status)} · {Number(latestRun.duration_s ?? 0).toFixed(1)}s ·{" "}
-              {relativeTime(latestRun.started_at)}
-            </span>
-          ) : null}
-        </div>
-        {latestRun ? (
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
-            {latestRun.status === "failed" && latestRun.exit_code !== null ? (
-              <div className="mb-3 rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-step--1 text-[var(--danger)]">
-                Run failed with exit code <span className="mono">{latestRun.exit_code}</span>.
-              </div>
-            ) : null}
-            {(() => {
-              const failure = bestFailureExplanation(task, runs);
-              if (!failure) return null;
-              return (
-                <div
-                  className="mb-3 rounded-md border border-[var(--warn)] bg-[var(--warn-dim)] px-3 py-2 text-step--1 text-[var(--text)]"
-                  role="status"
-                >
-                  <div>{failure.message}</div>
-                  {failure.actions.length > 0 ? (
-                    <div className="mt-2 flex flex-wrap gap-3">
-                      {failure.actions.map((action) => (
-                        <a
-                          key={action.href}
-                          className="text-step--1 text-[var(--accent)] hover:underline"
-                          href={action.href}
-                        >
-                          {action.label}
-                        </a>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })()}
-            {latestOutput ? (
+      <details className="mt-6 rounded-xl border border-[var(--border)] bg-[var(--surface)]">
+        <summary className="cursor-pointer list-none px-4 py-3 text-step--1 font-medium text-[var(--text)]">Task details & responsibility</summary>
+        <div className="border-t border-[var(--border-dim)] p-3 sm:p-4">
+          <InstructionsSection
+            description={description}
+            command={task.command}
+            parent={parent}
+            projectId={projectId}
+            ownerSlot={
               <>
-                <div className="max-h-[28rem] overflow-y-auto pr-1">
-                  {latestRun?.runtime === "shell" ? (
-                    <pre className={`${LOG_BLOCK} mt-0 !whitespace-pre-wrap break-words`}>
-                      {latestOutput.slice(0, 4000)}
-                    </pre>
-                  ) : (
-                    <Markdown text={latestOutput.slice(0, 4000)} />
-                  )}
-                </div>
-                {latestOutput.length > 4000 ? (
-                  <p className="mt-2 text-step--2 text-[var(--faint)]">
-                    Showing the first 4000 characters. The full output is in the run artifacts.
-                  </p>
-                ) : null}
+                {owner ? <BotChip persona={owner.persona || "bot"} id={owner.id} status={owner.status} face={owner.face} /> : <span className="text-step--1 text-[var(--muted)]">Unassigned. Pick an owner for this task.</span>}
+                <select aria-label="Assign owner teammate" value={assignTo} onChange={(e) => setAssignDraft(e.target.value)} className={`${FORM_INPUT} max-w-[14rem]`}>
+                  <option value="">Unassigned</option>
+                  {teammates.data?.teammates.map((mate) => (<option key={mate.id} value={mate.id}>{mate.persona || "Unnamed teammate"}</option>))}
+                </select>
+                <Button variant="primary" disabled={!!busy || assignTo === (task.owner_teammate_id ?? "")} onClick={() => void act("assign", async () => { await api.assignTask(taskId, assignTo || null); toast.success(assignTo ? "Owner updated." : "Task unassigned."); return null; })}>{busy === "assign" ? "Saving…" : "Assign"}</Button>
               </>
-            ) : (
-              <p className="text-step--1 text-[var(--muted)]">
-                The run finished without output.
-              </p>
-            )}
-          </div>
-        ) : (
-          <EmptyState
-            title="No output yet"
-            hint="Run the task to see what the bot produces."
-            action={
-              <Button variant="primary" disabled={!!busy} onClick={runPrimary}>
-                {busy === "run" ? "Running…" : "Run task"}
-              </Button>
             }
+            expanded={showInstructions}
+            onToggle={() => setShowInstructions((value) => !value)}
           />
-        )}
-      </section>
-
-      {latestRun ? (
-        <details className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] sm:mb-6">
-          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-step--1 font-medium text-[var(--text)]">
-            <span>Execution timeline</span>
-            <span className="shrink-0 text-step--2 font-normal text-[var(--muted)]">
-              {runStatusLabel(latestRun.status)}
-            </span>
-          </summary>
-          <div className="border-t border-[var(--border-dim)] px-2 pb-2 pt-1 sm:px-3">
-            <RunTimeline
-              key={latestRun.id}
-              run={latestRun}
-              live={latestRun.status === "running" || latestRun.status === "queued" || watching}
-            />
-          </div>
-        </details>
-      ) : null}
-
-      {null}
-
-      {task.blocked_reason ? (
-        <div
-          className="mb-6 flex flex-wrap items-center gap-3 rounded-xl border border-[var(--warn)] bg-[var(--warn-dim)] px-4 py-3"
-          role="status"
-        >
-          {task.status === "awaiting_approval" ? (
-            /* The reason already says it: "waiting for your approval of X". */
-            <strong className="text-step--1 text-[var(--warn)]">
-              {task.blocked_reason.charAt(0).toUpperCase() + task.blocked_reason.slice(1)}
-            </strong>
-          ) : (
-            <>
-              <strong className="text-step--1 text-[var(--warn)]">
-                This task is blocked
-              </strong>
-              <span className="text-step--1 text-[var(--text)]">
-                {task.blocked_reason}
-              </span>
-              {task.blocked_reason.includes("provider") ? (
-                <span className="text-step--1 text-[var(--muted)]">
-                  Connect a working model key in{" "}
-                  <a
-                    className="text-[var(--accent)] hover:underline"
-                    href={`/p/${task.project_id}?tab=Providers`}
-                  >
-                    this workspace&rsquo;s Providers tab
-                  </a>
-                  , then run it again.
-                </span>
-              ) : null}
-            </>
-          )}
         </div>
-      ) : null}
-
-      {issue ? (
-        <div className="mb-6 flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
-          <strong className="text-[var(--text)]">{issue.title}</strong>
-          <span className="mono text-step--2 text-[var(--faint)]">
-            {issue.source}
-            {issue.external_id ? ` · ${issue.external_id}` : ""}
-          </span>
-        </div>
-      ) : null}
-
-      <InstructionsSection
-        description={description}
-        command={task.command}
-        parent={parent}
-        projectId={projectId}
-        ownerSlot={
-          <>
-            {owner ? (
-              <BotChip persona={owner.persona || "bot"} id={owner.id} status={owner.status} face={owner.face} />
-            ) : (
-              <span className="text-step--1 text-[var(--muted)]">
-                Unassigned. Pick a bot to own this task.
-              </span>
-            )}
-            <select
-              aria-label="Assign owner teammate"
-              value={assignTo}
-              onChange={(e) => setAssignDraft(e.target.value)}
-              className={`${FORM_INPUT} max-w-[14rem]`}
-            >
-              <option value="">Unassigned</option>
-              {teammates.data?.teammates.map((mate) => (
-                <option key={mate.id} value={mate.id}>
-                  {mate.persona || "Unnamed teammate"}
-                </option>
-              ))}
-            </select>
-            <Button
-              variant="primary"
-              disabled={!!busy || assignTo === (task.owner_teammate_id ?? "")}
-              onClick={() =>
-                void act("assign", async () => {
-                  await api.assignTask(taskId, assignTo || null);
-                  toast.success(assignTo ? "Owner updated." : "Task unassigned.");
-                  return null;
-                })
-              }
-            >
-              {busy === "assign" ? "Saving…" : "Assign"}
-            </Button>
-          </>
-        }
-        expanded={showInstructions}
-        onToggle={() => setShowInstructions((value) => !value)}
-      />
+      </details>
 
       {showReview ? (
         <Modal title="Submit review" onClose={() => setShowReview(false)}>
-          <form
-            className="flex flex-col gap-3"
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (!reviewerId) {
-                notifyError("Pick the teammate who reviewed this work.");
-                return;
-              }
-              void act("review", async () => {
-                await api.submitReview(taskId, {
-                  reviewer_teammate_id: reviewerId,
-                  verdict: reviewVerdict,
-                  notes: reviewNotes,
-                  risks: reviewRisks
-                    .split(",")
-                    .map((item) => item.trim())
-                    .filter(Boolean),
-                  run_id: latestRun?.id ?? "",
-                });
-                setShowReview(false);
-                return null;
-              });
-            }}
-          >
-            <label className="flex flex-col gap-1 text-step--1 text-[var(--muted)]">
-              Reviewer
-              <select
-                value={reviewerId}
-                onChange={(e) => setReviewerId(e.target.value)}
-                required
-                className={FORM_INPUT}
-              >
+          <form className="flex flex-col gap-3" onSubmit={(e) => { e.preventDefault(); if (!reviewerId) { notifyError("Pick the teammate who reviewed this work."); return; } void act("review", async () => { await api.submitReview(taskId, { reviewer_teammate_id: reviewerId, verdict: reviewVerdict, notes: reviewNotes, risks: reviewRisks.split(",").map((item) => item.trim()).filter(Boolean), run_id: latestRun?.id ?? "" }); setShowReview(false); return null; }); }}>
+            <label className="flex flex-col gap-1 text-step--1 text-[var(--muted)]">Reviewer
+              <select value={reviewerId} onChange={(e) => setReviewerId(e.target.value)} required className={FORM_INPUT}>
                 <option value="">(select a teammate)</option>
-                {teammates.data?.teammates.map((mate) => (
-                  <option key={mate.id} value={mate.id}>
-                    {mate.persona || "Unnamed teammate"}
-                  </option>
-                ))}
+                {teammates.data?.teammates.map((mate) => (<option key={mate.id} value={mate.id}>{mate.persona || "Unnamed teammate"}</option>))}
               </select>
             </label>
-            <label className="flex flex-col gap-1 text-step--1 text-[var(--muted)]">
-              Verdict
-              <select
-                value={reviewVerdict}
-                onChange={(e) => setReviewVerdict(e.target.value)}
-                className={FORM_INPUT}
-              >
+            <label className="flex flex-col gap-1 text-step--1 text-[var(--muted)]">Verdict
+              <select value={reviewVerdict} onChange={(e) => setReviewVerdict(e.target.value)} className={FORM_INPUT}>
                 <option value="accepted">Accepted</option>
                 <option value="needs_work">Needs work</option>
                 <option value="rejected">Rejected</option>
               </select>
             </label>
-            <label className="flex flex-col gap-1 text-step--1 text-[var(--muted)]">
-              Notes
-              <textarea
-                value={reviewNotes}
-                onChange={(e) => setReviewNotes(e.target.value)}
-                rows={3}
-                className={FORM_INPUT}
-              />
-            </label>
-            <label className="flex flex-col gap-1 text-step--1 text-[var(--muted)]">
-              Risks (comma separated)
-              <input
-                value={reviewRisks}
-                onChange={(e) => setReviewRisks(e.target.value)}
-                className={FORM_INPUT}
-              />
-            </label>
-            <div className="mt-1 flex justify-end gap-2">
-              <Button type="button" onClick={() => setShowReview(false)}>
-                Cancel
-              </Button>
-              <Button variant="primary" type="submit" disabled={!reviewerId || busy === "review"}>
-                {busy === "review" ? "Submitting…" : "Submit review"}
-              </Button>
-            </div>
+            <label className="flex flex-col gap-1 text-step--1 text-[var(--muted)]">Notes<textarea value={reviewNotes} onChange={(e) => setReviewNotes(e.target.value)} rows={3} className={FORM_INPUT} /></label>
+            <label className="flex flex-col gap-1 text-step--1 text-[var(--muted)]">Risks (comma separated)<input value={reviewRisks} onChange={(e) => setReviewRisks(e.target.value)} className={FORM_INPUT} /></label>
+            <div className="mt-1 flex justify-end gap-2"><Button type="button" onClick={() => setShowReview(false)}>Cancel</Button><Button variant="primary" type="submit" disabled={!reviewerId || busy === "review"}>{busy === "review" ? "Submitting…" : "Submit review"}</Button></div>
           </form>
         </Modal>
       ) : null}
       {showPackage ? (
         <Modal title="Generate PR package" onClose={() => setShowPackage(false)}>
-          <EntityForm
-            submitLabel="Generate"
-            fields={[
-              { name: "title", label: "Title", required: true, placeholder: task.description },
-              { name: "body", label: "Body", type: "textarea" },
-            ]}
-            onSubmit={async (values) => {
-              await api.generatePackage(taskId, values);
-              setShowPackage(false);
-            }}
-          />
+          <EntityForm submitLabel="Generate" fields={[{ name: "title", label: "Title", required: true, placeholder: task.description }, { name: "body", label: "Body", type: "textarea" }]} onSubmit={async (values) => { await api.generatePackage(taskId, values); setShowPackage(false); }} />
         </Modal>
       ) : null}
       {showKnowledge ? (
         <Modal title="Attach knowledge evidence" onClose={() => setShowKnowledge(false)}>
-          <EntityForm
-            submitLabel="Search and attach"
-            fields={[{ name: "query", label: "Query", required: true }]}
-            onSubmit={async (values) => {
-              await api.attachKnowledge(taskId, values.query, latestRun?.id ?? "");
-              setShowKnowledge(false);
-            }}
-          />
+          <EntityForm submitLabel="Search and attach" fields={[{ name: "query", label: "Query", required: true }]} onSubmit={async (values) => { await api.attachKnowledge(taskId, values.query, latestRun?.id ?? ""); setShowKnowledge(false); }} />
         </Modal>
       ) : null}
 
-      <details className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] sm:mb-6">
-        <summary className="cursor-pointer list-none px-4 py-3 text-step--1 font-medium text-[var(--text)]">
-          Run history <span className="font-normal text-[var(--muted)]">({runs.length})</span>
-        </summary>
-        <div className="border-t border-[var(--border-dim)] p-3 sm:p-4">
-          <RunsTable runs={runs} />
-        </div>
-      </details>
-
-      <details className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] sm:mb-6">
-        <summary className="cursor-pointer list-none px-4 py-3 text-step--1 font-medium text-[var(--text)]">Handoffs and delegation <span className="font-normal text-[var(--muted)]">({delegationRows.length})</span></summary>
-        <div className="space-y-4 border-t border-[var(--border-dim)] p-3 sm:p-4">
-      {/* Handoffs (delegation) */}
-      <section>
-        <SectionLabel className="mb-2">Handoffs</SectionLabel>
-        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
-          <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <strong className="text-[var(--text)]">Delegate to another bot</strong>
-            <span className="text-step--2 text-[var(--faint)]">
-              Bounded depth (max 5), cycle-checked.
-            </span>
-          </div>
-          <form onSubmit={(e) => { e.preventDefault(); void delegate(); }} className="flex flex-wrap items-end gap-2">
-            <select
-              aria-label="Delegate to teammate"
-              value={delegateTo}
-              onChange={(e) => setDelegateTo(e.target.value)}
-              className={`${FORM_INPUT} max-w-[14rem]`}
-            >
-              <option value="">Select a teammate</option>
-              {teammates.data?.teammates
-                .filter((mate) => mate.id !== task.owner_teammate_id)
-                .map((mate) => (
-                  <option key={mate.id} value={mate.id}>
-                    {mate.persona || "Unnamed teammate"}
-                  </option>
-                ))}
-            </select>
-            <input
-              aria-label="Reason"
-              value={delegateReason}
-              onChange={(e) => setDelegateReason(e.target.value)}
-              placeholder="Why hand off?"
-              className={`${FORM_INPUT} min-w-56 flex-1`}
-            />
-            <input
-              type="number"
-              min="1"
-              max="5"
-              value={delegateDepth}
-              onChange={(e) => setDelegateDepth(e.target.value)}
-              aria-label="Depth"
-              className={`${FORM_INPUT} w-20`}
-            />
-            <Button variant="primary" type="submit" disabled={!delegateTo}>
-              Delegate
-            </Button>
-          </form>
-          {delegationRows.length > 0 ? (
-            <>
-              <div className={`mt-3 ${TABLE_SHELL}`}>
-                <table className="w-full">
-                  <thead>
-                    <tr>
-                      <th className={TH}>From</th>
-                      <th className={TH}>To</th>
-                      <th className={TH}>Depth</th>
-                      <th className={TH}>Status</th>
-                      <th className={TH}>Reason</th>
-                      <th className={TH}>Child task</th>
-                      <th className={TH}>Result</th>
-                      <th className={TH}></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {delegationRows.map((d) => {
-                      const pending = d.status === "pending";
-                      const open = d.status === "pending" || d.status === "accepted";
-                      const fromName = teammates.data?.teammates.find((m) => m.id === d.from_teammate_id)?.persona || <ShortId id={d.from_teammate_id} />;
-                      const toName = teammates.data?.teammates.find((m) => m.id === d.to_teammate_id)?.persona || <ShortId id={d.to_teammate_id} />;
-                      return (
-                        <tr key={d.id} className="transition-colors hover:bg-[var(--surface-2)]">
-                          <td className={`${TD} mono text-[var(--text-soft)]`}>{fromName}</td>
-                          <td className={`${TD} mono text-[var(--text-soft)]`}>{toName}</td>
-                          <td className={`${TD} mono`}>{d.depth}</td>
-                          <td className={TD}>
-                            <StatusBadge status={d.status} />
-                          </td>
-                          <td className={`${TD} text-[var(--muted)]`}>{d.reason || "—"}</td>
-                          <td className={TD}>
-                            {d.child_task_id ? (
-                              <a
-                                className="text-[var(--accent)] hover:underline"
-                                href={`/p/${projectId}/t/${d.child_task_id}`}
-                              >
-                                <ShortId id={d.child_task_id} />
-                              </a>
-                            ) : (
-                              "—"
-                            )}
-                          </td>
-                          <td className={`${TD} max-w-[260px] text-[var(--muted)]`}>
-                            {d.result ? d.result.slice(0, 200) : "—"}
-                            {d.finished_at ? (
-                              <div className="mt-0.5 text-step--2 text-[var(--faint)]">
-                                finished {relativeTime(d.finished_at)}
-                              </div>
-                            ) : null}
-                          </td>
-                          <td className={TD}>
-                            {pending ? (
-                              <div className="flex items-center gap-1.5">
-                                <Button variant="primary" onClick={() => void decide(d.id, "accepted")}>
-                                  Accept
-                                </Button>
-                                <Button variant="danger" onClick={() => void decide(d.id, "declined")}>
-                                  Decline
-                                </Button>
-                                <Button onClick={() => void cancelDelegation(d.id)}>Cancel</Button>
-                              </div>
-                            ) : open ? (
-                              <Button onClick={() => void cancelDelegation(d.id)}>Cancel</Button>
-                            ) : (
-                              <span className="text-[var(--muted)]">{d.decided_at ?? ""}</span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+      <details className="mt-4 rounded-xl border border-[var(--border)] bg-[var(--surface)]">
+        <summary className="cursor-pointer list-none px-4 py-3 text-step--1 font-medium text-[var(--text)]">Execution evidence</summary>
+        <div className="flex flex-col gap-4 border-t border-[var(--border-dim)] p-3 sm:p-4">
+          {latestRun ? (
+            <div>
+              <div className="mb-2 text-step--2 font-medium text-[var(--muted)]">Latest run timeline & live updates</div>
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-2 sm:p-3">
+                <RunTimeline key={latestRun.id} run={latestRun} live={latestRun.status === "running" || latestRun.status === "queued" || watching} />
               </div>
-              <p className="mt-2 text-step--1 text-[var(--muted)]">
-                Accepting a delegation makes the target bot the task owner. Child results flow back
-                through the response channel (see the project&apos;s Messages tab).
-              </p>
-            </>
-          ) : (
-            <EmptyState title="No delegations yet" hint="Hand a task from one bot to another here." />
-          )}
-        </div>
-      </section>
+              {latestOutput ? <details className="mt-2"><summary className="cursor-pointer text-step--2 text-[var(--muted)]">Raw latest output</summary><pre className={`${LOG_BLOCK} mt-2`}>{latestOutput.slice(0, 8000)}</pre></details> : null}
+            </div>
+          ) : null}
 
-      {/* Delegation tree */}
-      <section>
-        <SectionLabel className="mb-2">Delegation tree</SectionLabel>
-        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
-          <div className="flex flex-wrap items-center gap-2 text-step--1">
-            <span className="text-[var(--muted)]">Parent:</span>
-            {parent ? (
-              <a
-                className="text-[var(--accent)] hover:underline"
-                href={`/p/${projectId}/t/${parent.id}`}
-              >
-                {parent.description || "Untitled"}
-              </a>
-            ) : (
-              <span className="text-[var(--muted)]">none. This is a root task</span>
-            )}
-          </div>
-          <div className="mt-3">
-            <span className="text-step--1 text-[var(--muted)]">
-              Children ({children.length}):
-            </span>
-            {children.length === 0 ? (
-              <div className="mt-1 text-step--1 text-[var(--faint)]">
-                No child tasks yet. Bots create them when they delegate with a command.
-              </div>
-            ) : (
-              <div className="mt-1.5 flex flex-col gap-1">
-                {children.map((child) => {
-                  const link = delegationRows.find((d) => d.child_task_id === child.id);
-                  return (
-                    <div
-                      key={child.id}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg px-3 py-2 text-step--1 transition-colors hover:bg-[var(--surface-2)]"
-                    >
-                      <span className="min-w-0">
-                        <a
-                          className="text-[var(--accent)] hover:underline"
-                          href={`/p/${projectId}/t/${child.id}`}
-                        >
-                          {child.description || "Untitled"}
-                        </a>{" "}
-                        <span className="mono text-step--2 text-[var(--faint)]">
-                          via {link
-                            ? `${teammates.data?.teammates.find((m) => m.id === link.to_teammate_id)?.persona || <ShortId id={link.to_teammate_id} />} · ${link.status}`
-                            : "delegation"}
-                        </span>
-                      </span>
-                      <StatusBadge status={child.status} />
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-      </section>
-        </div>
-      </details>
+          <details>
+            <summary className="cursor-pointer text-step--2 font-medium text-[var(--muted)]">Run history ({runs.length})</summary>
+            <div className="mt-2"><RunsTable runs={runs} /></div>
+          </details>
 
-      <details className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] sm:mb-6">
-        <summary className="cursor-pointer list-none px-4 py-3 text-step--1 font-medium text-[var(--text)]">Files and checkout</summary>
-        <div className="border-t border-[var(--border-dim)] p-3 sm:p-4"><WorkspacePanel taskId={taskId} /></div>
-      </details>
+          <details>
+            <summary className="cursor-pointer text-step--2 font-medium text-[var(--muted)]">Files and checkout</summary>
+            <div className="mt-2"><WorkspacePanel taskId={taskId} /></div>
+          </details>
 
-      <details className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] sm:mb-6">
-        <summary className="cursor-pointer list-none px-4 py-3 text-step--1 font-medium text-[var(--text)]">Artifact records <span className="font-normal text-[var(--muted)]">({artifacts.length})</span></summary>
-        <div className="border-t border-[var(--border-dim)] p-3 sm:p-4">
-      {/* Artifacts */}
-      <section>
-        <SectionLabel className="mb-2">Artifacts</SectionLabel>
-        {artifacts.length > 0 ? (
-          <div className={TABLE_SHELL}>
-            <table className="w-full">
-              <thead>
-                <tr>
-                  <th className={TH}>ID</th>
-                  <th className={TH}>Type</th>
-                  <th className={TH}>Verification</th>
-                  <th className={TH}>Summary</th>
-                </tr>
-              </thead>
-              <tbody>
-                {artifacts.map((artifact) => (
-                  <tr key={artifact.id} className="transition-colors hover:bg-[var(--surface-2)]">
-                    <td className={TD}>
-                      <ShortId id={artifact.id} />
-                    </td>
-                    <td className={`${TD} mono`}>{artifact.type}</td>
-                    <td className={TD}>
-                      <StatusBadge status={artifact.verification_status} />
-                    </td>
-                    <td className={`${TD} text-[var(--muted)]`}>{artifact.summary}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <EmptyState title="No artifacts" hint="Runs produce test-log and transcript artifacts." />
-        )}
-      </section>
-        </div>
-      </details>
+          <details>
+            <summary className="cursor-pointer text-step--2 font-medium text-[var(--muted)]">Artifact records ({artifacts.length})</summary>
+            <div className="mt-2">
+              {artifacts.length > 0 ? (
+                <div className={TABLE_SHELL}><table className="w-full"><thead><tr><th className={TH}>ID</th><th className={TH}>Type</th><th className={TH}>Verification</th><th className={TH}>Summary</th></tr></thead><tbody>{artifacts.map((artifact) => (<tr key={artifact.id} className="transition-colors hover:bg-[var(--surface-2)]"><td className={TD}><ShortId id={artifact.id} /></td><td className={`${TD} mono`}>{artifact.type}</td><td className={TD}><StatusBadge status={artifact.verification_status} /></td><td className={`${TD} text-[var(--muted)]`}>{artifact.summary}</td></tr>))}</tbody></table></div>
+              ) : <EmptyState title="No artifact records" hint="Runs produce test-log and transcript artifacts." />}
+            </div>
+          </details>
 
-      <details className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] sm:mb-6">
-        <summary className="cursor-pointer list-none px-4 py-3 text-step--1 font-medium text-[var(--text)]">Reviews <span className="font-normal text-[var(--muted)]">({reviews.length})</span></summary>
-        <div className="border-t border-[var(--border-dim)] p-3 sm:p-4">
-      {/* Reviews */}
-      <section>
-        <SectionLabel className="mb-2">Reviews</SectionLabel>
-        {reviews.length > 0 ? (
-          <div className="flex flex-col gap-2">
-            {reviews.map((review) => (
-              <div key={review.id} className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <ShortId id={review.id} />
-                    <StatusBadge status={review.verdict} />
+          <details>
+            <summary className="cursor-pointer text-step--2 font-medium text-[var(--muted)]">Approvals & decisions ({approvalRows.length})</summary>
+            <div className="mt-2 flex flex-col gap-2">
+              {approvalRows.length > 0 ? approvalRows.map((a) => (<div key={a.id} className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2"><ApprovalRow approval={a} onDecide={(d) => onDecideApproval(a.id, d)} onReask={() => onReaskApproval(a.id)} busy={!!busy} /></div>)) : <div className="text-step--2 text-[var(--muted)]">No approvals for this task.</div>}
+            </div>
+          </details>
+
+          <details>
+            <summary className="cursor-pointer text-step--2 font-medium text-[var(--muted)]">Handoffs and delegation ({delegationRows.length})</summary>
+            <div className="mt-2 space-y-4">
+              <section>
+                <SectionLabel className="mb-2">Handoffs</SectionLabel>
+                <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4">
+                  <form onSubmit={(e) => { e.preventDefault(); void delegate(); }} className="flex flex-wrap items-end gap-2">
+                    <select aria-label="Delegate to teammate" value={delegateTo} onChange={(e) => setDelegateTo(e.target.value)} className={`${FORM_INPUT} max-w-[14rem]`}>
+                      <option value="">Select a teammate</option>
+                      {teammates.data?.teammates.filter((mate) => mate.id !== task.owner_teammate_id).map((mate) => (<option key={mate.id} value={mate.id}>{mate.persona || "Unnamed teammate"}</option>))}
+                    </select>
+                    <input aria-label="Reason" value={delegateReason} onChange={(e) => setDelegateReason(e.target.value)} placeholder="Why hand off?" className={`${FORM_INPUT} min-w-56 flex-1`} />
+                    <input type="number" min="1" max="5" value={delegateDepth} onChange={(e) => setDelegateDepth(e.target.value)} aria-label="Depth" className={`${FORM_INPUT} w-20`} />
+                    <Button variant="primary" type="submit" disabled={!delegateTo}>Delegate</Button>
+                  </form>
+                  {delegationRows.length > 0 ? (
+                    <div className={`mt-3 ${TABLE_SHELL}`}><table className="w-full"><thead><tr><th className={TH}>From</th><th className={TH}>To</th><th className={TH}>Depth</th><th className={TH}>Status</th><th className={TH}>Reason</th><th className={TH}>Child task</th><th className={TH}>Result</th><th className={TH}></th></tr></thead><tbody>{delegationRows.map((d) => { const pending = d.status === "pending"; const open = d.status === "pending" || d.status === "accepted"; const fromName = teammates.data?.teammates.find((m) => m.id === d.from_teammate_id)?.persona || <ShortId id={d.from_teammate_id} />; const toName = teammates.data?.teammates.find((m) => m.id === d.to_teammate_id)?.persona || <ShortId id={d.to_teammate_id} />; return (<tr key={d.id} className="transition-colors hover:bg-[var(--surface-2)]"><td className={`${TD} mono text-[var(--text-soft)]`}>{fromName}</td><td className={`${TD} mono text-[var(--text-soft)]`}>{toName}</td><td className={`${TD} mono`}>{d.depth}</td><td className={TD}><StatusBadge status={d.status} /></td><td className={`${TD} text-[var(--muted)]`}>{d.reason || "—"}</td><td className={TD}>{d.child_task_id ? <a className="text-[var(--accent)] hover:underline" href={`/p/${projectId}/t/${d.child_task_id}`}><ShortId id={d.child_task_id} /></a> : "—"}</td><td className={`${TD} max-w-[260px] text-[var(--muted)]`}>{d.result ? d.result.slice(0, 200) : "—"}{d.finished_at ? <div className="mt-0.5 text-step--2 text-[var(--faint)]">finished {relativeTime(d.finished_at)}</div> : null}</td><td className={TD}>{pending ? <div className="flex items-center gap-1.5"><Button variant="primary" onClick={() => void decide(d.id, "accepted")}>Accept</Button><Button variant="danger" onClick={() => void decide(d.id, "declined")}>Decline</Button><Button onClick={() => void cancelDelegation(d.id)}>Cancel</Button></div> : open ? <Button onClick={() => void cancelDelegation(d.id)}>Cancel</Button> : <span className="text-[var(--muted)]">{d.decided_at ?? ""}</span>}</td></tr>); })}</tbody></table></div>
+                  ) : <EmptyState title="No delegations yet" hint="Hand a task from one bot to another here." />}
                 </div>
-                <div className="mt-1.5 text-step--1 text-[var(--text-soft)]">
-                  {review.notes || "No notes"}
+              </section>
+              <section>
+                <SectionLabel className="mb-2">Delegation tree</SectionLabel>
+                <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4">
+                  <div className="flex flex-wrap items-center gap-2 text-step--1"><span className="text-[var(--muted)]">Parent:</span>{parent ? <a className="text-[var(--accent)] hover:underline" href={`/p/${projectId}/t/${parent.id}`}>{parent.description || "Untitled"}</a> : <span className="text-[var(--muted)]">none. This is a root task</span>}</div>
+                  <div className="mt-3"><span className="text-step--1 text-[var(--muted)]">Children ({children.length}):</span>{children.length === 0 ? <div className="mt-1 text-step--1 text-[var(--faint)]">No child tasks yet. Bots create them when they delegate with a command.</div> : <div className="mt-1.5 flex flex-col gap-1">{children.map((child) => { const link = delegationRows.find((d) => d.child_task_id === child.id); return (<div key={child.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg px-3 py-2 text-step--1 transition-colors hover:bg-[var(--surface)]"><span className="min-w-0"><a className="text-[var(--accent)] hover:underline" href={`/p/${projectId}/t/${child.id}`}>{child.description || "Untitled"}</a> <span className="mono text-step--2 text-[var(--faint)]">via {link ? (<>{teammates.data?.teammates.find((m) => m.id === link.to_teammate_id)?.persona || <ShortId id={link.to_teammate_id} />} · {link.status}</>) : "delegation"}</span></span><StatusBadge status={child.status} /></div>); })}</div>}</div>
                 </div>
-                {review.risks.length > 0 ? (
-                  <div className="mt-1 text-step--2 text-[var(--faint)]">
-                    Risks: {review.risks.join(", ")}
-                  </div>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <EmptyState title="No reviews" hint="A distinct reviewer records verdict and risks here." />
-        )}
-      </section>
+              </section>
+            </div>
+          </details>
+
+          {rollup ? (
+            <details>
+              <summary className="cursor-pointer text-step--2 font-medium text-[var(--muted)]">Roll-up</summary>
+              <pre className={`${LOG_BLOCK} mt-2`}>{JSON.stringify(rollup, null, 2)}</pre>
+            </details>
+          ) : null}
         </div>
       </details>
 
-      <details className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] sm:mb-6">
-        <summary className="cursor-pointer list-none px-4 py-3 text-step--1 font-medium text-[var(--text)]">PR packages <span className="font-normal text-[var(--muted)]">({pr_packages.length})</span></summary>
-        <div className="border-t border-[var(--border-dim)] p-3 sm:p-4">
-      {/* PR packages */}
-      <section>
-        <SectionLabel className="mb-2">PR packages</SectionLabel>
-        {pr_packages.length > 0 ? (
-          <div className="flex flex-col gap-2">
-            {pr_packages.map((pkg) => (
-              <div key={pkg.id} className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
-                <strong className="text-[var(--text)]">{pkg.title}</strong>
-                <div className="mono mt-1 text-step--2 text-[var(--faint)]">
-                  {pkg.base_branch} ← {pkg.head_branch} · digest {pkg.digest.slice(0, 12)}…
-                </div>
-                <div className="mt-1 text-step--2 text-[var(--muted)]">{pkg.patch_summary}</div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <EmptyState title="No PR packages" hint="Generate a reviewable candidate package." />
-        )}
-      </section>
-        </div>
-      </details>
-
-      {rollup ? (
-        <details className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] sm:mb-6" open>
-          <summary className="cursor-pointer text-step--1 font-medium text-[var(--text-soft)]">Roll-up</summary>
-          <div className="mt-2">
-            <pre className={LOG_BLOCK}>{JSON.stringify(rollup, null, 2)}</pre>
-          </div>
-        </details>
-      ) : null}
       <div className="mt-6 text-step--1">
-        <a
-          href={`/p/${projectId}`}
-          className="text-[var(--muted)] hover:text-[var(--text)] hover:underline"
-        >
-          Open project →
-        </a>
+        <a href={`/p/${projectId}`} className="text-[var(--muted)] hover:text-[var(--text)] hover:underline">Back to workspace</a>
       </div>
     </Page>
   );
