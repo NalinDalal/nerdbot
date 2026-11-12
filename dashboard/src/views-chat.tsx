@@ -58,17 +58,24 @@ function ActivityRailContent({
     queuedTasks > 0;
   if (!hasAnything) {
     return (
-      <p className="text-step--1 text-[var(--muted)]">
-        No work running. Delegate a task from chat to see progress here.
-      </p>
+      <div className="rounded-lg border border-dashed border-[var(--border-dim)] px-3 py-4 text-step--1 text-[var(--muted)]">
+        No active work right now. When agents run tasks, need approval, or fail, you’ll see it here.
+        <div className="mt-2 flex flex-wrap gap-2">
+          <Button onClick={() => navigate("/activity")}>Open activity</Button>
+          <Button onClick={() => navigate("/approvals")}>Approvals</Button>
+        </div>
+      </div>
     );
   }
   return (
     <div className="flex flex-col gap-4">
       {pendingApprovals.length > 0 ? (
         <section>
-          <div className="mb-1 text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--warn)]">
-            Needs approval ({pendingApprovals.length})
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <div className="text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--warn)]">
+              Needs approval ({pendingApprovals.length})
+            </div>
+            <button type="button" className="text-step--2 text-[var(--accent)] hover:underline" onClick={() => navigate("/approvals")}>Review</button>
           </div>
           <ul className="flex flex-col gap-1.5">
             {pendingApprovals.slice(0, 5).map(({ approval, projectName }) => (
@@ -80,15 +87,18 @@ function ActivityRailContent({
                   {approval.action || "approval requested"}
                 </div>
                 <div className="truncate text-step--2 text-[var(--muted)]">{projectName}</div>
-                {approval.task_id && approval.project_id ? (
-                  <button
-                    type="button"
-                    onClick={() => onOpenTask(approval.project_id!, approval.task_id!)}
-                    className="mt-1 text-step--2 text-[var(--accent)] hover:underline"
-                  >
-                    Open task →
-                  </button>
-                ) : null}
+                <div className="mt-1.5 flex flex-wrap gap-2">
+                  <button type="button" className="text-step--2 font-medium text-[var(--accent)] hover:underline" onClick={() => navigate("/approvals")}>Open approvals</button>
+                  {approval.task_id && approval.project_id ? (
+                    <button
+                      type="button"
+                      onClick={() => onOpenTask(approval.project_id!, approval.task_id!)}
+                      className="text-step--2 text-[var(--muted)] hover:underline"
+                    >
+                      Open task
+                    </button>
+                  ) : null}
+                </div>
               </li>
             ))}
           </ul>
