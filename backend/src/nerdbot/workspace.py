@@ -541,3 +541,55 @@ def write_file(data_dir: str | Path, task_id: str, relpath: str, content: str) -
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
     return target
+
+
+def git_log(root: Path, limit: int = 20) -> list[dict[str, str]]:
+    if not is_git_repo(Path(root)):
+        return []
+    limit = max(1, min(int(limit or 20), 100))
+    fmt = "%H%x1f%h%x1f%an%x1f%ad%x1f%s"
+    result = _git(Path(root), "log", f"-{limit}", "--date=iso-strict", f"--pretty=format:{fmt}")
+    if result.returncode != 0:
+        return []
+    commits = []
+    for line in result.stdout.splitlines():
+        parts = line.split("\x1f")
+        if len(parts) != 5:
+            continue
+        commits.append({"hash": parts[0], "short": parts[1], "author": parts[2], "date": parts[3], "subject": parts[4]})
+    return commits
+
+
+def git_commit_all(root: Path, message: str) -> dict[str, Any]:
+    root = Path(root)
+    if not is_git_repo(root):
+        raise ValueError("workspace is not a git repository")
+    msg = (message or "").strip()
+    if not msg:
+        raise ValueError("commit message is required")
+    add = _git(root, "add", "-A")
+    if add.returncode != 0:
+        raise RuntimeError((add.stderr or add.stdout or "git add failed").strip())
+    staged = _git(root, "diff", "--cached", "--name-only")
+    if staged.returncode == 0 and not staged.stdout.strip():
+        head = _git(root, "rev-parse", "HEAD")
+        return {"committed": False, "message": "nothing to commit", "branch": current_branch(root), "head": head.stdout.strip() if head.returncode == 0 else ""}
+    commit = _git(root, "commit", "-m", msg)
+    if commit.returncode != 0:
+        raise RuntimeError((commit.stderr or commit.stdout or "git commit failed").strip())
+    head = _git(root, "rev-parse", "HEAD")
+    return {"committed": True, "branch": current_branch(root), "head": head.stdout.strip() if head.returncode == 0 else "", "output": (commit.stdout or "").strip()}
+
+
+def git_discard_uncommitted(root: Path) -> dict[str, Any]:
+    root = Path(root)
+    if not is_git_repo(root):
+        raise ValueError("workspace is not a git repository")
+    reset = _git(root, "reset", "--hard", "HEAD")
+    if reset.returncode != 0:
+        raise RuntimeError((reset.stderr or reset.stdout or "git reset failed").strip())
+    clean = _git(root, "clean", "-fd")
+    if clean.returncode != 0:
+        raise RuntimeError((clean.stderr or clean.stdout or "git clean failed").strip())
+    head = _git(root, "rev-parse", "HEAD")
+    return {"rolled_back": True, "branch": current_branch(root), "head": head.stdout.strip() if head.returncode == 0 else ""}

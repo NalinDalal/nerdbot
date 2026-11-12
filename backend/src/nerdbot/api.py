@@ -5317,6 +5317,85 @@ def create_app() -> FastAPI:
         store.record_event(conn, project_id, "workspace", result["to"], "workspace.path.renamed")
         return result
 
+    @app.get("/projects/{project_id}/workspace/git/status")
+    def get_project_workspace_git_status(
+        project_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        project = store.get_project(conn, project_id)
+        if project is None:  # pragma: no cover
+            raise HTTPException(status_code=404, detail="project not found")
+        root = workspace_mgr.configured_project_root(project, _data_dir())
+        meta = workspace_mgr.workspace_meta(root)
+        return {
+            "git": bool(meta.get("git")),
+            "branch": meta.get("branch", ""),
+            "dirty": bool(meta.get("dirty")),
+            "changes": meta.get("changes", []),
+        }
+
+    @app.get("/projects/{project_id}/workspace/git/log")
+    def get_project_workspace_git_log(
+        project_id: str,
+        limit: int = 20,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        project = store.get_project(conn, project_id)
+        if project is None:  # pragma: no cover
+            raise HTTPException(status_code=404, detail="project not found")
+        root = workspace_mgr.configured_project_root(project, _data_dir())
+        try:
+            commits = workspace_mgr.git_log(root, limit=limit)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"commits": commits, "branch": workspace_mgr.current_branch(root) if workspace_mgr.is_git_repo(root) else ""}
+
+    @app.post("/projects/{project_id}/workspace/git/commit")
+    def commit_project_workspace_changes(
+        project_id: str,
+        body: schemas.WorkspaceCommit,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        project = store.get_project(conn, project_id)
+        if project is None:  # pragma: no cover
+            raise HTTPException(status_code=404, detail="project not found")
+        if workspace_mgr.workspace_busy(project_id):
+            raise HTTPException(status_code=409, detail="a live run is using this workspace")
+        root = workspace_mgr.configured_project_root(project, _data_dir())
+        try:
+            result = workspace_mgr.git_commit_all(root, body.message or "")
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if result.get("committed"):
+            store.record_event(conn, project_id, "workspace", project_id, "workspace.git.committed")
+        return result
+
+    @app.post("/projects/{project_id}/workspace/git/rollback-uncommitted")
+    def rollback_project_workspace_uncommitted(
+        project_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        project = store.get_project(conn, project_id)
+        if project is None:  # pragma: no cover
+            raise HTTPException(status_code=404, detail="project not found")
+        if workspace_mgr.workspace_busy(project_id):
+            raise HTTPException(status_code=409, detail="a live run is using this workspace")
+        root = workspace_mgr.configured_project_root(project, _data_dir())
+        try:
+            result = workspace_mgr.git_discard_uncommitted(root)
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        store.record_event(conn, project_id, "workspace", project_id, "workspace.git.rolled_back_uncommitted")
+        return result
+
 
     @app.post("/projects/{project_id}/workspace/command")
     def run_project_workspace_command(

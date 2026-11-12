@@ -88,6 +88,10 @@ class WorkspaceCommand(_Body):
     command: str | None = None
     timeout_s: float | None = None
 
+class WorkspaceCommit(_Body):
+    message: str | None = None
+
+
 
 
 class TerminalCreate(_Body):
