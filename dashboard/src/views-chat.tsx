@@ -648,6 +648,8 @@ function ThreadPane({
   const [attachedFiles, setAttachedFiles] = useState<Array<{ name: string; content: string }>>([]);
   const [mates, setMates] = useState<Teammate[]>([]);
   const [researchJobIds, setResearchJobIds] = useState<string[]>([]);
+  const [workspaceApprovals, setWorkspaceApprovals] = useState<any[]>([]);
+  const [approvalBusy, setApprovalBusy] = useState<string | null>(null);
   // Speaker announced by the stream's first event, so the in-flight bubble
   // already carries the teammate's face and name while the reply arrives.
   const [streamSpeaker, setStreamSpeaker] = useState<{
@@ -687,6 +689,18 @@ function ThreadPane({
       .then((res) => setMates(res.teammates || []))
       .catch(() => setMates([]));
   }, [projectId]);
+
+  useEffect(() => {
+    let alive = true;
+    const load = () => {
+      api.projectApprovals(projectId, "pending")
+        .then((res) => { if (alive) setWorkspaceApprovals(res.approvals || []); })
+        .catch(() => { if (alive) setWorkspaceApprovals([]); });
+    };
+    load();
+    const t = setInterval(load, 8000);
+    return () => { alive = false; clearInterval(t); };
+  }, [projectId, threadId]);
 
   const mateOf = (teammateId?: string): Teammate | null =>
     (teammateId && mates.find((m) => m.id === teammateId)) || null;
@@ -1062,6 +1076,29 @@ function ThreadPane({
           )}
         </div>
       </div>
+
+      {workspaceApprovals.length > 0 ? (
+        <div className="mx-4 mt-3 rounded-xl border border-[var(--warn)] bg-[var(--warn-dim)] p-3 md:mx-6">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <div className="text-step--1 font-semibold text-[var(--text)]">Needs your decision ({workspaceApprovals.length})</div>
+            <Button onClick={() => navigate("/approvals")}>Open approvals</Button>
+          </div>
+          <div className="flex flex-col gap-2">
+            {workspaceApprovals.slice(0, 3).map((a: any) => (
+              <div key={a.id} className="rounded-lg border border-[var(--border-dim)] bg-[var(--surface)] px-3 py-2">
+                <div className="font-medium text-[var(--text)]">{String(a.action || "Approval requested").replace(/_/g, " ")}</div>
+                <div className="mt-0.5 text-step--2 text-[var(--muted)]">{a.description ? String(a.description).slice(0, 160) : (a.task_id ? `Task ${a.task_id}` : "Review details in approvals")}</div>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <Button variant="primary" disabled={approvalBusy === a.id} onClick={async () => { setApprovalBusy(a.id); try { await api.decideApproval(a.id, "approved"); toast.success("Approved"); setWorkspaceApprovals((prev) => prev.filter((x) => x.id !== a.id)); } catch (e) { notifyError(e); } finally { setApprovalBusy(null); } }}>Approve</Button>
+                  <Button variant="danger" disabled={approvalBusy === a.id} onClick={async () => { setApprovalBusy(a.id); try { await api.decideApproval(a.id, "denied"); toast.success("Rejected"); setWorkspaceApprovals((prev) => prev.filter((x) => x.id !== a.id)); } catch (e) { notifyError(e); } finally { setApprovalBusy(null); } }}>Reject</Button>
+                  {a.task_id ? <Button onClick={() => openTask(projectId, a.task_id)}>Open task</Button> : null}
+                </div>
+              </div>
+            ))}
+            {workspaceApprovals.length > 3 ? <div className="text-step--2 text-[var(--muted)]">+{workspaceApprovals.length - 3} more pending in approvals.</div> : null}
+          </div>
+        </div>
+      ) : null}
 
       {view.data?.thread.summary ? (
         <details className="mx-4 mt-3 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 md:mx-6">
