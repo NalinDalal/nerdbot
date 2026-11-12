@@ -190,7 +190,7 @@ export function HomeOverviewView() {
       items.push({
         key: `failed-${f.run.id}`,
         title: f.task?.description ? f.task.description.slice(0, 80) : "Failed execution",
-        detail: `${f.projectName} · failed${f.run.error ? `: ${String(f.run.error).slice(0, 120)}` : ""}`,
+        detail: `${f.projectName} · failed${(f.run as any).error ? `: ${String((f.run as any).error).slice(0, 120)}` : ""}`,
         href: f.task ? `/p/${f.projectId}/t/${f.task.id}` : `/p/${f.projectId}`,
         tone: "danger",
       });
@@ -247,7 +247,7 @@ export function HomeOverviewView() {
         all.push({
           id: `run-${run.id}`,
           label: task?.description || "Execution",
-          detail: `${pname} · ${String(run.status).replace(/_/g, " ")}${run.error ? ` · ${String(run.error).slice(0, 80)}` : ""}`,
+          detail: `${pname} · ${String(run.status).replace(/_/g, " ")}${(run as any).error ? ` · ${String((run as any).error).slice(0, 80)}` : ""}`,
           href: task ? `/p/${b.project.id}/t/${task.id}` : `/p/${b.project.id}`,
           status: run.status,
           when: run.finished_at || run.started_at,
@@ -292,9 +292,9 @@ export function HomeOverviewView() {
   const recentResultsPartial = (recentResults.data?.partialFailures ?? 0) > 0;
 
   const systemSignals = useMemo(() => {
-    const signals: Array<{ key: string; label: string; value: string; tone: "neutral" | "warn" | "bad" | "good" }> = [
+    const signals: Array<{ key: string; label: string; value: string; tone: "neutral" | "warn" | "bad" | "ok" }> = [
       { key: "projects", label: "Projects", value: String(data.bundles.length), tone: "neutral" },
-      { key: "running", label: "Running", value: String(data.runningTasks || data.activeRuns.length), tone: data.activeRuns.length ? "good" : "neutral" },
+      { key: "running", label: "Running", value: String(data.runningTasks || data.activeRuns.length), tone: data.activeRuns.length ? "ok" : "neutral" },
       { key: "approvals", label: "Pending approvals", value: String(data.pendingApprovals.length), tone: data.pendingApprovals.length ? "warn" : "neutral" },
       { key: "blocked", label: "Blocked/failed", value: String(data.blockedTasks + data.failedRuns.length), tone: (data.blockedTasks + data.failedRuns.length) ? "bad" : "neutral" },
     ];
@@ -333,8 +333,8 @@ export function HomeOverviewView() {
                 <div className="text-step--2 text-[var(--muted)]">{s.label}</div>
                 <div className="mt-1 flex items-center gap-2">
                   <span className="text-step-1 font-semibold text-[var(--text)]">{s.value}</span>
-                  <Badge variant={s.tone === "bad" ? "bad" : s.tone === "warn" ? "warn" : s.tone === "good" ? "good" : "neutral"}>
-                    {s.tone === "bad" ? "Attention" : s.tone === "warn" ? "Review" : s.tone === "good" ? "Active" : "OK"}
+                  <Badge variant={s.tone === "bad" ? "bad" : s.tone === "warn" ? "warn" : s.tone === "ok" ? "ok" : "neutral"}>
+                    {s.tone === "bad" ? "Attention" : s.tone === "warn" ? "Review" : s.tone === "ok" ? "Active" : "OK"}
                   </Badge>
                 </div>
               </div>
@@ -374,8 +374,8 @@ export function HomeOverviewView() {
           <div className="mb-2 flex flex-wrap items-center gap-2 text-step--2 text-[var(--muted)]">
             <Badge variant="neutral">{workforce.botCount} agents</Badge>
             <Badge variant="neutral">{workforce.teamCount} teams</Badge>
-            <Badge variant={workforce.activeCount ? "good" : "neutral"}>{workforce.activeCount} active</Badge>
-            <Button size="sm" onClick={() => navigate("/bots")}>View agents</Button>
+            <Badge variant={workforce.activeCount ? "ok" : "neutral"}>{workforce.activeCount} active</Badge>
+            <Button onClick={() => navigate("/bots")}>View agents</Button>
           </div>
           {workforce.bots.length === 0 ? (
             <EmptyState title="No agents configured" hint="Create teammates/agents to distribute and track work." action={<Button onClick={() => navigate("/bots")}>Manage agents</Button>} />
@@ -385,7 +385,7 @@ export function HomeOverviewView() {
                 <button key={bot.id} className="rounded-lg border border-[var(--border-dim)] bg-[var(--surface)] px-4 py-3 text-left transition-colors hover:bg-[var(--surface-2)]" onClick={() => navigate(`/bots/${bot.id}`)}>
                   <div className="flex items-center justify-between gap-2">
                     <div className="truncate text-step--1 font-medium text-[var(--text)]">{bot.name}</div>
-                    <Badge variant={bot.status === "active" ? "good" : bot.status === "assigned" ? "info" : "neutral"}>{bot.status}</Badge>
+                    <Badge variant={bot.status === "active" ? "ok" : bot.status === "assigned" ? "info" : "neutral"}>{bot.status}</Badge>
                   </div>
                   <div className="mt-1 text-step--2 text-[var(--muted)]">{bot.detail}</div>
                 </button>
@@ -404,7 +404,7 @@ export function HomeOverviewView() {
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="truncate text-step--1 font-medium text-[var(--text)]">{r.label}</div>
-                      <Badge variant={r.status === "failed" ? "bad" : r.status === "running" ? "good" : r.status === "awaiting_approval" ? "warn" : "neutral"}>{r.status.replace(/_/g, " ")}</Badge>
+                      <Badge variant={r.status === "failed" ? "bad" : r.status === "running" ? "ok" : r.status === "awaiting_approval" ? "warn" : "neutral"}>{r.status.replace(/_/g, " ")}</Badge>
                     </div>
                     <div className="mt-0.5 text-step--2 text-[var(--muted)]">{r.detail}{r.when ? ` · ${relativeTime(r.when)}` : ""}</div>
                   </div>
