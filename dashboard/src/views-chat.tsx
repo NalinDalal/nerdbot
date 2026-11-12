@@ -36,10 +36,12 @@ function ActivityRailContent({
   summary,
   onOpenTask,
   onReload,
+  projectId,
 }: {
   summary: ReturnType<typeof useWorkspaceSummary>;
   onOpenTask: (projectId: string, taskId: string) => void;
   onReload: () => void;
+  projectId?: string;
 }) {
   if (summary.loading && !summary.data) return <LoadingState lines={2} />;
   if (summary.loadFailed) {
@@ -49,8 +51,18 @@ function ActivityRailContent({
       </div>
     );
   }
-  const s = summary.summary;
-  const { activeRuns, failedRuns, pendingApprovals, queuedTasks } = s;
+  const raw = summary.summary;
+  const scoped = projectId
+    ? (() => {
+        const bundle = raw.bundles.find((b) => b.project.id === projectId);
+        const activeRuns = raw.activeRuns.filter((r) => r.projectId === projectId);
+        const failedRuns = raw.failedRuns.filter((r) => r.projectId === projectId);
+        const pendingApprovals = raw.pendingApprovals.filter((a: any) => a.approval?.project_id === projectId || raw.bundles.find((b)=>b.project.id===projectId)?.approvals.some((x:any)=>x.id===a.approval?.id));
+        const queuedTasks = bundle ? bundle.tasks.filter((t) => ["pending", "queued", "ready"].includes(t.status)).length : 0;
+        return { activeRuns, failedRuns, pendingApprovals, queuedTasks, workspaceName: bundle?.project.repository };
+      })()
+    : null;
+  const { activeRuns, failedRuns, pendingApprovals, queuedTasks } = scoped || raw;
   const hasAnything =
     activeRuns.length > 0 ||
     failedRuns.length > 0 ||
@@ -59,7 +71,7 @@ function ActivityRailContent({
   if (!hasAnything) {
     return (
       <div className="rounded-lg border border-dashed border-[var(--border-dim)] px-3 py-4 text-step--1 text-[var(--muted)]">
-        No active work right now. When agents run tasks, need approval, or fail, you’ll see it here.
+        {projectId ? `No active work in ${scoped?.workspaceName || "this workspace"} right now.` : "No active work right now."} When agents run tasks, need approval, or fail, you’ll see it here.
         <div className="mt-2 flex flex-wrap gap-2">
           <Button onClick={() => navigate("/activity")}>Open activity</Button>
           <Button onClick={() => navigate("/approvals")}>Approvals</Button>
@@ -69,6 +81,7 @@ function ActivityRailContent({
   }
   return (
     <div className="flex flex-col gap-4">
+      {projectId ? <div className="text-step--2 text-[var(--muted)]">Focused on <span className="font-medium text-[var(--text-soft)]">{scoped?.workspaceName || "this workspace"}</span></div> : null}
       {pendingApprovals.length > 0 ? (
         <section>
           <div className="mb-1 flex items-center justify-between gap-2">
@@ -458,6 +471,7 @@ export function ConversationView({
               ) : (
                 <ActivityRailContent
                   summary={summary}
+                  projectId={!isHome ? resolvedProjectId : undefined}
                   onOpenTask={openTask}
                   onReload={() => summary.reload()}
                 />
@@ -510,6 +524,7 @@ export function ConversationView({
             <div className="flex-1 overflow-y-auto px-4 py-3">
               <ActivityRailContent
                 summary={summary}
+                projectId={!isHome ? resolvedProjectId : undefined}
                 onOpenTask={(pid, tid) => {
                   setMobileRailOpen(false);
                   openTask(pid, tid);
