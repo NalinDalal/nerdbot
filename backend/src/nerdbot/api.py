@@ -5317,6 +5317,47 @@ def create_app() -> FastAPI:
         store.record_event(conn, project_id, "workspace", result["to"], "workspace.path.renamed")
         return result
 
+
+    @app.post("/projects/{project_id}/workspace/command")
+    def run_project_workspace_command(
+        project_id: str,
+        body: schemas.WorkspaceCommand,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        project = store.get_project(conn, project_id)
+        if project is None:  # pragma: no cover
+            raise HTTPException(status_code=404, detail="project not found")
+        command = (body.command or "").strip()
+        if not command:
+            raise HTTPException(status_code=400, detail="command is required")
+        if workspace_mgr.workspace_busy(project_id):
+            raise HTTPException(status_code=409, detail="a live run is using this workspace")
+        root = workspace_mgr.configured_project_root(project, _data_dir())
+        timeout_s = float(body.timeout_s or 60.0)
+        timeout_s = max(1.0, min(timeout_s, 600.0))
+        try:
+            # Reuse runtime policy checks, env scrubbing, and bounded local execution.
+            result = runtime_mod.LocalRuntimeAdapter().start_run(command, root, timeout_s=timeout_s)
+            status = "completed" if result.exit_code == 0 else "failed"
+            return {
+                "ok": result.exit_code == 0,
+                "status": status,
+                "exit_code": result.exit_code,
+                "output": runtime_mod.scrub_secrets(result.output or ""),
+                "stdout": runtime_mod.scrub_secrets(result.stdout or ""),
+                "stderr": runtime_mod.scrub_secrets(result.stderr or ""),
+            }
+        except runtime_mod.BlockedError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except runtime_mod.RunCancelled as exc:
+            return {"ok": False, "status": "cancelled", "exit_code": -1, "output": str(exc), "stdout": "", "stderr": str(exc)}
+        except runtime_mod.ExecutionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"command failed: {exc}") from exc
+
     @app.get("/projects/{project_id}/workspace/diff")
     def get_project_workspace_diff(
         project_id: str,

@@ -84,6 +84,11 @@ class WorkspaceFileRename(_Body):
 class WorkspaceMkdir(_Body):
     path: str | None = None
 
+class WorkspaceCommand(_Body):
+    command: str | None = None
+    timeout_s: float | None = None
+
+
 
 class TerminalCreate(_Body):
     cols: int | None = None
