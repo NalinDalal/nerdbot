@@ -471,7 +471,7 @@ describe("views", () => {
     expect(thread.summary).toBe("tea talk");
   });
 
-  it("home route parses to chat", async () => {
+  it("root and overview routes parse correctly", async () => {
     vi.stubGlobal("window", { location: { pathname: "/", search: "" } });
     const { parseRoute } = await import("./app");
     const at = (path: string) => {
@@ -480,9 +480,11 @@ describe("views", () => {
       (window.location as { search: string }).search = search ? `?${search}` : "";
       return parseRoute();
     };
-    expect(at("/")).toEqual({ name: "home" });
+    expect(at("/")).toEqual({ name: "chat" });
+    expect(at("/chat")).toEqual({ name: "chat" });
+    expect(at("/overview")).toEqual({ name: "overview" });
     expect(at("/projects")).toEqual({ name: "projects" });
-    expect(at("/nope")).toEqual({ name: "home" });
+    expect(at("/nope")).toEqual({ name: "chat" });
     vi.unstubAllGlobals();
   });
 

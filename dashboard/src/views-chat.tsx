@@ -2596,27 +2596,45 @@ function CommandCenter({
     return bundle?.project.repository || "workspace";
   };
 
+  const suggestions = [
+    "Research the best alternatives to Linear and prepare a comparison.",
+    "Build a simple app plan and break it into tasks.",
+    "Analyze the documents in my workspace and summarize key points.",
+    "Delegate a coding task to an agent and show progress.",
+    "Help me decide what to work on next.",
+  ];
+
   return (
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-[860px] flex-col gap-6 px-4 py-8 md:px-6">
+      <div className="mx-auto flex w-full max-w-[860px] flex-col gap-6 px-4 py-8 md:px-6 md:py-10">
         {/* The workspace banner renders once above this pane (ConversationView). */}
 
-        {/* Phase 0: chat-first, teammate-first home */}
-        <div className="space-y-2">
-          <h1 className="text-step-3 font-semibold tracking-tight text-[var(--text)]">
-            Chat with your AI team
+        <div className="space-y-3 pt-2 md:pt-6">
+          <h1 className="text-step-3 font-semibold tracking-tight text-[var(--text)] md:text-[2rem]">
+            What are we working on?
           </h1>
-          <p className="max-w-2xl text-step-0 text-[var(--text-soft)]">
-            Start a conversation, ask for research, or plan work with your teammates. NerdBot shows what is running, what needs your approval, and what finished.
+          <p className="max-w-2xl text-step-0 text-[var(--muted)]">
+            Chat with NerdBot to research, plan, delegate work to agents, and track results in one place.
           </p>
+          <div className="flex flex-wrap gap-2 pt-1">
+            {suggestions.map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => setDraft(s)}
+                className="rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-left text-step--1 text-[var(--text-soft)] transition-colors hover:border-[var(--border-focus)] hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
+              >
+                {s}
+              </button>
+            ))}
+          </div>
         </div>
 
-        {/* Teammate strip */}
         {(summary.summary.bots.length > 0 || bots.length > 0) ? (
-          <section aria-label="Your team" className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
+          <section aria-label="Your agents" className="rounded-xl border border-[var(--border-dim)] bg-[var(--surface)] p-3">
             <div className="mb-2 flex items-center justify-between gap-2">
-              <SectionLabel>Your team</SectionLabel>
-              <Button variant="ghost" onClick={() => navigate("/bots")}>View all</Button>
+              <SectionLabel>Your agents</SectionLabel>
+              <Button variant="ghost" onClick={() => navigate("/bots")}>Manage agents</Button>
             </div>
             <div className="flex flex-wrap gap-2">
               {(summary.summary.bots.length > 0 ? summary.summary.bots : bots).slice(0, 8).map((bot) => {
@@ -2624,22 +2642,22 @@ function CommandCenter({
                 return (
                   <div
                     key={bot.id}
-                    className="inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface-2)] pr-1"
+                    className="inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--bg)] pr-1"
                   >
                     <button
                       type="button"
-                      className="inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-step--1 text-[var(--text)] hover:bg-[var(--surface-3)]"
+                      className="inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-step--1 text-[var(--text)] hover:bg-[var(--surface-2)]"
                       onClick={() => navigate(`/bot/${bot.id}`)}
-                      title="Open teammate"
+                      title="Open agent"
                     >
                       <BotFace face={bot.face} size={18} status={bot.status} />
-                      <span className="max-w-[10rem] truncate">{bot.persona || bot.name || "Teammate"}</span>
+                      <span className="max-w-[10rem] truncate">{bot.persona || bot.name || "Agent"}</span>
                       <StatusDot status={bot.status} />
                     </button>
                     {handle ? (
                       <button
                         type="button"
-                        className="rounded-full px-1.5 py-0.5 text-step--2 text-[var(--muted)] hover:bg-[var(--surface-3)] hover:text-[var(--text)]"
+                        className="rounded-full px-1.5 py-0.5 text-step--2 text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
                         onClick={() => setDraft((d) => insertMention(d, handle))}
                         title={`Mention @${handle}`}
                         aria-label={`Mention @${handle}`}
@@ -2653,22 +2671,6 @@ function CommandCenter({
             </div>
           </section>
         ) : null}
-
-        {/* Capability-honest quick actions (modes available inside conversations) */}
-        <section aria-label="What you can do now" className="flex flex-wrap gap-2">
-          <span className="inline-flex items-center rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-1 text-step--2 text-[var(--text-soft)]">
-            Chat
-          </span>
-          <span className="inline-flex items-center rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-1 text-step--2 text-[var(--text-soft)]" title="Available in conversation mode when tools are enabled">
-            Research (web search)
-          </span>
-          <span className="inline-flex items-center rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-1 text-step--2 text-[var(--text-soft)]" title="Available in conversation mode">
-            Delegate work
-          </span>
-          <span className="inline-flex items-center rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-1 text-step--2 text-[var(--text-soft)]">
-            Plan &amp; run tasks
-          </span>
-        </section>
 
         {planDraft?.plan?.tasks ? (
           <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
@@ -2737,7 +2739,7 @@ function CommandCenter({
         {/* Primary composer */}
         <div className="scroll-mt-6">
           <form onSubmit={send}>
-            <div className="flex flex-col gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-2 shadow-sm focus-within:border-[var(--border-focus)] sm:flex-row sm:items-end">
+            <div className="flex flex-col gap-2 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-3 shadow-sm transition-colors focus-within:border-[var(--border-focus)] sm:flex-row sm:items-end">
               <textarea
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
@@ -2749,14 +2751,14 @@ function CommandCenter({
                 }}
                 placeholder={
                   hasProvider
-                    ? "Message your team, ask for research, or describe work to plan…"
-                    : "Connect a model to start chatting."
+                    ? "Ask NerdBot anything, or describe work for your agents…"
+                    : "Connect a model to start chatting with NerdBot."
                 }
                 disabled={busy || !hasProvider}
                 spellCheck
-                rows={3}
+                rows={4}
                 aria-label="Start a conversation"
-                className="max-h-48 min-h-[64px] w-full min-w-0 resize-none bg-transparent p-2.5 leading-relaxed outline-none placeholder:text-[var(--faint)] disabled:opacity-50 sm:w-auto sm:flex-1"
+                className="max-h-56 min-h-[96px] w-full min-w-0 resize-none bg-transparent p-2 text-step-0 leading-relaxed outline-none placeholder:text-[var(--faint)] disabled:opacity-50 sm:w-auto sm:flex-1"
               />
               <div className="flex items-center gap-2 justify-end">
                 <ModelChip

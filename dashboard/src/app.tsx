@@ -29,7 +29,7 @@ import { EmptyState, useTheme, ThemeButton } from "./components";
 import { onRouteChange, navigate } from "./router";
 
 export type Route =
-  | { name: "home" }
+  | { name: "overview" }
   | { name: "work" }
   | { name: "activity" }
   | { name: "workbench"; projectId?: string }
@@ -55,7 +55,8 @@ export function parseRoute(): Route {
   exact screen the owner needs: /p/<id>?tab=Providers */
   const params = new URLSearchParams(window.location.search);
   const parts = window.location.pathname.split("/").filter(Boolean);
-  if (parts.length === 0) return { name: "home" };
+  if (parts.length === 0) return { name: "chat" };
+  if (parts[0] === "overview" || parts[0] === "home") return { name: "overview" };
   if (parts[0] === "work") {
     // Compatibility redirect: /work -> /activity (Phase 1).
     if (typeof window !== "undefined") {
@@ -106,7 +107,7 @@ export function parseRoute(): Route {
   }
   if (parts[0] === "gallery") return { name: "gallery" };
   if (parts[0] === "approvals") return { name: "approvals" };
-  return { name: "home" };
+  return { name: "chat" };
 }
 
 export { navigate } from "./router";
@@ -117,6 +118,7 @@ export { navigate } from "./router";
  *  They are ornamental: every item keeps its visible label. */
 const NAV_ICONS: Record<string, string> = {
   home: "M2.5 7 8 2.5 13.5 7v6.5h-4v-4h-3v4h-4z",
+  chat: "M2.5 3.5h11v7h-6.2L4.5 13v-2.5h-2zM5 6.5h6M5 8.5h4",
   work: "M2.5 3.5h11v9h-11zM5.5 3.5V2h5v1.5M2.5 7h11",
   teammates: "M6 7.5a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5ZM1.5 13c0-2.2 2-3.5 4.5-3.5s4.5 1.3 4.5 3.5M10.5 3.4a2 2 0 0 1 0 3.8M11.5 9.7c1.8.3 3 1.4 3 3.3",
   projects: "M2.5 4.5h4l1.2 1.5h5.8v7.5h-11zM2.5 4.5V3h4",
@@ -253,7 +255,7 @@ function Sidebar({
     href: string;
     badge?: number;
   }> = [
-    { label: "Home", icon: "home", routes: ["home"], href: "/" },
+    { label: "Chat", icon: "chat", routes: ["chat"], href: "/" },
     {
       label: "Workspaces",
       icon: "projects",
@@ -263,28 +265,21 @@ function Sidebar({
     {
       label: "Agents",
       icon: "teammates",
-      routes: ["bots", "bot", "teams", "team"],
+      routes: ["bots", "bot"],
       href: "/bots",
     },
     {
-      label: "Work",
+      label: "Tasks & Activity",
       icon: "work",
-      routes: ["activity", "work", "task", "approvals", "boards", "board"],
+      routes: ["activity", "work", "task"],
       href: "/activity",
       badge: nav.pendingApprovals,
     },
-    { label: "Chat", icon: "home", routes: ["chat"], href: "/chat" },
     {
       label: "Library",
       icon: "library",
-      routes: ["library", "libraryDoc", "gallery"],
+      routes: ["library", "libraryDoc"],
       href: "/library",
-    },
-    {
-      label: "Settings",
-      icon: "settings",
-      routes: ["settings", "capabilities"],
-      href: "/settings",
     },
   ];
 
@@ -342,42 +337,14 @@ function Sidebar({
           </button>
           {advancedOpen ? (
             <div className="mt-0.5 flex flex-col gap-0.5">
-              <NavItem
-                label="Teams & groups"
-                icon="teams"
-                active={route.name === "teams" || route.name === "team"}
-                onClick={() => onNavigate("/teams")}
-              />
-              <NavItem
-                label="Boards"
-                icon="boards"
-                active={route.name === "boards" || route.name === "board"}
-                onClick={() => onNavigate("/boards")}
-              />
-              <NavItem
-                label="Gallery"
-                icon="gallery"
-                active={route.name === "gallery"}
-                onClick={() => onNavigate("/gallery")}
-              />
-              <NavItem
-                label="Workbench"
-                icon="workbench"
-                active={route.name === "workbench"}
-                onClick={() => onNavigate("/workbench")}
-              />
-              <NavItem
-                label="Approvals inbox"
-                icon="approvals"
-                active={route.name === "approvals"}
-                onClick={() => onNavigate("/approvals")}
-              />
-              <NavItem
-                label="Capabilities"
-                icon="settings"
-                active={route.name === "capabilities"}
-                onClick={() => onNavigate("/capabilities")}
-              />
+              <NavItem label="Teams & Groups" icon="teams" active={route.name === "teams" || route.name === "team"} onClick={() => onNavigate("/teams")} />
+              <NavItem label="Boards" icon="boards" active={route.name === "boards" || route.name === "board"} onClick={() => onNavigate("/boards")} />
+              <NavItem label="Workbench" icon="workbench" active={route.name === "workbench"} onClick={() => onNavigate("/workbench")} />
+              <NavItem label="Approvals" icon="approvals" active={route.name === "approvals"} onClick={() => onNavigate("/approvals")} />
+              <NavItem label="Gallery" icon="gallery" active={route.name === "gallery"} onClick={() => onNavigate("/gallery")} />
+              <NavItem label="Capabilities" icon="settings" active={route.name === "capabilities"} onClick={() => onNavigate("/capabilities")} />
+              <NavItem label="Settings" icon="settings" active={route.name === "settings"} onClick={() => onNavigate("/settings")} />
+              <NavItem label="Overview" icon="home" active={route.name === "overview"} onClick={() => onNavigate("/overview")} />
             </div>
           ) : null}
         </div>
@@ -501,7 +468,7 @@ export default function App() {
    * conversational surface. All other routes render full-page views. */
   let content: ReactNode;
   switch (route.name) {
-    case "home":
+    case "overview":
       content = <HomeOverviewView />;
       break;
     case "chat":
@@ -645,11 +612,11 @@ export default function App() {
         className="fixed inset-x-0 bottom-0 z-40 flex items-stretch border-t border-[var(--border-dim)] bg-[var(--bg)]/95 backdrop-blur md:hidden"
       >
         {[
-          { label: "Home", icon: "home", href: "/", routes: ["home"] },
+          { label: "Chat", icon: "chat", href: "/", routes: ["chat"] },
           { label: "Workspaces", icon: "projects", href: "/projects", routes: ["projects", "project"] },
-          { label: "Agents", icon: "teammates", href: "/bots", routes: ["bots", "bot", "teams", "team"] },
-          { label: "Work", icon: "work", href: "/activity", routes: ["activity", "work", "task", "approvals", "boards", "board"] },
-          { label: "Chat", icon: "home", href: "/chat", routes: ["chat"] },
+          { label: "Agents", icon: "teammates", href: "/bots", routes: ["bots", "bot"] },
+          { label: "Activity", icon: "work", href: "/activity", routes: ["activity", "work", "task"] },
+          { label: "Library", icon: "library", href: "/library", routes: ["library", "libraryDoc"] },
         ].map((item) => {
           const active = item.routes.includes(route.name);
           return (
