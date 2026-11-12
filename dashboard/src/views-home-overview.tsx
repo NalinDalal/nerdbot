@@ -13,7 +13,7 @@ import {
   useAsync,
 } from "./components";
 import { useWorkspaceSummary } from "./views-home";
-import type { LibraryDoc, Task } from "./types";
+import type { Approval, LibraryDoc, Task } from "./types";
 
 type RecentWorkspace = {
   id: string;
@@ -23,12 +23,20 @@ type RecentWorkspace = {
 };
 
 type UnfinishedItem = {
-  id: string; // stable task id
   key: string;
   title: string;
   state: string;
   detail: string;
   href: string;
+};
+
+type AttentionItem = {
+  key: string;
+  title: string;
+  detail: string;
+  href?: string;
+  approval?: { id: string };
+  tone: "warn" | "danger";
 };
 
 function taskStateLabel(status: string): string {
@@ -162,95 +170,152 @@ export function HomeOverviewView() {
     });
   }, [projectList, data.bundles, data.activeRuns, counts]);
 
-  const unfinishedWork = useMemo((): UnfinishedItem[] => {
-    const seenTaskIds = new Set<string>();
-    const items: UnfinishedItem[] = [];
-    const pushTask = (projectId: string, projectName: string, t: Task) => {
-      if (seenTaskIds.has(t.id)) return; // stable ID dedupe, never merge distinct records by title
-      if (["done", "cancelled"].includes(t.status)) return;
-      seenTaskIds.add(t.id);
-      items.push({
-        id: t.id,
-        key: `task-${t.id}`,
-        title: (t.description || "").trim() || "Untitled task",
-        state: taskStateLabel(t.status),
-        detail: `${projectName} · ${taskStateLabel(t.status).toLowerCase()}`,
-        href: `/p/${projectId}/t/${t.id}`,
-      });
-    };
-
-    // Prefer tasks surfaced via active runs first (distinct task records)
-    for (const r of data.activeRuns) {
-      if (r.task) pushTask(r.projectId, r.projectName, r.task);
-    }
-    for (const b of data.bundles) {
-      const projectName = b.project.repository || "Workspace";
-      for (const t of b.tasks) pushTask(b.project.id, projectName, t);
-    }
-
-    const rank = (s: string) => (s === "running" ? 0 : s === "awaiting_approval" ? 1 : s === "blocked" ? 2 : s === "ready" ? 3 : s === "pending" ? 4 : s === "failed" ? 5 : 6);
-    items.sort((a, b) => {
-      const sa = a.detail.endsWith("running") ? "running" : a.detail.endsWith("awaiting approval") ? "awaiting_approval" : a.detail.endsWith("blocked") ? "blocked" : a.detail.endsWith("ready") ? "ready" : a.detail.endsWith("pending") ? "pending" : a.detail.endsWith("failed") ? "failed" : "";
-      const sb = b.detail.endsWith("running") ? "running" : b.detail.endsWith("awaiting approval") ? "awaiting_approval" : b.detail.endsWith("blocked") ? "blocked" : b.detail.endsWith("ready") ? "ready" : b.detail.endsWith("pending") ? "pending" : b.detail.endsWith("failed") ? "failed" : "";
-      return rank(sa) - rank(sb);
-    });
-    return items.slice(0, 8);
-  }, [data]);
-
-  const actionable = useMemo(() => {
-    const items: Array<{ key: string; title: string; detail: string; href?: string; tone: "warn" | "danger"; approval?: { id: string } }> = [];
+  const actionable = useMemo((): AttentionItem[] => {
+    const items: AttentionItem[] = [];
+    const seenApprovalIds = new Set<string>();
     for (const { approval, projectName } of data.pendingApprovals) {
+      if (seenApprovalIds.has(approval.id)) continue;
+      seenApprovalIds.add(approval.id);
+      const action = String((approval as { action?: string }).action || "Action").replace(/_/g, " ");
       items.push({
         key: `approval-${approval.id}`,
-        title: approval.action || "Approval requested",
-        detail: `${projectName}${approval.task_id ? " · linked task" : ""}`,
-        href: approval.task_id && approval.project_id ? `/p/${approval.project_id}/t/${approval.task_id}` : "/approvals",
-        tone: "warn",
+        title: action,
+        detail: `${projectName} · needs approval`,
+        href: `/approvals`,
         approval: { id: approval.id },
+        tone: "warn",
       });
     }
-    for (const { run, task, projectName, projectId } of data.failedRuns.slice(0, 4)) {
+    for (const f of data.failedRuns.slice(0, 3)) {
       items.push({
-        key: `failed-run-${run.id}`,
-        title: task?.description?.trim() || "Run failed",
-        detail: `${projectName} · failed`,
-        href: task ? `/p/${projectId}/t/${task.id}` : "/work",
+        key: `failed-${f.run.id}`,
+        title: f.task?.description ? f.task.description.slice(0, 80) : "Failed execution",
+        detail: `${f.projectName} · failed${f.run.error ? `: ${String(f.run.error).slice(0, 120)}` : ""}`,
+        href: f.task ? `/p/${f.projectId}/t/${f.task.id}` : `/p/${f.projectId}`,
         tone: "danger",
       });
     }
-    // blocked/awaiting tasks (compact) - distinct by task id
-    const seenTaskIds = new Set(items.filter((i) => i.key.startsWith("task-")).map((i) => i.key));
+    return items.slice(0, 6);
+  }, [data.pendingApprovals, data.failedRuns]);
+
+  const unfinishedWork = useMemo((): UnfinishedItem[] => {
+    const items: UnfinishedItem[] = [];
+    // use summary-derived signals to stay consistent with actionable
+    const seenTaskIds = new Set<string>();
     for (const b of data.bundles) {
       for (const t of b.tasks) {
-        if (t.status !== "blocked" && t.status !== "awaiting_approval") continue;
-        const key = `task-${t.id}`;
-        if (seenTaskIds.has(key)) continue;
-        // avoid duplicating items already represented by approval/failure href
-        if (items.some((i) => i.href === `/p/${b.project.id}/t/${t.id}`)) continue;
-        seenTaskIds.add(key);
+        if (["done", "cancelled"].includes(t.status)) continue;
+        if (!["pending", "ready", "running", "awaiting_approval", "blocked"].includes(t.status)) continue;
+        if (seenTaskIds.has(t.id)) continue;
+        seenTaskIds.add(t.id);
         items.push({
-          key,
-          title: (t.description || "").trim() || "Task needs attention",
-          detail: `${b.project.repository || "Workspace"} · ${t.status.replace("_", " ")}`,
+          key: `task-${t.id}`,
+          title: (t.description || "").trim() || "Task",
+          state: taskStateLabel(t.status),
+          detail: `${b.project.repository || "Workspace"} · ${t.status.replace(/_/g, " ")}`,
           href: `/p/${b.project.id}/t/${t.id}`,
-          tone: t.status === "blocked" ? "danger" : "warn",
         });
       }
     }
+    const rank = (s: string) => ({ awaiting_approval: 0, blocked: 1, running: 2, ready: 3, pending: 4 }[s] ?? 9);
+    items.sort((a, b) => {
+      const sa = (data.bundles.flatMap((x) => x.tasks).find((t) => `task-${t.id}` === a.key)?.status) || "pending";
+      const sb = (data.bundles.flatMap((x) => x.tasks).find((t) => `task-${t.id}` === b.key)?.status) || "pending";
+      return rank(sa) - rank(sb);
+    });
     return items.slice(0, 6);
-  }, [data]);
+  }, [data.bundles]);
+
+  const recentRuns = useMemo(() => {
+    const all: Array<{ id: string; label: string; detail: string; href: string; status: string; when?: string }> = [];
+    for (const r of data.activeRuns) {
+      all.push({
+        id: `run-a-${r.run.id}`,
+        label: r.task?.description || "Running task",
+        detail: `${r.projectName} · running`,
+        href: r.task ? `/p/${r.projectId}/t/${r.task.id}` : `/p/${r.projectId}`,
+        status: "running",
+        when: r.run.started_at,
+      });
+    }
+    for (const b of data.bundles) {
+      const pname = b.project.repository || "Workspace";
+      for (const run of b.runs) {
+        if (run.status === "running") continue;
+        if (!["completed", "failed", "cancelled", "awaiting_approval"].includes(run.status)) continue;
+        const task = b.tasks.find((t) => t.id === run.task_id);
+        all.push({
+          id: `run-${run.id}`,
+          label: task?.description || "Execution",
+          detail: `${pname} · ${String(run.status).replace(/_/g, " ")}${run.error ? ` · ${String(run.error).slice(0, 80)}` : ""}`,
+          href: task ? `/p/${b.project.id}/t/${task.id}` : `/p/${b.project.id}`,
+          status: run.status,
+          when: run.finished_at || run.started_at,
+        });
+      }
+    }
+    all.sort((a, b) => String(b.when || "").localeCompare(String(a.when || "")));
+    return all.slice(0, 8);
+  }, [data.activeRuns, data.bundles]);
+
+  const workforce = useMemo(() => {
+    const activeTaskOwners = new Set<string>();
+    const byBot = new Map<string, { running: number; unfinished: number; projectNames: Set<string> }>();
+    for (const b of data.bundles) {
+      const pname = b.project.repository || "Workspace";
+      for (const t of b.tasks) {
+        if (!t.owner_teammate_id) continue;
+        if (!["pending", "ready", "running", "awaiting_approval", "blocked"].includes(t.status)) continue;
+        const cur = byBot.get(t.owner_teammate_id) || { running: 0, unfinished: 0, projectNames: new Set<string>() };
+        cur.unfinished += 1;
+        if (t.status === "running") cur.running += 1;
+        cur.projectNames.add(pname);
+        byBot.set(t.owner_teammate_id, cur);
+        if (t.status === "running") activeTaskOwners.add(t.owner_teammate_id);
+      }
+    }
+    const bots = data.bots.slice(0, 12).map((bot) => {
+      const stats = byBot.get(bot.id);
+      return {
+        id: bot.id,
+        name: bot.name || bot.slug || "Agent",
+        status: activeTaskOwners.has(bot.id) ? "active" : stats ? "assigned" : "idle",
+        detail: stats
+          ? `${stats.running > 0 ? `${stats.running} running · ` : ""}${stats.unfinished} open${stats.projectNames.size ? ` · ${Array.from(stats.projectNames).slice(0, 2).join(", ")}` : ""}`
+          : "No active or queued work",
+      };
+    });
+    return { bots, teamCount: data.teams.length, botCount: data.bots.length, activeCount: activeTaskOwners.size };
+  }, [data.bots, data.teams, data.bundles]);
 
   const results = recentResults.data?.items ?? [];
   const recentResultsPartial = (recentResults.data?.partialFailures ?? 0) > 0;
+
+  const systemSignals = useMemo(() => {
+    const signals: Array<{ key: string; label: string; value: string; tone: "neutral" | "warn" | "bad" | "good" }> = [
+      { key: "projects", label: "Projects", value: String(data.bundles.length), tone: "neutral" },
+      { key: "running", label: "Running", value: String(data.runningTasks || data.activeRuns.length), tone: data.activeRuns.length ? "good" : "neutral" },
+      { key: "approvals", label: "Pending approvals", value: String(data.pendingApprovals.length), tone: data.pendingApprovals.length ? "warn" : "neutral" },
+      { key: "blocked", label: "Blocked/failed", value: String(data.blockedTasks + data.failedRuns.length), tone: (data.blockedTasks + data.failedRuns.length) ? "bad" : "neutral" },
+    ];
+    if (summary.loadFailed) signals.push({ key: "load", label: "Data load", value: "Partial", tone: "warn" });
+    return signals;
+  }, [data, summary.loadFailed]);
 
   return (
     <Page width="data">
       <div className="flex flex-col gap-5 pb-16 md:gap-8 md:pb-0">
         <PageHeader
           eyebrow="Home"
-          title="Home"
-          description="Pick up recent work, handle blockers, and open results."
-          actions={<Button variant="primary" onClick={() => navigate("/work")}>Start work</Button>}
+          title="Operational overview"
+          description="Monitor projects, agents, executions, approvals, and system signals from one place."
+          actions={
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={() => navigate("/approvals")}>Approvals</Button>
+              <Button onClick={() => navigate("/workbench")}>Workbench</Button>
+              <Button variant="primary" onClick={() => navigate("/work")}>Start work</Button>
+            </div>
+          }
         />
 
         {summary.loading && !summary.data ? <LoadingState lines={4} /> : null}
@@ -261,7 +326,26 @@ export function HomeOverviewView() {
           </div>
         ) : null}
 
-        <PageSection title="Recent workspaces" description="Where work was last happening.">
+        <PageSection title="System and operational health" description="Important indicators, notifications, and recovery signals.">
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+            {systemSignals.map((s) => (
+              <div key={s.key} className="rounded-lg border border-[var(--border-dim)] bg-[var(--surface)] px-3 py-3">
+                <div className="text-step--2 text-[var(--muted)]">{s.label}</div>
+                <div className="mt-1 flex items-center gap-2">
+                  <span className="text-step-1 font-semibold text-[var(--text)]">{s.value}</span>
+                  <Badge variant={s.tone === "bad" ? "bad" : s.tone === "warn" ? "warn" : s.tone === "good" ? "good" : "neutral"}>
+                    {s.tone === "bad" ? "Attention" : s.tone === "warn" ? "Review" : s.tone === "good" ? "Active" : "OK"}
+                  </Badge>
+                </div>
+              </div>
+            ))}
+          </div>
+          {summary.loadFailed ? (
+            <div className="mt-2 text-step--2 text-[var(--muted)]">Action: retry data load or open affected project/workspace for details. Partial results are shown where available.</div>
+          ) : null}
+        </PageSection>
+
+        <PageSection title="Recent workspaces" description="Active projects and where work was last happening.">
           {recentWorkspaces.length === 0 ? (
             <EmptyState
               title="No workspaces yet"
@@ -276,19 +360,97 @@ export function HomeOverviewView() {
                     <div className="truncate text-step--1 font-medium text-[var(--text)]">{ws.name}</div>
                     <div className="mt-0.5 text-step--2 text-[var(--muted)]">{ws.detail}</div>
                   </div>
-                  <Button onClick={() => navigate(ws.href)}>Open</Button>
+                  <div className="flex gap-2">
+                    <Button onClick={() => navigate(ws.href)}>Open</Button>
+                    <Button onClick={() => navigate(`/p/${ws.id}/workbench`)}>Workbench</Button>
+                  </div>
                 </div>
               ))}
             </div>
           )}
         </PageSection>
 
+        <PageSection title="Agent and workforce visibility" description="Teammates, active work, ownership, and team context.">
+          <div className="mb-2 flex flex-wrap items-center gap-2 text-step--2 text-[var(--muted)]">
+            <Badge variant="neutral">{workforce.botCount} agents</Badge>
+            <Badge variant="neutral">{workforce.teamCount} teams</Badge>
+            <Badge variant={workforce.activeCount ? "good" : "neutral"}>{workforce.activeCount} active</Badge>
+            <Button size="sm" onClick={() => navigate("/bots")}>View agents</Button>
+          </div>
+          {workforce.bots.length === 0 ? (
+            <EmptyState title="No agents configured" hint="Create teammates/agents to distribute and track work." action={<Button onClick={() => navigate("/bots")}>Manage agents</Button>} />
+          ) : (
+            <div className="grid gap-2 md:grid-cols-2">
+              {workforce.bots.map((bot) => (
+                <button key={bot.id} className="rounded-lg border border-[var(--border-dim)] bg-[var(--surface)] px-4 py-3 text-left transition-colors hover:bg-[var(--surface-2)]" onClick={() => navigate(`/bots/${bot.id}`)}>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="truncate text-step--1 font-medium text-[var(--text)]">{bot.name}</div>
+                    <Badge variant={bot.status === "active" ? "good" : bot.status === "assigned" ? "info" : "neutral"}>{bot.status}</Badge>
+                  </div>
+                  <div className="mt-1 text-step--2 text-[var(--muted)]">{bot.detail}</div>
+                </button>
+              ))}
+            </div>
+          )}
+        </PageSection>
+
+        <PageSection title="Execution visibility" description="Running, recent, completed, and failed executions with recovery paths.">
+          {recentRuns.length === 0 ? (
+            <EmptyState title="No recent executions" hint="Task runs and agent executions will appear here." action={<Button onClick={() => navigate("/activity")}>Open activity</Button>} />
+          ) : (
+            <div className="flex flex-col divide-y divide-[var(--border-dim)] rounded-lg border border-[var(--border-dim)] bg-[var(--surface)]">
+              {recentRuns.map((r) => (
+                <button key={r.id} className="flex w-full items-start justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--surface-2)]" onClick={() => navigate(r.href)}>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="truncate text-step--1 font-medium text-[var(--text)]">{r.label}</div>
+                      <Badge variant={r.status === "failed" ? "bad" : r.status === "running" ? "good" : r.status === "awaiting_approval" ? "warn" : "neutral"}>{r.status.replace(/_/g, " ")}</Badge>
+                    </div>
+                    <div className="mt-0.5 text-step--2 text-[var(--muted)]">{r.detail}{r.when ? ` · ${relativeTime(r.when)}` : ""}</div>
+                  </div>
+                  <span className="text-step--2 text-[var(--faint)]">Open</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {data.failedRuns.length > 0 ? (
+            <div className="mt-2 text-step--2 text-[var(--muted)]">Recovery: open failed items to inspect errors, outputs, and rerun or adjust tasks.</div>
+          ) : null}
+        </PageSection>
+
+        <PageSection title="Approval center" description="Pending approvals, context, and decision workflows.">
+          {data.pendingApprovals.length === 0 ? (
+            <EmptyState title="No pending approvals" hint="Approval requests and their context will appear here." action={<Button onClick={() => navigate("/approvals")}>Open approvals</Button>} />
+          ) : (
+            <div className="flex flex-col gap-2">
+              {data.pendingApprovals.slice(0, 6).map(({ approval, projectName }) => {
+                const a = approval as Approval & { action?: string; description?: string };
+                return (
+                  <div key={approval.id} className="rounded-lg border border-[var(--warn)] bg-[var(--warn-dim)] px-4 py-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-medium text-[var(--text)]">{String(a.action || "Action").replace(/_/g, " ")}</span>
+                          <Badge variant="warn">Pending</Badge>
+                        </div>
+                        <div className="mt-1 text-step--1 text-[var(--muted)]">{projectName}{a.description ? ` · ${String(a.description).slice(0, 140)}` : ""}</div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Button variant="primary" disabled={busyApproval === approval.id} onClick={() => void decide(approval.id, "approved")}>Approve</Button>
+                        <Button variant="danger" disabled={busyApproval === approval.id} onClick={() => void decide(approval.id, "denied")}>Reject</Button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              <div><Button onClick={() => navigate("/approvals")}>View all approvals and history</Button></div>
+            </div>
+          )}
+        </PageSection>
+
         <PageSection title="Unfinished work" description="Tasks that still need progress or review.">
           {unfinishedWork.length === 0 ? (
-            <EmptyState
-              title="No unfinished work"
-              hint="Pending, running, blocked, and awaiting tasks will appear here."
-            />
+            <EmptyState title="No unfinished work" hint="Pending, running, blocked, and awaiting tasks will appear here." />
           ) : (
             <div className="flex flex-col divide-y divide-[var(--border-dim)] rounded-lg border border-[var(--border-dim)] bg-[var(--surface)]">
               {unfinishedWork.map((item) => (
@@ -308,7 +470,7 @@ export function HomeOverviewView() {
         </PageSection>
 
         {actionable.length > 0 ? (
-          <PageSection title="Needs attention" description="Approvals and blockers that need action.">
+          <PageSection title="Needs attention" description="Important operational notifications and actionable issues.">
             <div className="flex flex-col gap-2">
               {actionable.map((item) => (
                 <div key={item.key} className={`rounded-lg border px-4 py-3 ${item.tone === "danger" ? "border-[var(--danger)] bg-[var(--danger-dim)]" : "border-[var(--warn)] bg-[var(--warn-dim)]"}`}>
@@ -331,9 +493,6 @@ export function HomeOverviewView() {
                       ) : null}
                     </div>
                   </div>
-                  {item.href ? (
-                    <button className="mt-2 text-step--1 text-[var(--accent)] hover:underline" onClick={() => navigate(item.href!)}>View details</button>
-                  ) : null}
                 </div>
               ))}
             </div>
