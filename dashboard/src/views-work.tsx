@@ -105,6 +105,11 @@ export function WorkView() {
   const [workspace, setWorkspace] = useState("all");
   const [agent, setAgent] = useState("all");
   const [showNew, setShowNew] = useState(false);
+  const [showReminder, setShowReminder] = useState(false);
+  const [reminderMsg, setReminderMsg] = useState("");
+  const [reminderWhen, setReminderWhen] = useState("");
+  const [reminderProject, setReminderProject] = useState("");
+  const [reminderBusy, setReminderBusy] = useState(false);
 
   const reload = () => { data.reload(); jobs.reload(); };
 
@@ -174,6 +179,27 @@ export function WorkView() {
     if (j.source_type === "schedule" && j.project_id) return navigate(`/p/${j.project_id}?tab=Schedules`);
   };
 
+  const createReminder = async () => {
+    const message = reminderMsg.trim();
+    if (!message) { notifyError(new Error("Reminder message is required")); return; }
+    setReminderBusy(true);
+    try {
+      const body: { message: string; project_id?: string; due_at?: string } = { message };
+      if (reminderProject) body.project_id = reminderProject;
+      if (reminderWhen) body.due_at = new Date(reminderWhen).toISOString();
+      await api.createReminder(body);
+      setShowReminder(false);
+      setReminderMsg("");
+      setReminderWhen("");
+      setReminderProject("");
+      jobs.reload();
+    } catch (err) {
+      notifyError(err);
+    } finally {
+      setReminderBusy(false);
+    }
+  };
+
   const jobAction = async (j: JobItem, action: "cancel" | "retry" | "pause" | "resume") => {
     setJobBusy(j.id + action);
     try {
@@ -200,8 +226,8 @@ export function WorkView() {
     <Page>
       <PageHeader
         title="Activity"
-        description="Jobs, schedules, reminders, and task work in one place."
-        actions={<><Button onClick={reload}>Refresh</Button><Button variant="primary" onClick={() => setShowNew(true)}>New task</Button></>}
+        description="Track runs, research, schedules, reminders, and task work across your workspaces."
+        actions={<><Button onClick={reload}>Refresh</Button><Button onClick={() => setShowReminder(true)}>New reminder</Button><Button variant="primary" onClick={() => setShowNew(true)}>New task</Button></>}
       />
 
       {decisions.length > 0 ? (
@@ -338,6 +364,34 @@ export function WorkView() {
 
       {showNew ? (
         <NewTaskModal projects={projects} bots={bots} onClose={() => setShowNew(false)} onCreated={(projectId, taskId) => { setShowNew(false); reload(); navigate(`/p/${projectId}/t/${taskId}`); }} />
+      ) : null}
+      {showReminder ? (
+        <Modal title="New reminder" onClose={() => setShowReminder(false)}>
+          <div className="flex flex-col gap-3">
+            <label className="block">
+              <span className="mb-1 block text-step--1 font-medium text-[var(--text-soft)]">What to remind you about</span>
+              <textarea value={reminderMsg} onChange={(e) => setReminderMsg(e.target.value)} rows={3} className={`${FORM_INPUT} min-h-[88px]`} placeholder="e.g. Review the deployment checklist" />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-step--1 font-medium text-[var(--text-soft)]">When</span>
+              <input type="datetime-local" value={reminderWhen} onChange={(e) => setReminderWhen(e.target.value)} className={FORM_INPUT} />
+              <span className="mt-1 block text-step--2 text-[var(--faint)]">Optional. Leave empty if you only want to save it now.</span>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-step--1 font-medium text-[var(--text-soft)]">Workspace (optional)</span>
+              <select value={reminderProject} onChange={(e) => setReminderProject(e.target.value)} className={FORM_SELECT}>
+                <option value="">No workspace</option>
+                {projects.map((p) => <option key={p.id} value={p.id}>{p.repository || "Workspace"}</option>)}
+              </select>
+            </label>
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <Button onClick={() => setShowReminder(false)} disabled={reminderBusy}>Cancel</Button>
+              <Button variant="primary" onClick={() => void createReminder()} disabled={reminderBusy || !reminderMsg.trim()}>
+                {reminderBusy ? "Saving..." : "Create reminder"}
+              </Button>
+            </div>
+          </div>
+        </Modal>
       ) : null}
     </Page>
   );

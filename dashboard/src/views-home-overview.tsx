@@ -313,7 +313,7 @@ export function HomeOverviewView() {
             <div className="flex flex-wrap gap-2">
               <Button onClick={() => navigate("/approvals")}>Approvals</Button>
               <Button onClick={() => navigate("/workbench")}>Workbench</Button>
-              <Button variant="primary" onClick={() => navigate("/work")}>Start work</Button>
+              <Button variant="primary" onClick={() => navigate("/activity")}>Start work</Button>
             </div>
           }
         />

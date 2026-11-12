@@ -171,11 +171,11 @@ export function SettingsView() {
 
           {section === "providers" ? (
             <PageSection
-              title="Projects & models"
-              description="Each project keeps its own teammates, tasks, files, and model connection."
+              title="Workspaces & models"
+              description="Connect a model to each workspace so agents can chat and run work. Each workspace keeps its own agents, tasks, files, and providers."
               actions={
                 <>
-                  <Button onClick={() => setCreatingWorkspace(true)}>New project</Button>
+                  <Button onClick={() => setCreatingWorkspace(true)}>New workspace</Button>
                   <Button
                     variant="primary"
                     onClick={() => setConnectTo(workspaces.data?.[0]?.project.id ?? null)}
@@ -191,7 +191,7 @@ export function SettingsView() {
         ) : workspaces.error ? (
           <ErrorState error={workspaces.error} onRetry={workspaces.reload} />
         ) : (workspaces.data ?? []).length === 0 ? (
-          <EmptyState title="No projects" hint="Create one below, then connect a model." />
+          <EmptyState title="No workspaces yet" hint="Create a workspace, then connect a model to start using chat and agents." />
         ) : (
           <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
             {(workspaces.data ?? []).map(({ project, counts, providers }, index) => {
