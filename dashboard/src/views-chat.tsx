@@ -427,9 +427,12 @@ export function ConversationView({
             className="hidden w-72 shrink-0 flex-col border-l border-[var(--border-dim)] bg-[var(--bg)] lg:flex"
           >
             <div className="flex items-center justify-between px-3 py-2.5">
-              <span className="text-step--2 font-medium uppercase tracking-[0.16em] text-[var(--faint)]">
-                Activity
-              </span>
+              <div>
+                <span className="text-step--2 font-medium uppercase tracking-[0.16em] text-[var(--faint)]">
+                  Live activity
+                </span>
+                <div className="mt-0.5 text-step--2 text-[var(--muted)]">Runs, approvals, and agent work</div>
+              </div>
               <button
                 type="button"
                 aria-label="Collapse activity rail"
@@ -1996,7 +1999,7 @@ function ExecutionView({
     <div className="mx-4 mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-sm md:mx-6">
       <div className="flex items-center justify-between border-b border-[var(--border-dim)] px-4 py-2">
         <span className="text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--faint)]">
-          Execution
+          Live work
         </span>
         <div className="flex items-center gap-2">
           {task ? (
@@ -2019,10 +2022,15 @@ function ExecutionView({
       <div className="flex flex-col gap-3 px-4 py-3 text-step--1">
         <div>
           <div className="font-medium text-[var(--text)]">{task?.description || "Loading task…"}</div>
-          <div className="mt-1.5 flex flex-wrap items-center gap-3">
+          <div className="mt-1.5 flex flex-wrap items-center gap-2.5">
             <StatusBadge status={task?.status || "pending"} label={taskStatusLabel(task?.status || "pending")} />
-            {owner && (
-              <span className="text-[var(--muted)]">{owner.persona || "bot"} is responsible</span>
+            {owner ? (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--border-dim)] bg-[var(--bg)] px-2 py-0.5 text-[var(--text-soft)]">
+                <BotFace face={owner.face} size={14} status={owner.status} animated={task?.status === "running" || latestRun?.status === "running"} />
+                <span>{owner.persona || owner.name || "Agent"}</span>
+              </span>
+            ) : (
+              <span className="text-[var(--muted)]">Unassigned agent</span>
             )}
             {latestRun && (
               <StatusDot
@@ -2031,20 +2039,29 @@ function ExecutionView({
                 pulse={latestRun.status === "running"}
               />
             )}
+            {task?.status === "running" || latestRun?.status === "running" ? (
+              <span className="text-step--2 text-[var(--info)]">Working now…</span>
+            ) : null}
           </div>
         </div>
         {awaitingDecision && (
-          <div className="rounded-md border border-[var(--warn)] bg-[var(--warn-dim)] px-3 py-2 text-[var(--warn)]">
-            This run needs your decision. It appears in the banner above.
+          <div className="rounded-md border border-[var(--warn)] bg-[var(--warn-dim)] px-3 py-2 text-[var(--text)]">
+            <div className="font-medium text-[var(--warn)]">Needs your decision</div>
+            <div className="mt-0.5 text-step--1 text-[var(--text-soft)]">This work is waiting for approval/review. Review in Approvals or open the task for full context.</div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Button onClick={() => navigate("/approvals")}>Open approvals</Button>
+              {task ? <Button onClick={() => openTask(task.project_id, task.id)}>Open task</Button> : null}
+            </div>
           </div>
         )}
         {latestRun && latestRun.status === "failed" && (
-          <div className="rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-[var(--danger)]">
-            <div className="font-medium">
+          <div className="rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2">
+            <div className="font-medium text-[var(--danger)]">Run failed — recovery needed</div>
+            <div className="mt-1 text-step--1 text-[var(--text)]">
               {explainRunError(
                 { command: task?.command || "", project_id: task?.project_id || state.projectId },
                 { stderr: latestRun.stderr || "", output_excerpt: latestRun.output_excerpt || "" },
-              ).message || "Run failed."}
+              ).message || "The latest run failed."}
             </div>
             <div className="mt-2 flex flex-wrap gap-2">
               <Button
@@ -2056,6 +2073,7 @@ function ExecutionView({
                   try {
                     await api.retryTask(task.id);
                     toast.message("Retry started.");
+                    view.reload();
                   } catch (err) {
                     notifyError(err);
                   } finally {
@@ -2065,12 +2083,7 @@ function ExecutionView({
               >
                 {retryBusy ? "Retrying…" : "Retry"}
               </Button>
-              <button
-                onClick={() => openTask(task!.project_id, task!.id)}
-                className="text-step--1 text-[var(--accent)] hover:underline"
-              >
-                Open task →
-              </button>
+              <Button onClick={() => openTask(task!.project_id, task!.id)}>Open task details</Button>
             </div>
           </div>
         )}
