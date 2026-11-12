@@ -958,7 +958,7 @@ function ThreadPane({
             <span aria-hidden>·</span>
             <span>Model: {providers.find((provider) => provider.id === thread?.provider_id)?.name ?? "Default"}</span>
             <span aria-hidden>·</span>
-            <span>{mates.length} agent{mates.length === 1 ? "" : "s"} · mention with @</span>
+            <span>{mates.length} agent{mates.length === 1 ? "" : "s"} · @mention to address</span>
             <span aria-hidden>·</span>
             <span>{relativeTime((thread?.updated_at || thread?.created_at) ?? "")}</span>
           </div>
@@ -1008,6 +1008,45 @@ function ThreadPane({
               </>
             ) : null}
           </div>
+        </div>
+      </div>
+
+      <div className="mx-4 mt-3 flex flex-col gap-2 rounded-xl border border-[var(--border-dim)] bg-[var(--surface)] p-3 md:mx-6">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-step--2 text-[var(--muted)]">Target agent</span>
+          <select
+            value=""
+            onChange={(e) => {
+              const mate = mates.find((m) => m.id === e.target.value);
+              if (!mate) return;
+              setContextPanel(null);
+              setDraft((prev) => insertMention(prev, mentionHandle(mate)));
+              requestAnimationFrame(() => composerRef.current?.focus());
+              e.target.value = "";
+            }}
+            className={`${FORM_SELECT} h-8`}
+            aria-label="Target agent"
+            disabled={mates.length === 0}
+          >
+            <option value="">Select agent to mention…</option>
+            {mates.map((m) => (
+              <option key={m.id} value={m.id}>{m.persona || m.name || "Agent"}{m.status ? ` · ${m.status}` : ""}</option>
+            ))}
+          </select>
+          <Button variant="ghost" onClick={() => setContextPanel("bots")}>View all</Button>
+          <Button variant="ghost" onClick={() => navigate("/bots")}>Manage agents</Button>
+        </div>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-step--2">
+          {providers.find((p) => p.id === thread?.provider_id) ? (
+            <span className="text-[var(--muted)]">Model ready in this workspace.</span>
+          ) : (
+            <span className="text-[var(--warn)]">No explicit model set. <button type="button" className="font-medium underline underline-offset-4" onClick={() => switchProvider(providers[0]?.id || "__default__")}>Set model</button> or <button type="button" className="font-medium underline underline-offset-4" onClick={() => navigate("/settings")}>Connect model</button></span>
+          )}
+          {mates.length === 0 ? (
+            <span className="text-[var(--muted)]">No agents in this workspace. <button type="button" className="font-medium text-[var(--accent)] hover:underline" onClick={() => navigate("/bots")}>Create agent</button></span>
+          ) : (
+            <span className="text-[var(--muted)]">Agents can be mentioned with @ or assigned work from tasks/approvals.</span>
+          )}
         </div>
       </div>
 
