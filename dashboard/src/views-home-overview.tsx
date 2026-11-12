@@ -258,6 +258,10 @@ export function HomeOverviewView() {
     return all.slice(0, 8);
   }, [data.activeRuns, data.bundles]);
 
+  const hasAgents = (data.bots?.length ?? 0) > 0;
+  const hasActivity = data.activeRuns.length > 0 || data.pendingApprovals.length > 0 || unfinishedWork.length > 0 || recentRuns.length > 0;
+  const isNew = !hasActivity && (!hasAgents || data.bundles.length <= 1) && unfinishedWork.length === 0;
+
   const workforce = useMemo(() => {
     const activeTaskOwners = new Set<string>();
     const byBot = new Map<string, { running: number; unfinished: number; projectNames: Set<string> }>();
@@ -301,10 +305,6 @@ export function HomeOverviewView() {
     if (summary.loadFailed) signals.push({ key: "load", label: "Data load", value: "Partial", tone: "warn" });
     return signals;
   }, [data, summary.loadFailed]);
-
-  const hasAgents = (data.bots?.length ?? 0) > 0;
-  const hasActivity = data.activeRuns.length > 0 || data.pendingApprovals.length > 0 || unfinishedWork.length > 0 || recentRuns.length > 0;
-  const isNew = !hasActivity && (!hasAgents || data.bundles.length <= 1) && unfinishedWork.length === 0;
 
   return (
     <Page width="data">
