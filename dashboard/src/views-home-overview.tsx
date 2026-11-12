@@ -13,6 +13,7 @@ import {
   useAsync,
 } from "./components";
 import { useWorkspaceSummary } from "./views-home";
+import { providerIsUsable } from "./readiness";
 import type { Approval, LibraryDoc, Task } from "./types";
 
 type RecentWorkspace = {
@@ -123,6 +124,27 @@ export function HomeOverviewView() {
       )
       .slice(0, 5);
     return { items, partialFailures };
+  }, []);
+
+  const readiness = useAsync(async () => {
+    const res = await api.listProjects().catch(() => ({ projects: [] as Array<{ id: string; repository: string }>, counts: {} as any }));
+    const projectsList = res.projects ?? [];
+    const providersByProject = await Promise.all(
+      projectsList.map(async (p) => {
+        try {
+          const r = await api.listProviders(p.id);
+          return r.providers || [];
+        } catch {
+          return [] as any[];
+        }
+      })
+    );
+    const allProviders = providersByProject.flat();
+    const hasUsableProvider = allProviders.some((p) => providerIsUsable(p as any));
+    return {
+      projectCount: projectsList.length,
+      hasUsableProvider,
+    };
   }, []);
 
   const [busyApproval, setBusyApproval] = useState<string | null>(null);
@@ -258,9 +280,19 @@ export function HomeOverviewView() {
     return all.slice(0, 8);
   }, [data.activeRuns, data.bundles]);
 
+  const projectCount = Math.max(data.bundles.length, readiness.data?.projectCount ?? 0);
+  const hasWorkspace = projectCount > 0;
+  const hasUsableProvider = readiness.data?.hasUsableProvider ?? false;
   const hasAgents = (data.bots?.length ?? 0) > 0;
-  const hasActivity = data.activeRuns.length > 0 || data.pendingApprovals.length > 0 || unfinishedWork.length > 0 || recentRuns.length > 0;
-  const isNew = !hasActivity && (!hasAgents || data.bundles.length <= 1) && unfinishedWork.length === 0;
+  const hasStartedWork = data.activeRuns.length > 0 || data.pendingApprovals.length > 0 || unfinishedWork.length > 0 || recentRuns.length > 0 || data.bundles.some((b) => b.tasks.length > 0);
+  const isNew = !hasStartedWork && (!hasAgents || data.bundles.length <= 1) && unfinishedWork.length === 0;
+  const setupSteps = [
+    { key: "workspace", label: "Workspace", done: hasWorkspace, detail: hasWorkspace ? "Ready" : "Create or open a workspace", action: () => navigate("/projects"), actionLabel: "Open workspaces" },
+    { key: "model", label: "Model", done: hasUsableProvider, detail: hasUsableProvider ? "Connected" : "Connect a provider in Settings", action: () => navigate("/settings"), actionLabel: "Connect model" },
+    { key: "agent", label: "Agent", done: hasAgents, detail: hasAgents ? `${data.bots.length} agent${data.bots.length === 1 ? "" : "s"}` : "Create an agent to do work", action: () => navigate("/bots"), actionLabel: "Create agent" },
+    { key: "work", label: "First run", done: hasStartedWork, detail: hasStartedWork ? "Work in progress or completed" : "Start a chat or create a task", action: () => navigate("/chat"), actionLabel: "Start chat" },
+  ];
+  const setupIncomplete = setupSteps.some((s) => !s.done);
 
   const workforce = useMemo(() => {
     const activeTaskOwners = new Set<string>();
@@ -326,36 +358,41 @@ export function HomeOverviewView() {
           }
         />
 
-        {isNew ? (
+        {setupIncomplete ? (
           <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5 md:p-6">
-            <div className="mb-4">
-              <h2 className="text-step-1 font-semibold tracking-tight text-[var(--text)]">Get started</h2>
-              <p className="mt-1 max-w-[70ch] text-step-0 text-[var(--muted)]">
-                NerdBot helps you chat with agents, run tasks, manage workspaces, and keep work moving. Start with these steps.
-              </p>
+            <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="text-step-1 font-semibold tracking-tight text-[var(--text)]">{isNew ? "Get started" : "Setup checklist"}</h2>
+                <p className="mt-1 max-w-[70ch] text-step-0 text-[var(--muted)]">
+                  {isNew
+                    ? "NerdBot helps you chat with agents, run tasks, and manage work in one place. Complete these steps to get productive."
+                    : "Finish setup so your agents can chat and run work reliably."}
+                </p>
+              </div>
+              <Badge variant={hasUsableProvider ? "ok" : "warn"}>{hasUsableProvider ? "Model connected" : "Model needed"}</Badge>
             </div>
             <div className="grid gap-3 md:grid-cols-2">
-              <button onClick={() => navigate("/projects")} className="rounded-lg border border-[var(--border-dim)] bg-[var(--bg)] p-4 text-left transition-colors hover:border-[var(--border-focus)] hover:bg-[var(--surface-2)]">
-                <div className="text-step--2 font-medium uppercase tracking-[0.12em] text-[var(--faint)]">Step 1</div>
-                <div className="mt-1 text-step-0 font-semibold text-[var(--text)]">Create or open a workspace</div>
-                <div className="mt-1 text-step--1 text-[var(--muted)]">Workspaces hold your agents, chats, tasks, files, and settings.</div>
-              </button>
-              <button onClick={() => navigate("/settings")} className="rounded-lg border border-[var(--border-dim)] bg-[var(--bg)] p-4 text-left transition-colors hover:border-[var(--border-focus)] hover:bg-[var(--surface-2)]">
-                <div className="text-step--2 font-medium uppercase tracking-[0.12em] text-[var(--faint)]">Step 2</div>
-                <div className="mt-1 text-step-0 font-semibold text-[var(--text)]">Connect a model</div>
-                <div className="mt-1 text-step--1 text-[var(--muted)]">Add a provider in Settings so agents can respond and run work.</div>
-              </button>
-              <button onClick={() => navigate("/bots")} className="rounded-lg border border-[var(--border-dim)] bg-[var(--bg)] p-4 text-left transition-colors hover:border-[var(--border-focus)] hover:bg-[var(--surface-2)]">
-                <div className="text-step--2 font-medium uppercase tracking-[0.12em] text-[var(--faint)]">Step 3</div>
-                <div className="mt-1 text-step-0 font-semibold text-[var(--text)]">Set up agents</div>
-                <div className="mt-1 text-step--1 text-[var(--muted)]">Create teammates, configure skills and permissions, and assign work.</div>
-              </button>
-              <button onClick={() => navigate("/chat")} className="rounded-lg border border-[var(--border-dim)] bg-[var(--bg)] p-4 text-left transition-colors hover:border-[var(--border-focus)] hover:bg-[var(--surface-2)]">
-                <div className="text-step--2 font-medium uppercase tracking-[0.12em] text-[var(--faint)]">Step 4</div>
-                <div className="mt-1 text-step-0 font-semibold text-[var(--text)]">Start a chat or task</div>
-                <div className="mt-1 text-step--1 text-[var(--muted)]">Ask questions, delegate work, or track progress in Activity.</div>
-              </button>
+              {setupSteps.map((step, i) => (
+                <button
+                  key={step.key}
+                  onClick={step.action}
+                  className={`rounded-lg border p-4 text-left transition-colors ${step.done ? "border-[var(--border-dim)] bg-[var(--bg)]" : "border-[var(--border)] bg-[var(--bg)] hover:border-[var(--border-focus)] hover:bg-[var(--surface-2)]"}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-step--2 font-medium uppercase tracking-[0.12em] text-[var(--faint)]">Step {i + 1}</div>
+                    <span className={`text-step--2 font-medium ${step.done ? "text-[var(--success)]" : "text-[var(--warn)]"}`}>{step.done ? "Done" : "Next"}</span>
+                  </div>
+                  <div className="mt-1 text-step-0 font-semibold text-[var(--text)]">{step.label}</div>
+                  <div className="mt-1 text-step--1 text-[var(--muted)]">{step.detail}</div>
+                  {!step.done ? <div className="mt-3 text-step--1 font-medium text-[var(--accent)]">{step.actionLabel} →</div> : null}
+                </button>
+              ))}
             </div>
+            {!hasUsableProvider ? (
+              <div className="mt-4 rounded-lg border border-[var(--warn)] bg-[var(--warn-dim)] px-4 py-3 text-step--1 text-[var(--text)]">
+                A connected model is required for chat and agent runs. <button className="font-medium text-[var(--accent)] hover:underline" onClick={() => navigate("/settings")}>Connect a model in Settings</button>.
+              </div>
+            ) : null}
           </div>
         ) : null}
 
