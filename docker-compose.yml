@@ -1,13 +1,21 @@
 services:
   nerdbot:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nerdbot:local
     ports:
       - "8080:8080"
     env_file:
-      - .env
+      - path: .env
+        required: false
+    environment:
+      # Persist runtime state under /app/.nerdbot-data by default; override in .env if needed.
+      NERDBOT_DB: ${NERDBOT_DB:-/app/.nerdbot-data/nerdbot.db}
+      NERDBOT_DATA: ${NERDBOT_DATA:-/app/.nerdbot-data}
     volumes:
       - nerdbot-data:/app/.nerdbot-data
-      - nerdbot-db:/app
+    restart: unless-stopped
+
 volumes:
   nerdbot-data:
-  nerdbot-db:
