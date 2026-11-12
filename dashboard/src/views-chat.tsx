@@ -1033,7 +1033,11 @@ function ThreadPane({
             {thread?.archived ? <span className="rounded-md bg-[var(--surface-2)] px-1.5 py-0.5 text-step--2 text-[var(--faint)]">archived</span> : null}
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-step--2 text-[var(--faint)]">
-            <span title={thread?.project_id || ""}>{workspaceName || "Workspace"}</span>
+            <span title={thread?.project_id || ""}>Workspace: {workspaceName || "Workspace"}</span>
+            <span aria-hidden>·</span>
+            <span>Model: {providers.find((provider) => provider.id === thread?.provider_id)?.name ?? "Default"}</span>
+            <span aria-hidden>·</span>
+            <span>{mates.length} agent{mates.length === 1 ? "" : "s"} · mention with @</span>
             <span aria-hidden>·</span>
             <span>{relativeTime((thread?.updated_at || thread?.created_at) ?? "")}</span>
           </div>
@@ -2738,6 +2742,23 @@ function CommandCenter({
 
         {/* Primary composer */}
         <div className="scroll-mt-6">
+          {(() => {
+            const selected = providers.find((p) => p.id === selectedProviderId) || usable[0];
+            const targetProjectId = selected?.project_id ?? projectId;
+            const targetWorkspace = workspaces.find((w) => w.id === targetProjectId)?.repository || (selected as any)?.project_name || "Home";
+            const agentCount = summary.summary.bots.length || bots.length;
+            return (
+              <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-step--2 text-[var(--muted)]">
+                <span>Workspace: <span className="font-medium text-[var(--text-soft)]">{targetWorkspace}</span></span>
+                <span aria-hidden>·</span>
+                <span>Model: <span className="font-medium text-[var(--text-soft)]">{selected?.name || (hasProvider ? "Default" : "Not connected")}</span></span>
+                <span aria-hidden>·</span>
+                <span>{agentCount > 0 ? `${agentCount} agent${agentCount === 1 ? "" : "s"} available` : "No agents yet"}</span>
+                {agentCount === 0 ? <button type="button" className="text-[var(--accent)] hover:underline" onClick={() => navigate("/bots")}>Create agent</button> : null}
+                {!hasProvider ? <button type="button" className="text-[var(--warn)] hover:underline" onClick={() => navigate("/settings")}>Connect a model to send</button> : null}
+              </div>
+            );
+          })()}
           <form onSubmit={send}>
             <div className="flex flex-col gap-2 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-3 shadow-sm transition-colors focus-within:border-[var(--border-focus)] sm:flex-row sm:items-end">
               <textarea
