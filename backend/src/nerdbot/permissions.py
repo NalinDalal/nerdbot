@@ -46,6 +46,7 @@ AGENT_PERMISSIONS: frozenset[str] = frozenset(
         "memory.write",
         "knowledge.read",
         "knowledge.write",
+        "workspace.write",
         "web.search",
         "message.send",
     }
@@ -90,6 +91,10 @@ PERMISSION_INFO: dict[str, dict[str, str]] = {
     "knowledge.write": {
         "kind": "agent",
         "summary": "Ingest or attach project knowledge sources and evidence.",
+    },
+    "workspace.write": {
+        "kind": "agent",
+        "summary": "Create or modify files in the task workspace (scoped, reviewable).",
     },
     "web.search": {
         "kind": "agent",

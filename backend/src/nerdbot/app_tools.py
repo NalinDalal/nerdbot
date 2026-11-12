@@ -90,6 +90,9 @@ def _schemas(name: str, description: str, properties: dict[str, Any], required: 
 AMBIENT_TOOLS = frozenset(
     {
         "inspect_workspace",
+        "list_workspace_files",
+        "read_workspace_file",
+        "search_workspace",
         "list_tasks",
         "get_task",
         "read_messages",
@@ -118,6 +121,10 @@ TOOL_PERMISSIONS: dict[str, str] = {
     "list_teammates": "task.delegate",
     "send_message": "message.send",
     "read_knowledge": "knowledge.read",
+    "write_workspace_file": "workspace.write",
+    "delete_workspace_path": "workspace.write",
+    "rename_workspace_path": "workspace.write",
+    "create_workspace_dir": "workspace.write",
     "attach_knowledge": "knowledge.read",
     "ingest_knowledge": "knowledge.write",
     "web_search": "web.search",
@@ -147,6 +154,24 @@ def app_tool_schemas(permissions: frozenset[str] | set[str]) -> list[dict[str, A
             "List files and git status of your task workspace.",
             {},
             [],
+        ),
+        _schemas(
+            "list_workspace_files",
+            "List files in the task workspace (bounded). Use to understand project structure.",
+            {},
+            [],
+        ),
+        _schemas(
+            "read_workspace_file",
+            "Read a UTF-8 text file from the task workspace by relative path.",
+            {"path": {"type": "string"}},
+            ["path"],
+        ),
+        _schemas(
+            "search_workspace",
+            "Search for text in task workspace files (case-insensitive substring, bounded).",
+            {"query": {"type": "string"}, "limit": {"type": "integer"}},
+            ["query"],
         ),
         _schemas(
             "list_tasks",
@@ -368,6 +393,33 @@ def app_tool_schemas(permissions: frozenset[str] | set[str]) -> list[dict[str, A
                 ["content"],
             )
         )
+    if "workspace.write" in granted:
+        schemas.extend([
+            _schemas(
+                "write_workspace_file",
+                "Create or overwrite a UTF-8 text file in the task workspace (scoped, reviewable).",
+                {"path": {"type": "string"}, "content": {"type": "string"}},
+                ["path", "content"],
+            ),
+            _schemas(
+                "delete_workspace_path",
+                "Delete a file or directory in the task workspace.",
+                {"path": {"type": "string"}},
+                ["path"],
+            ),
+            _schemas(
+                "rename_workspace_path",
+                "Rename or move a file/directory inside the task workspace.",
+                {"from_path": {"type": "string"}, "to_path": {"type": "string"}},
+                ["from_path", "to_path"],
+            ),
+            _schemas(
+                "create_workspace_dir",
+                "Create a directory in the task workspace.",
+                {"path": {"type": "string"}},
+                ["path"],
+            ),
+        ])
     if "knowledge.read" in granted:
         schemas.append(
             _schemas(
@@ -806,6 +858,87 @@ def _dispatch(
             )
         return truncate_output("\n".join(lines) or "(no active providers in this workspace)")
 
+    # -- Workspace tools (scoped to task workspace) -------------------------
+    def _resolve_task_workspace_root() -> Path | None:
+        from . import orchestrator as orchestrator_mod
+        from . import workspace as workspace_mod
+        ws: Path | None = None
+        if workspace_path:
+            ws = Path(workspace_path)
+        else:
+            try:
+                ws = orchestrator_mod.task_workspace_root(conn, task, data_dir)
+            except Exception:
+                ws = None
+            if ws is None and task.workspace_path:
+                canonical = workspace_mod.workspace_path_for_task(data_dir, task.id)
+                if Path(task.workspace_path).resolve() == canonical.resolve():
+                    ws = canonical
+        return ws if ws is not None and ws.exists() else None
+
+    if name == "list_workspace_files":
+        from . import workspace as workspace_mod
+        ws = _resolve_task_workspace_root()
+        if ws is None:
+            return "no workspace directory exists for this task yet"
+        listing = workspace_mod.list_workspace_files(ws)
+        files = listing.get("files", [])
+        lines = [f"{int(f.get('size', 0)):>10} {f.get('path', '')}" for f in files[:300]]
+        if listing.get("truncated") or len(files) > 300:
+            lines.append("... [listing truncated]")
+        return truncate_output("\n".join(lines) or "(empty workspace)")
+
+    if name == "read_workspace_file":
+        from . import workspace as workspace_mod
+        ws = _resolve_task_workspace_root()
+        if ws is None:
+            return "no workspace directory exists for this task yet"
+        rel = str(args.get("path", ""))
+        try:
+            data = workspace_mod.read_workspace_text(ws, rel)
+        except FileNotFoundError:
+            return "tool error: file not found"
+        except (ValueError, OSError) as exc:
+            return f"tool error: {exc}"
+        header = f"--- {data['path']} ({data['size']} bytes) ---\n"
+        return truncate_output(header + data.get("content", ""))
+
+    if name == "search_workspace":
+        from . import workspace as workspace_mod
+        ws = _resolve_task_workspace_root()
+        if ws is None:
+            return "no workspace directory exists for this task yet"
+        query = str(args.get("query", "")).strip()
+        if not query:
+            return "tool error: query is required"
+        limit = min(max(int(args.get("limit", 50) or 50), 1), 200)
+        q = query.lower()
+        listing = workspace_mod.list_workspace_files(ws)
+        results: list[str] = []
+        scanned = 0
+        for f in listing.get("files", []):
+            if len(results) >= limit:
+                break
+            rel = str(f.get("path", ""))
+            try:
+                target = workspace_mod.safe_workspace_path(ws, rel)
+                if not target.is_file() or target.stat().st_size > 300_000:
+                    continue
+                content = target.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+            scanned += 1
+            for i, line in enumerate(content.splitlines(), 1):
+                if q in line.lower():
+                    results.append(f"{rel}:{i}: {line[:300]}")
+                    if len(results) >= limit:
+                        break
+            if scanned >= 800:
+                break
+        if not results:
+            return f"(no matches for {query!r})"
+        return truncate_output("\n".join(results))
+
     # -- Permission-gated tools ---------------------------------------------
     permission = TOOL_PERMISSIONS.get(name)
     if name == "send_message":
@@ -995,6 +1128,59 @@ def _dispatch(
             confidence=max(0.0, min(confidence, 1.0)),
         )
         return f"stored memory {entry.id} in {scope}"
+
+    if name == "write_workspace_file":
+        from . import workspace as workspace_mod
+        ws = _resolve_task_workspace_root()
+        if ws is None:
+            return "tool error: no workspace directory exists for this task yet"
+        rel = str(args.get("path", ""))
+        content = str(args.get("content", ""))
+        try:
+            result = workspace_mod.write_workspace_text(ws, rel, content)
+        except (ValueError, OSError) as exc:
+            return f"tool error: {exc}"
+        return f"wrote {result['path']} ({result.get('size', 0)} bytes)"
+
+    if name == "delete_workspace_path":
+        from . import workspace as workspace_mod
+        ws = _resolve_task_workspace_root()
+        if ws is None:
+            return "tool error: no workspace directory exists for this task yet"
+        rel = str(args.get("path", ""))
+        try:
+            result = workspace_mod.delete_workspace_path(ws, rel)
+        except FileNotFoundError:
+            return "tool error: path not found"
+        except (ValueError, OSError) as exc:
+            return f"tool error: {exc}"
+        return f"deleted {result['path']} ({result.get('kind', 'path')})"
+
+    if name == "rename_workspace_path":
+        from . import workspace as workspace_mod
+        ws = _resolve_task_workspace_root()
+        if ws is None:
+            return "tool error: no workspace directory exists for this task yet"
+        try:
+            result = workspace_mod.rename_workspace_path(
+                ws, str(args.get("from_path", "")), str(args.get("to_path", ""))
+            )
+        except FileNotFoundError:
+            return "tool error: path not found"
+        except (ValueError, OSError) as exc:
+            return f"tool error: {exc}"
+        return f"moved {result['from']} -> {result['to']}"
+
+    if name == "create_workspace_dir":
+        from . import workspace as workspace_mod
+        ws = _resolve_task_workspace_root()
+        if ws is None:
+            return "tool error: no workspace directory exists for this task yet"
+        try:
+            result = workspace_mod.create_workspace_dir(ws, str(args.get("path", "")))
+        except (ValueError, OSError) as exc:
+            return f"tool error: {exc}"
+        return f"created directory {result['path']}"
 
     if name == "create_board":
         try:
