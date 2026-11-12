@@ -248,30 +248,20 @@ export function ConversationView({
       {/* Header. The mobile left padding reserves the gutter the fixed menu
           button floats in (app.tsx: `fixed left-3 top-3`), so "Home" is not
           painted underneath it. */}
-      <header className="flex flex-wrap items-end justify-between gap-3 border-b border-[var(--border-dim)] py-3 pl-14 pr-4 md:px-6">
+      <header className="flex items-center justify-between gap-3 border-b border-[var(--border-dim)] px-4 py-3 pl-14 md:px-6">
         <div className="min-w-0">
           {isHome ? (
-            <>
-              <h1 className="text-step-1 font-semibold tracking-tight">Chat</h1>
-              <p className="mt-0.5 text-step-0 text-[var(--muted)]">
-                Global chat across your workspaces. Ask, delegate, or pick up where you left off.
-              </p>
-            </>
+            <h1 className="text-step-1 font-semibold tracking-tight text-[var(--text)]">Chat</h1>
           ) : (
-            <>
-              <div className="mb-1 text-step--2 uppercase tracking-[0.16em] text-[var(--faint)]">
-                Workspace chat
-              </div>
-              <h1 className="text-step-1 font-semibold tracking-tight">
+            <div className="min-w-0">
+              <div className="text-step--2 text-[var(--faint)]">Workspace chat</div>
+              <h1 className="truncate text-step-1 font-semibold tracking-tight text-[var(--text)]">
                 {workspaceName || "Workspace"}
               </h1>
-              <p className="mt-0.5 text-step-0 text-[var(--muted)]">
-                Conversations scoped to this workspace. Model choices and some actions stay within workspace boundaries.
-              </p>
-            </>
+            </div>
           )}
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           {!isHome && activeId ? (
             <Button variant="ghost" onClick={() => { setActiveId(null); onSetActiveThread?.(null); }}>
               Conversations
@@ -693,9 +683,6 @@ function ModelChip({
 
 /* --- Thread pane --- */
 
-const PROVIDER_SELECT_CLASS =
-  "rounded-md border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-step--1 text-[var(--text-soft)] outline-none transition-colors hover:border-[var(--faint)] focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]";
-
 function ThreadPane({
   threadId,
   projectId,
@@ -1036,58 +1023,58 @@ function ThreadPane({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* Thread header */}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border-dim)] px-4 py-2.5 md:px-6">
+      <div className="flex items-center justify-between gap-3 border-b border-[var(--border-dim)] px-4 py-3 md:px-6">
         <div className="min-w-0">
           <div className="flex items-center gap-2 min-w-0">
             {thread?.pinned ? <span className="text-[10px] text-[var(--accent)]" title="Pinned">●</span> : null}
-            <div className="truncate text-step-0 font-semibold">
+            <div className="truncate text-step-0 font-semibold tracking-tight text-[var(--text)]">
               {thread?.title || "Untitled"}
             </div>
-            {thread?.archived ? <span className="rounded bg-[var(--surface-2)] px-1.5 py-0.5 text-step--2 text-[var(--faint)]">archived</span> : null}
+            {thread?.archived ? <span className="rounded-md bg-[var(--surface-2)] px-1.5 py-0.5 text-step--2 text-[var(--faint)]">archived</span> : null}
           </div>
-          <div className="mono text-step--2 text-[var(--faint)]">
-            <span className="rounded bg-[var(--surface-2)] px-1 py-0.5" title={thread?.project_id || ""}>
-              Scope: {workspaceName || (thread?.project_id === projectId ? "This workspace" : "Workspace")}
-            </span>
-            {` · ${relativeTime((thread?.updated_at || thread?.created_at) ?? "")}`}
-            {` · Model: ${providers.find((provider) => provider.id === thread?.provider_id)?.name ?? "Default"}`}
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-step--2 text-[var(--faint)]">
+            <span title={thread?.project_id || ""}>{workspaceName || "Workspace"}</span>
+            <span aria-hidden>·</span>
+            <span>{relativeTime((thread?.updated_at || thread?.created_at) ?? "")}</span>
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex shrink-0 items-center gap-2">
           <select
             value={providerId}
             onChange={(e) => void switchProvider(e.target.value)}
             aria-label="Model provider"
-            className={PROVIDER_SELECT_CLASS}
+            className="h-8 max-w-[12rem] rounded-md border border-transparent bg-transparent px-2 text-step--2 text-[var(--muted)] outline-none transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)] focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
+            title={`Model: ${providers.find((provider) => provider.id === thread?.provider_id)?.name ?? "Default"}`}
           >
             <option value="__default__">Default model</option>
             {providers.map((provider) => (
               <option key={provider.id} value={provider.id}>
-                {provider.name} ({provider.kind})
+                {provider.name}
               </option>
             ))}
           </select>
-          <Button variant="ghost" onClick={view.reload} title="Refresh">⟳</Button>
-          <Button variant="ghost" onClick={summarize} disabled={busy} title="Summarize thread">Summarize</Button>
-          <Button variant="ghost" onClick={() => setContextPanel("files")} title="Project files">Files</Button>
-          <Button variant="ghost" onClick={() => setContextPanel("bots")} title="Teammates">Teammates</Button>
           <div className="relative">
             <Button variant="ghost" onClick={() => setThreadMenuOpen((v) => !v)} aria-label="Conversation actions" title="Conversation actions">⋯</Button>
             {threadMenuOpen && thread ? (
               <>
                 <div className="fixed inset-0 z-20" onClick={() => { setThreadMenuOpen(false); setShowMove(false); }} />
-                <div className="absolute right-0 top-full z-30 mt-1 w-52 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 text-step--1 shadow-lg">
-                  <button className="w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={() => void runThreadAction(async () => { const t = window.prompt("Rename conversation", thread.title || ""); if (t == null) return; await api.renameThread(thread.id, t.trim() || "Untitled"); }, "Renamed")}>Rename</button>
-                  <button className="w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={() => void runThreadAction(() => api.pinThread(thread.id, !thread.pinned).then(() => undefined), thread.pinned ? "Unpinned" : "Pinned")}>{thread.pinned ? "Unpin" : "Pin"}</button>
-                  <button className="w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={() => void runThreadAction(async () => { if (thread.archived) await api.unarchiveThread(thread.id); else await api.archiveThread(thread.id); }, thread.archived ? "Unarchived" : "Archived")}>{thread.archived ? "Unarchive" : "Archive"}</button>
-                  <a className="block w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" href={api.exportThreadUrl(thread.id, threadToken)} target="_blank" rel="noreferrer">Export (JSON)</a>
-                  <button className="w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={async () => { setShowMove(true); try { const r = await api.listProjects(); setMoveProjects(r.projects.map((p: any) => ({ id: p.id, repository: p.repository }))); } catch (e) { notifyError(e); } }}>Move to workspace…</button>
-                  <button className="w-full rounded px-2 py-1.5 text-left text-[var(--danger)] hover:bg-[var(--danger-dim)]" onClick={() => void runThreadAction(async () => { if (!window.confirm("Remove this conversation from your lists? This is a safe delete (it can be restored via API).")) return; await api.deleteThread(thread.id); navigate("/"); }, "Removed")}>Delete</button>
+                <div className="absolute right-0 top-full z-30 mt-1 w-56 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1 text-step--1 shadow-lg">
+                  <button className="w-full rounded-md px-2.5 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => { setThreadMenuOpen(false); view.reload(); }}>Refresh</button>
+                  <button className="w-full rounded-md px-2.5 py-2 text-left hover:bg-[var(--surface-2)] disabled:opacity-50" disabled={busy} onClick={() => { setThreadMenuOpen(false); void summarize(); }}>Summarize</button>
+                  <button className="w-full rounded-md px-2.5 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => { setThreadMenuOpen(false); setContextPanel("files"); }}>Project files</button>
+                  <button className="w-full rounded-md px-2.5 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => { setThreadMenuOpen(false); setContextPanel("bots"); }}>Teammates</button>
+                  <div className="my-1 border-t border-[var(--border-dim)]" />
+                  <button className="w-full rounded-md px-2.5 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => void runThreadAction(async () => { const t = window.prompt("Rename conversation", thread.title || ""); if (t == null) return; await api.renameThread(thread.id, t.trim() || "Untitled"); }, "Renamed")}>Rename</button>
+                  <button className="w-full rounded-md px-2.5 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => void runThreadAction(() => api.pinThread(thread.id, !thread.pinned).then(() => undefined), thread.pinned ? "Unpinned" : "Pinned")}>{thread.pinned ? "Unpin" : "Pin"}</button>
+                  <button className="w-full rounded-md px-2.5 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => void runThreadAction(async () => { if (thread.archived) await api.unarchiveThread(thread.id); else await api.archiveThread(thread.id); }, thread.archived ? "Unarchived" : "Archived")}>{thread.archived ? "Unarchive" : "Archive"}</button>
+                  <a className="block w-full rounded-md px-2.5 py-2 text-left hover:bg-[var(--surface-2)]" href={api.exportThreadUrl(thread.id, threadToken)} target="_blank" rel="noreferrer">Export (JSON)</a>
+                  <button className="w-full rounded-md px-2.5 py-2 text-left hover:bg-[var(--surface-2)]" onClick={async () => { setShowMove(true); try { const r = await api.listProjects(); setMoveProjects(r.projects.map((p: any) => ({ id: p.id, repository: p.repository }))); } catch (e) { notifyError(e); } }}>Move to workspace…</button>
+                  <button className="w-full rounded-md px-2.5 py-2 text-left text-[var(--danger)] hover:bg-[var(--danger-dim)]" onClick={() => void runThreadAction(async () => { if (!window.confirm("Remove this conversation from your lists? This is a safe delete (it can be restored via API).")) return; await api.deleteThread(thread.id); navigate("/"); }, "Removed")}>Delete</button>
                   {showMove ? (
                     <div className="mt-1 border-t border-[var(--border-dim)] pt-1">
                       <div className="px-2 py-1 text-step--2 text-[var(--muted)]">Move to workspace (clears workspace-scoped model binding)</div>
                       {moveProjects.filter((p) => p.id !== thread.project_id).map((p) => (
-                        <button key={p.id} className="w-full truncate rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={() => void runThreadAction(async () => { await api.moveThread(thread.id, p.id); navigate(`/chat/${p.id}?thread=${thread.id}`); }, "Moved")}>{p.repository || p.id}</button>
+                        <button key={p.id} className="w-full truncate rounded-md px-2.5 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => void runThreadAction(async () => { await api.moveThread(thread.id, p.id); navigate(`/chat/${p.id}?thread=${thread.id}`); }, "Moved")}>{p.repository || p.id}</button>
                       ))}
                       {moveProjects.filter((p) => p.id !== thread.project_id).length === 0 ? <div className="px-2 py-1 text-[var(--faint)]">No other workspaces</div> : null}
                     </div>
@@ -1266,21 +1253,21 @@ function ThreadPane({
       ) : null}
 
       {/* Composer */}
-      <form onSubmit={send} className="border-t border-[var(--border-dim)] px-4 py-3 md:px-6">
+      <form onSubmit={send} className="px-4 pb-4 pt-2 md:px-6">
         <div className="mx-auto w-full max-w-[var(--max-width-read)]">
           {attachedFiles.length > 0 && (
             <div className="mb-2 flex flex-wrap gap-1.5">
               {attachedFiles.map((f, i) => (
                 <span
                   key={i}
-                  className="inline-flex items-center gap-1 rounded-full bg-[var(--surface-2)] px-2 py-0.5 text-step--2 text-[var(--muted)]"
+                  className="inline-flex items-center gap-1 rounded-full bg-[var(--surface-2)] px-2.5 py-1 text-step--2 text-[var(--muted)]"
                 >
                   <span className="mono">{f.name}</span>
                   <button
                     type="button"
                     aria-label={`Remove attachment ${f.name}`}
                     onClick={() => setAttachedFiles(attachedFiles.filter((_, j) => j !== i))}
-                    className="text-[var(--danger)] hover:text-[var(--text)]"
+                    className="text-[var(--faint)] hover:text-[var(--text)]"
                   >
                     ×
                   </button>
@@ -1288,129 +1275,68 @@ function ThreadPane({
               ))}
             </div>
           )}
-          <div className="flex flex-col gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-2 shadow-sm focus-within:border-[var(--border-focus)] sm:flex-row sm:items-end">
-            <div className="flex items-center gap-1 pb-1 pl-1">
-              <button
-                type="button"
-                onClick={() => setContextPanel("bots")}
-                title="Mention a teammate"
-                aria-label="Mention a teammate"
-                className="rounded-md px-2 py-1.5 text-step--1 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
-              >
-                ∞ Teammates
-              </button>
-              <button
-                type="button"
-                onClick={() => setContextPanel("files")}
-                title="Project files"
-                aria-label="Project files"
-                className="rounded-md px-2 py-1.5 text-step--1 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
-              >
-                Files
-              </button>
-              <button
-                type="button"
-                onClick={handleAttachFile}
-                title="Attach local file"
-                aria-label="Attach local file"
-                className="rounded-md px-2 py-1.5 text-step--1 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
-              >
-                +
-              </button>
-              <button
-                type="button"
-                onClick={() => setContextPanel("refs")}
-                title="Insert Library/Gallery reference"
-                aria-label="Insert Library or Gallery reference"
-                className="rounded-md px-2 py-1.5 text-step--1 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
-              >
-                Ref
-              </button>
-              <input
-                type="file"
-                ref={fileInputRef}
-                style={{ display: "none" }}
-                onChange={handleFileSelect}
-                multiple
+          <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-2 shadow-sm transition-colors focus-within:border-[var(--border-focus)] focus-within:ring-1 focus-within:ring-[var(--ring)]">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+              <textarea
+                ref={composerRef}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void send(e);
+                  }
+                }}
+                placeholder="Message NerdBot"
+                aria-label="Chat message"
+                disabled={busy}
+                spellCheck
+                rows={1}
+                autoComplete="off"
+                className="max-h-48 min-h-[44px] w-full min-w-0 resize-none bg-transparent px-3 py-2.5 text-step-0 leading-relaxed outline-none placeholder:text-[var(--faint)] disabled:opacity-50 sm:flex-1"
               />
+              <div className="flex items-center justify-end gap-1.5 px-1 pb-1">
+                {busy ? (
+                  <Button variant="danger" onClick={stop} title="Stop streaming">Stop</Button>
+                ) : (
+                  <>
+                    {retryFrom ? <Button onClick={retry} title="Retry last message">Retry</Button> : null}
+                    <Button variant="primary" type="submit" disabled={!draft.trim() || busy}>Send</Button>
+                  </>
+                )}
+              </div>
             </div>
-            <textarea
-              ref={composerRef}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void send(e);
-                }
-              }}
-              placeholder="Talk to NerdBot…"
-              aria-label="Chat message"
-              disabled={busy}
-              spellCheck
-              rows={1}
-              autoComplete="off"
-              className="max-h-40 min-h-[36px] w-full min-w-0 resize-none bg-transparent py-1.5 text-step-0 leading-relaxed outline-none placeholder:text-[var(--faint)] disabled:opacity-50 sm:w-auto sm:flex-1"
-            />
-            <div className="flex items-center gap-1.5 justify-end pb-0.5">
-              <button
-                type="button"
-                onClick={() => void startDeepResearch()}
-                disabled={!draft.trim() || busy}
-                title="Run multi-source deep research in the background with citations"
-                className="rounded-md px-2.5 py-1.5 text-step--1 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)] disabled:opacity-50"
-              >
-                Deep research
-              </button>
-              <button
-                type="button"
-                onClick={createTaskFromChat}
-                title="Create a task from this conversation"
-                className="rounded-md px-2.5 py-1.5 text-step--1 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
-              >
-                Task
-              </button>
-              {busy ? (
-                <Button variant="danger" onClick={stop} title="Stop streaming">
-                  ■ Stop
-                </Button>
-              ) : (
-                <>
-                  {retryFrom ? (
-                    <Button onClick={retry} title="Retry last message">
-                      Retry
-                    </Button>
-                  ) : null}
-                  <Button variant="primary" type="submit" disabled={!draft.trim() || busy}>
-                    Send ⏎
-                  </Button>
-                </>
-              )}
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border-dim)] px-2 pt-2">
+              <div className="flex flex-wrap items-center gap-1">
+                <button type="button" onClick={() => setContextPanel("bots")} title="Mention a teammate" aria-label="Mention a teammate" className="rounded-md px-2 py-1 text-step--2 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]">Teammates</button>
+                <button type="button" onClick={() => setContextPanel("files")} title="Project files" aria-label="Project files" className="rounded-md px-2 py-1 text-step--2 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]">Files</button>
+                <button type="button" onClick={handleAttachFile} title="Attach local file" aria-label="Attach local file" className="rounded-md px-2 py-1 text-step--2 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]">Attach</button>
+                <button type="button" onClick={() => setContextPanel("refs")} title="Insert Library/Gallery reference" aria-label="Insert Library or Gallery reference" className="rounded-md px-2 py-1 text-step--2 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]">Reference</button>
+                <button type="button" onClick={() => void startDeepResearch()} disabled={!draft.trim() || busy} title="Run multi-source deep research in the background with citations" className="rounded-md px-2 py-1 text-step--2 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)] disabled:opacity-50">Research</button>
+                <button type="button" onClick={createTaskFromChat} title="Create a task from this conversation" className="rounded-md px-2 py-1 text-step--2 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]">Create task</button>
+                <input type="file" ref={fileInputRef} style={{ display: "none" }} onChange={handleFileSelect} multiple />
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <select
+                  value={mode}
+                  onChange={(e) => setMode(e.target.value as "chat" | "research" | "delegate")}
+                  className="h-7 rounded-md border border-transparent bg-transparent px-1.5 text-step--2 text-[var(--faint)] outline-none hover:bg-[var(--surface-2)] hover:text-[var(--muted)]"
+                  aria-label="Chat mode"
+                  title="Mode"
+                >
+                  <option value="chat">Chat</option>
+                  <option value="research">Research</option>
+                  <option value="delegate">Delegate</option>
+                </select>
+                <label className="flex cursor-pointer items-center gap-1.5 text-step--2 text-[var(--faint)]">
+                  <input type="checkbox" checked={useStream} onChange={(e) => setUseStream(e.target.checked)} className="h-3 w-3" />
+                  Stream
+                </label>
+              </div>
             </div>
           </div>
-          <div className="mt-1.5 flex items-center justify-between px-1">
-            <span className="text-step--2 text-[var(--faint)]">
-              Enter to send · Shift+Enter for a new line
-            </span>
-            <select
-              value={mode}
-              onChange={(e) => setMode(e.target.value as "chat" | "research" | "delegate")}
-              className="h-6 rounded-md border border-[var(--border)] bg-[var(--surface)] px-1.5 text-step--2 text-[var(--text-soft)]"
-              aria-label="Chat mode"
-            >
-              <option value="chat">Chat</option>
-              <option value="research">Research</option>
-              <option value="delegate">Delegate</option>
-            </select>
-            <label className="flex cursor-pointer items-center gap-1.5 text-step--2 text-[var(--faint)]">
-              <input
-                type="checkbox"
-                checked={useStream}
-                onChange={(e) => setUseStream(e.target.checked)}
-                className="h-3 w-3"
-              />
-              Stream
-            </label>
+          <div className="mt-1.5 px-1 text-step--2 text-[var(--faint)]">
+            Enter to send, Shift+Enter for a new line
           </div>
         </div>
       </form>
@@ -1956,16 +1882,16 @@ function Message({
   return (
     <div className={`flex flex-col ${isUser ? "items-end" : "items-start"}`}>
       <div
-        className={`max-w-[85%] rounded-2xl px-4 py-3 text-step-0 leading-relaxed ${
+        className={`max-w-[min(85%,720px)] text-step-0 leading-relaxed ${
           isUser
-            ? "border border-[var(--accent)] bg-[var(--accent-dim)] text-[var(--text)]"
-            : "border border-[var(--border)] bg-[var(--surface)] text-[var(--text-soft)]"
-        } ${streaming ? "animate-pulse" : ""}`}
+            ? "rounded-3xl bg-[var(--surface-3)] px-4 py-2.5 text-[var(--text)]"
+            : "w-full max-w-none px-0 py-0 text-[var(--text)]"
+        } ${streaming ? "opacity-95" : ""}`}
       >
         {isUser ? (
           <div className="whitespace-pre-wrap break-words">{renderMentions(message.content)}</div>
         ) : (
-          <>
+          <div className="max-w-[720px]">
             <Markdown text={displayContent} />
             {isLong ? (
               <button
@@ -1976,14 +1902,14 @@ function Message({
                 {expanded ? "Show less" : `Show more (${Math.round(message.content.length / 1000 * 10) / 10}k chars)`}
               </button>
             ) : null}
-          </>
+          </div>
         )}
         {streaming ? (
-          <div className="mt-2 inline-block h-4 w-2 animate-pulse rounded-[1px] bg-[var(--accent)]" aria-hidden />
+          <div className="mt-2 inline-block h-4 w-1.5 animate-pulse rounded-full bg-[var(--accent)]" aria-hidden />
         ) : null}
       </div>
       {parts && parts.length > 0 ? (
-        <div className="mt-3 flex flex-col gap-2">
+        <div className={`mt-3 flex w-full max-w-[720px] flex-col gap-2 ${isUser ? "self-end" : ""}`}>
           {parts.map((p, i) => (
             <div key={i}>
               {p.type === "report" ? (
@@ -2001,19 +1927,19 @@ function Message({
           ))}
         </div>
       ) : null}
-      <div className={`mono mt-1 flex flex-wrap items-center gap-1.5 text-step--2 text-[var(--faint)] ${isUser ? "mr-1 justify-end" : "ml-1"}`}>
-        {!isUser ? <BotFace face={speaker?.face ?? null} size={18} animated={streaming} /> : null}
-        <span>{isUser ? "you" : speaker?.name || "NerdBot"}</span>
-        {streaming ? " · streaming…" : ""}
+      <div className={`mt-1.5 flex flex-wrap items-center gap-1.5 text-step--2 text-[var(--faint)] ${isUser ? "mr-1 justify-end" : "ml-0"}`}>
+        {!isUser ? <BotFace face={speaker?.face ?? null} size={16} animated={streaming} /> : null}
+        <span>{isUser ? "You" : speaker?.name || "NerdBot"}</span>
+        {streaming ? " · streaming" : ""}
         {!streaming && projectId && (message.content || "").trim() ? (
           <>
             <button
               type="button"
-              className="ml-1 rounded px-1.5 py-0.5 text-[11px] text-[var(--accent)] hover:bg-[var(--accent-dim)]"
+              className="rounded px-1.5 py-0.5 text-[11px] text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
               onClick={() => setSaveOpen(true)}
               title="Save this message to Library as a living document"
             >
-              Save to Library
+              Save
             </button>
             <SaveToLibraryModal
               open={saveOpen}
