@@ -341,6 +341,7 @@ export function ConversationView({
               providers={providers.data?.providers ?? []}
               onPlanApproved={(id) => setObjectiveId(id)}
               onReload={() => threads.reload()}
+              onActivityChange={() => summary.reload()}
             />
           ) : isHome ? (
             <CommandCenter
@@ -632,6 +633,128 @@ function NewThreadModal({
  *  small menu, so model selection lives in the composer instead of buried
  *  in the thread header. */
 
+function ThreadWorkSection({ projectId, threadId, refreshKey }: { projectId: string; threadId: string; refreshKey?: number }) {
+  const tasks = useAsync(() => api.projectTasks(projectId).then((r) => r.tasks || []), [projectId, threadId, refreshKey]);
+  const runs = useAsync(() => api.projectRuns(projectId).then((r) => r.runs || []), [projectId, threadId, refreshKey]);
+  const docs = useAsync(() => api.listLibrary(projectId).then((r) => (r.docs || []).slice(0, 8)), [projectId, threadId, refreshKey]);
+  const gallery = useAsync(() => api.listGallery(projectId, { limit: 8 }).then((r) => r.assets || []), [projectId, threadId, refreshKey]);
+  const [busyTask, setBusyTask] = useState<string | null>(null);
+
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (document.visibilityState === "visible") {
+        tasks.reload();
+        runs.reload();
+        docs.reload();
+        gallery.reload();
+      }
+    }, 10000);
+    return () => clearInterval(t);
+  }, [projectId, threadId]);
+
+  const recentTasks = (tasks.data || [])
+    .filter((t: any) => !["archived"].includes(t.status))
+    .sort((a: any, b: any) => String(b.created_at || b.updated_at || "").localeCompare(String(a.created_at || a.updated_at || "")))
+    .slice(0, 6);
+  const runByTask = new Map<string, any>();
+  for (const r of (runs.data || [])) {
+    const prev = runByTask.get(r.task_id);
+    if (!prev || String(r.started_at || "").localeCompare(String(prev.started_at || "")) > 0) runByTask.set(r.task_id, r);
+  }
+  const threadDocs = (docs.data || []).filter((d: any) => d.thread_id === threadId);
+  const otherDocs = (docs.data || []).filter((d: any) => d.thread_id !== threadId).slice(0, 4);
+  const threadAssets = (gallery.data || []).filter((a: any) => a.thread_id === threadId);
+  const otherAssets = (gallery.data || []).filter((a: any) => a.thread_id !== threadId).slice(0, 4);
+
+  const hasAnything = recentTasks.length || threadDocs.length || otherDocs.length || threadAssets.length || otherAssets.length;
+  if (tasks.loading && runs.loading && docs.loading && gallery.loading) return null;
+  if (!hasAnything) return null;
+
+  return (
+    <section className="mx-4 mb-3 rounded-xl border border-[var(--border-dim)] bg-[var(--surface)] p-3 md:mx-6" aria-label="Work and results">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="text-step--1 font-semibold text-[var(--text)]">Work & results</div>
+          <div className="text-step--2 text-[var(--muted)]">Workspace activity shown here; items linked to this conversation are labeled.</div>
+        </div>
+        <Button variant="ghost" onClick={() => navigate(`/p/${projectId}?tab=Work`)}>Open workspace</Button>
+      </div>
+
+      {recentTasks.length > 0 ? (
+        <div className="mb-3">
+          <div className="mb-1.5 text-step--2 font-medium uppercase tracking-wider text-[var(--faint)]">Tasks</div>
+          <div className="flex flex-col gap-2">
+            {recentTasks.map((task: any) => {
+              const run = runByTask.get(task.id);
+              const failed = task.status === "failed" || run?.status === "failed";
+              return (
+                <div key={task.id} className="rounded-lg border border-[var(--border-dim)] bg-[var(--bg)] px-3 py-2">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-step--1 font-medium text-[var(--text)]">{task.description || "Untitled task"}</div>
+                      <div className="mt-0.5 flex flex-wrap items-center gap-2 text-step--2 text-[var(--muted)]">
+                        <StatusBadge status={task.status} />
+                        {task.owner_teammate_id ? <span>Agent assigned</span> : <span>Unassigned</span>}
+                        {run ? <span>Run: {run.status}</span> : null}
+                      </div>
+                      {task.blocked_reason ? <div className="mt-1 text-step--2 text-[var(--warn)]">{task.blocked_reason}</div> : null}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <Button onClick={() => openTask(projectId, task.id)}>Open</Button>
+                      {failed ? <Button variant="primary" disabled={busyTask === task.id} onClick={async () => { setBusyTask(task.id); try { await api.retryTask(task.id); toast.success("Retry started"); tasks.reload(); runs.reload(); } catch (e) { notifyError(e); } finally { setBusyTask(null); } }}>{busyTask === task.id ? "Retrying…" : "Retry"}</Button> : null}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+
+      {(threadDocs.length + threadAssets.length > 0) ? (
+        <div className="mb-3">
+          <div className="mb-1.5 text-step--2 font-medium uppercase tracking-wider text-[var(--faint)]">Results in this conversation</div>
+          <div className="flex flex-col gap-1.5">
+            {threadDocs.map((d: any) => (
+              <button key={d.id} type="button" className="flex items-center justify-between rounded-md border border-[var(--border-dim)] bg-[var(--bg)] px-3 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => navigate(`/library/${d.id}`)}>
+                <span className="min-w-0 truncate text-step--1 text-[var(--text)]">{d.title || "Untitled document"}</span>
+                <span className="ml-2 shrink-0 text-step--2 text-[var(--accent)]">Open</span>
+              </button>
+            ))}
+            {threadAssets.map((a: any) => (
+              <button key={a.id} type="button" className="flex items-center justify-between rounded-md border border-[var(--border-dim)] bg-[var(--bg)] px-3 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => navigate(`/gallery`)}>
+                <span className="min-w-0 truncate text-step--1 text-[var(--text)]">{a.name || "Asset"}</span>
+                <span className="ml-2 shrink-0 text-step--2 text-[var(--accent)]">Open gallery</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {(otherDocs.length + otherAssets.length > 0) ? (
+        <div>
+          <div className="mb-1.5 text-step--2 font-medium uppercase tracking-wider text-[var(--faint)]">Recent workspace results</div>
+          <div className="flex flex-col gap-1.5">
+            {otherDocs.map((d: any) => (
+              <button key={d.id} type="button" className="flex items-center justify-between rounded-md border border-[var(--border-dim)] bg-[var(--bg)] px-3 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => navigate(`/library/${d.id}`)}>
+                <span className="min-w-0 truncate text-step--1 text-[var(--text)]">{d.title || "Untitled document"}</span>
+                <span className="ml-2 shrink-0 text-step--2 text-[var(--muted)]">Open</span>
+              </button>
+            ))}
+            {otherAssets.map((a: any) => (
+              <button key={a.id} type="button" className="flex items-center justify-between rounded-md border border-[var(--border-dim)] bg-[var(--bg)] px-3 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => navigate(`/gallery`)}>
+                <span className="min-w-0 truncate text-step--1 text-[var(--text)]">{a.name || "Asset"}</span>
+                <span className="ml-2 shrink-0 text-step--2 text-[var(--muted)]">Open gallery</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+
 function ThreadPane({
   threadId,
   projectId,
@@ -639,6 +762,7 @@ function ThreadPane({
   providers,
   onReload,
   onPlanApproved,
+  onActivityChange,
 }: {
   threadId: string;
   projectId: string;
@@ -646,6 +770,7 @@ function ThreadPane({
   providers: { id: string; name: string; kind: string }[];
   onReload: () => void;
   onPlanApproved?: (id: string) => void;
+  onActivityChange?: () => void;
 }) {
   const view = useAsync(() => api.threadView(threadId, 50), [threadId]);
   const [draft, setDraft] = useState("");
@@ -665,6 +790,8 @@ function ThreadPane({
   const [researchJobIds, setResearchJobIds] = useState<string[]>([]);
   const [workspaceApprovals, setWorkspaceApprovals] = useState<any[]>([]);
   const [approvalBusy, setApprovalBusy] = useState<string | null>(null);
+  const [workRefresh, setWorkRefresh] = useState(0);
+  const bumpWorkRefresh = () => setWorkRefresh((n) => n + 1);
   // Speaker announced by the stream's first event, so the in-flight bubble
   // already carries the teammate's face and name while the reply arrives.
   const [streamSpeaker, setStreamSpeaker] = useState<{
@@ -1104,8 +1231,8 @@ function ThreadPane({
                 <div className="font-medium text-[var(--text)]">{String(a.action || "Approval requested").replace(/_/g, " ")}</div>
                 <div className="mt-0.5 text-step--2 text-[var(--muted)]">{a.description ? String(a.description).slice(0, 160) : (a.task_id ? `Task ${a.task_id}` : "Review details in approvals")}</div>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <Button variant="primary" disabled={approvalBusy === a.id} onClick={async () => { setApprovalBusy(a.id); try { await api.decideApproval(a.id, "approved"); toast.success("Approved"); setWorkspaceApprovals((prev) => prev.filter((x) => x.id !== a.id)); } catch (e) { notifyError(e); } finally { setApprovalBusy(null); } }}>Approve</Button>
-                  <Button variant="danger" disabled={approvalBusy === a.id} onClick={async () => { setApprovalBusy(a.id); try { await api.decideApproval(a.id, "denied"); toast.success("Rejected"); setWorkspaceApprovals((prev) => prev.filter((x) => x.id !== a.id)); } catch (e) { notifyError(e); } finally { setApprovalBusy(null); } }}>Reject</Button>
+                  <Button variant="primary" disabled={approvalBusy === a.id} onClick={async () => { setApprovalBusy(a.id); try { await api.decideApproval(a.id, "approved"); toast.success("Approved"); setWorkspaceApprovals((prev) => prev.filter((x) => x.id !== a.id)); bumpWorkRefresh(); onReload(); onActivityChange?.(); } catch (e) { notifyError(e); } finally { setApprovalBusy(null); } }}>Approve</Button>
+                  <Button variant="danger" disabled={approvalBusy === a.id} onClick={async () => { setApprovalBusy(a.id); try { await api.decideApproval(a.id, "denied"); toast.success("Rejected"); setWorkspaceApprovals((prev) => prev.filter((x) => x.id !== a.id)); bumpWorkRefresh(); onReload(); onActivityChange?.(); } catch (e) { notifyError(e); } finally { setApprovalBusy(null); } }}>Reject</Button>
                   {a.task_id ? <Button onClick={() => openTask(projectId, a.task_id)}>Open task</Button> : null}
                 </div>
               </div>
@@ -1280,6 +1407,8 @@ function ThreadPane({
           </div>
         </div>
       ) : null}
+
+      <ThreadWorkSection projectId={projectId} threadId={threadId} refreshKey={workRefresh} />
 
       {/* Composer */}
       <form onSubmit={send} className="px-4 pb-4 pt-2 md:px-6">
