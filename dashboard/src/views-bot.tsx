@@ -1378,13 +1378,13 @@ export function BotsView() {
   return (
     <Page>
       <PageHeader
-        eyebrow="Your team"
-        title="Teammates"
-        description="The AI teammates working in your workspaces. Each one has a role, model, permissions, and memory."
+        eyebrow="Agents"
+        title="Agents"
+        description="Create and manage AI agents for your workspaces. Each agent can have a role, model, skills, permissions, and memory."
         actions={
           <>
             <Button variant="primary" onClick={() => setShowCreate(true)}>
-              New teammate
+              New agent
             </Button>
             <Button onClick={all.reload}>Refresh</Button>
           </>
@@ -1860,13 +1860,13 @@ export function BotsView() {
         </>
       ) : (
         <EmptyState
-          title="No teammates yet"
+          title="No agents yet"
+          hint="Create an agent with a role and model, then chat with it, assign tasks, or add it to a team."
           action={
             <Button variant="primary" onClick={() => setShowCreate(true)}>
-              Create your first teammate
+              Create your first agent
             </Button>
           }
-          hint="Create a teammate with a role and model, then chat with them or assign work from a task."
         />
       )}
 

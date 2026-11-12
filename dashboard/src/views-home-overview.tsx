@@ -302,21 +302,62 @@ export function HomeOverviewView() {
     return signals;
   }, [data, summary.loadFailed]);
 
+  const hasAgents = (data.bots?.length ?? 0) > 0;
+  const hasActivity = data.activeRuns.length > 0 || data.pendingApprovals.length > 0 || unfinishedWork.length > 0 || recentRuns.length > 0;
+  const isNew = !hasActivity && (!hasAgents || data.bundles.length <= 1) && unfinishedWork.length === 0;
+
   return (
     <Page width="data">
       <div className="flex flex-col gap-5 pb-16 md:gap-8 md:pb-0">
         <PageHeader
-          eyebrow="Home"
-          title="Operational overview"
-          description="Monitor projects, agents, executions, approvals, and system signals from one place."
+          eyebrow={isNew ? "Welcome" : "Home"}
+          title={isNew ? "Your AI work environment" : "Overview"}
+          description={
+            isNew
+              ? "Set up a workspace, connect a model, and start working with your agents."
+              : "See what needs attention, what’s running, and where to pick up."
+          }
           actions={
             <div className="flex flex-wrap gap-2">
-              <Button onClick={() => navigate("/approvals")}>Approvals</Button>
+              <Button onClick={() => navigate("/chat")}>Chat</Button>
               <Button onClick={() => navigate("/workbench")}>Workbench</Button>
-              <Button variant="primary" onClick={() => navigate("/activity")}>Start work</Button>
+              <Button variant="primary" onClick={() => navigate("/activity")}>Activity</Button>
             </div>
           }
         />
+
+        {isNew ? (
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5 md:p-6">
+            <div className="mb-4">
+              <h2 className="text-step-1 font-semibold tracking-tight text-[var(--text)]">Get started</h2>
+              <p className="mt-1 max-w-[70ch] text-step-0 text-[var(--muted)]">
+                NerdBot helps you chat with agents, run tasks, manage workspaces, and keep work moving. Start with these steps.
+              </p>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <button onClick={() => navigate("/projects")} className="rounded-lg border border-[var(--border-dim)] bg-[var(--bg)] p-4 text-left transition-colors hover:border-[var(--border-focus)] hover:bg-[var(--surface-2)]">
+                <div className="text-step--2 font-medium uppercase tracking-[0.12em] text-[var(--faint)]">Step 1</div>
+                <div className="mt-1 text-step-0 font-semibold text-[var(--text)]">Create or open a workspace</div>
+                <div className="mt-1 text-step--1 text-[var(--muted)]">Workspaces hold your agents, chats, tasks, files, and settings.</div>
+              </button>
+              <button onClick={() => navigate("/settings")} className="rounded-lg border border-[var(--border-dim)] bg-[var(--bg)] p-4 text-left transition-colors hover:border-[var(--border-focus)] hover:bg-[var(--surface-2)]">
+                <div className="text-step--2 font-medium uppercase tracking-[0.12em] text-[var(--faint)]">Step 2</div>
+                <div className="mt-1 text-step-0 font-semibold text-[var(--text)]">Connect a model</div>
+                <div className="mt-1 text-step--1 text-[var(--muted)]">Add a provider in Settings so agents can respond and run work.</div>
+              </button>
+              <button onClick={() => navigate("/bots")} className="rounded-lg border border-[var(--border-dim)] bg-[var(--bg)] p-4 text-left transition-colors hover:border-[var(--border-focus)] hover:bg-[var(--surface-2)]">
+                <div className="text-step--2 font-medium uppercase tracking-[0.12em] text-[var(--faint)]">Step 3</div>
+                <div className="mt-1 text-step-0 font-semibold text-[var(--text)]">Set up agents</div>
+                <div className="mt-1 text-step--1 text-[var(--muted)]">Create teammates, configure skills and permissions, and assign work.</div>
+              </button>
+              <button onClick={() => navigate("/chat")} className="rounded-lg border border-[var(--border-dim)] bg-[var(--bg)] p-4 text-left transition-colors hover:border-[var(--border-focus)] hover:bg-[var(--surface-2)]">
+                <div className="text-step--2 font-medium uppercase tracking-[0.12em] text-[var(--faint)]">Step 4</div>
+                <div className="mt-1 text-step-0 font-semibold text-[var(--text)]">Start a chat or task</div>
+                <div className="mt-1 text-step--1 text-[var(--muted)]">Ask questions, delegate work, or track progress in Activity.</div>
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         {summary.loading && !summary.data ? <LoadingState lines={4} /> : null}
         {summary.loadFailed ? (
