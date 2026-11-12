@@ -8,7 +8,7 @@ import { useWorkspaceSummary } from "./views-home";
 import { Markdown } from "./markdown";
 import { insertMention, mentionHandle, splitMentions } from "./mentions";
 import { explainRunError } from "./explainRunError";
-import { usableProviders } from "./readiness";
+import { providerIsUsable, usableProviders } from "./readiness";
 import {
   EmptyState,
   ErrorState,
@@ -603,85 +603,6 @@ function NewThreadModal({
 /** Grok-pattern model switcher: a quiet chip in the composer that opens a
  *  small menu, so model selection lives in the composer instead of buried
  *  in the thread header. */
-function ModelChip({
-  providers,
-  value,
-  onChange,
-  disabled,
-}: {
-  providers: { id: string; name: string; kind: string }[];
-  value: "__default__" | string;
-  onChange: (id: "__default__" | string) => void;
-  disabled?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const current = providers.find((p) => p.id === value);
-  const label = current ? current.name : "Default model";
-  const options: Array<{ id: "__default__" | string; label: string; kind?: string }> = [
-    { id: "__default__", label: "Default model" },
-    ...providers.map((p) => ({ id: p.id, label: p.name, kind: p.kind })),
-  ];
-  return (
-    <div className="relative">
-      <button
-        type="button"
-        disabled={disabled}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label="Model provider"
-        onClick={() => setOpen((v) => !v)}
-        className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-step--1 text-[var(--text-soft)] transition-colors hover:border-[var(--faint)] disabled:pointer-events-none disabled:opacity-50"
-      >
-        <span aria-hidden className="text-[var(--faint)]">Model:</span> {label}
-        <span aria-hidden className="text-[var(--faint)]">{open ? "▴" : "▾"}</span>
-      </button>
-      {open ? (
-        <>
-          <div
-            aria-hidden
-            className="fixed inset-0 z-20"
-            onClick={() => setOpen(false)}
-          />
-          <div
-            role="menu"
-            aria-label="Model provider options"
-            className="absolute bottom-full right-0 z-30 mb-2 w-56 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 shadow-lg"
-          >
-            {options.map((option) => {
-              const selected = option.id === value;
-              return (
-                <button
-                  key={option.id}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={selected}
-                  onClick={() => {
-                    onChange(option.id);
-                    setOpen(false);
-                  }}
-                  className={`flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-step--1 transition-colors ${
-                    selected
-                      ? "bg-[var(--surface-3)] text-[var(--text)]"
-                      : "text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
-                  }`}
-                >
-                  <span className="truncate">{option.label}</span>
-                  {selected ? (
-                    <span aria-hidden className="text-[var(--accent)]">✓</span>
-                  ) : option.kind ? (
-                    <span className="text-[var(--faint)]">{option.kind}</span>
-                  ) : null}
-                </button>
-              );
-            })}
-          </div>
-        </>
-      ) : null}
-    </div>
-  );
-}
-
-/* --- Thread pane --- */
 
 function ThreadPane({
   threadId,
@@ -2455,31 +2376,17 @@ function CommandCenter({
   onShowArchivedRecent?: (v: boolean) => void;
   projects?: any;
 }) {
-  const usable = usableProviders(providers);
-  const hasProvider = usable.length > 0;
+  const usableGlobal = usableProviders(providers);
+  void usableGlobal;
   const [draft, setDraft] = useState("");
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string>(projectId);
+  const [selectedAgentId, setSelectedAgentId] = useState<string>("");
   /* The owner's explicit choice wins; until they make one, start on the
      project's default model when it has one, otherwise on the first usable
      model anywhere so Home is never disabled above a working machine. A
-     real model beats a demo one when both exist: defaulting to canned
-     replies while a working model is connected is what let Home print
-     "Everything is connected" above "Demo mode" at the same time. The
-     chosen model decides which project the thread belongs to. */
+     real model beats a demo one when both exist. The chosen workspace/model
+     decides which project the thread belongs to. */
   const [explicitProviderId, setExplicitProviderId] = useState<string | null>(null);
-  const homeHasProvider = providers.some((provider) => provider.project_id === projectId);
-  const realFirst = usable.filter((provider) => provider.kind !== "mock");
-  const selectedProviderId =
-    explicitProviderId ??
-    (homeHasProvider
-      ? "__default__"
-      : (realFirst[0]?.id ?? usable[0]?.id ?? "__default__"));
-
-  // A mock provider answers with canned text and executes nothing. The reply
-  // says so, and this says so too, so the interface can label it instead of
-  // passing it off as work.
-  const isMockModel = providers.some(
-    (p) => p.kind === "mock" && (p.id === selectedProviderId || selectedProviderId === "__default__"),
-  );
 
   /* Discovery data for the getting-started path: what workspaces exist,
    * which bots are available, and which models are connected. */
@@ -2489,7 +2396,7 @@ function CommandCenter({
   void workspacesLoader.data?.counts;
   const bots = botsLoader.data?.teammates ?? [];
 
-  const providersByProjectLoader = useAsync(async () => {
+  useAsync(async () => {
     const result: Record<string, Provider[]> = {};
     for (const project of workspaces) {
       try {
@@ -2501,7 +2408,43 @@ function CommandCenter({
     }
     return result;
   }, [workspaces]);
-  void providersByProjectLoader.data;
+
+  const workspaceProviders = (providers || []).filter((p) => (p as any).project_id === selectedWorkspaceId);
+  const workspaceUsable = usableProviders(workspaceProviders);
+  const hasProvider = workspaceUsable.length > 0;
+  const homeHasProvider = workspaceProviders.length > 0;
+  const realFirst = workspaceUsable.filter((provider) => provider.kind !== "mock");
+  const selectedProviderId =
+    explicitProviderId ??
+    (homeHasProvider
+      ? "__default__"
+      : (realFirst[0]?.id ?? workspaceUsable[0]?.id ?? "__default__"));
+  const isMockModel = workspaceProviders.some(
+    (p) => p.kind === "mock" && (p.id === selectedProviderId || selectedProviderId === "__default__"),
+  );
+  const workspaceAgents = (bots || []).filter((b) => b.project_id === selectedWorkspaceId);
+  const selectedAgent = bots.find((b) => b.id === selectedAgentId) || null;
+
+  useEffect(() => {
+    // reset model choice when switching workspace
+    setExplicitProviderId(null);
+  }, [selectedWorkspaceId]);
+
+  useEffect(() => {
+    // keep agent selection valid for workspace
+    if (selectedAgentId && !workspaceAgents.some((b) => b.id === selectedAgentId)) {
+      setSelectedAgentId("");
+    }
+  }, [selectedWorkspaceId, workspaceAgents, selectedAgentId]);
+
+  useEffect(() => {
+    // pick a sensible default workspace once loaded (prefer one with a usable model)
+    if (workspaces.length === 0) return;
+    const current = workspaces.find((w) => w.id === selectedWorkspaceId);
+    if (current) return;
+    const preferred = workspaces.find((w) => (providers || []).some((p: any) => p.project_id === w.id && providerIsUsable(p as any))) || workspaces[0];
+    if (preferred) setSelectedWorkspaceId(preferred.id);
+  }, [workspaces, providers]);
 
   const [busy, setBusy] = useState(false);
   const [streaming, setStreaming] = useState("");
@@ -2532,16 +2475,17 @@ function CommandCenter({
     setStreaming("");
     let stopped = false;
     try {
-      const selected = providers.find(
+      const selected = workspaceProviders.find(
         (provider) => provider.id === selectedProviderId,
-      );
-      const targetProjectId = selected?.project_id ?? projectId;
+      ) || providers.find((provider) => provider.id === selectedProviderId);
+      const targetProjectId = selectedWorkspaceId || selected?.project_id || projectId;
+      const finalContent = selectedAgent ? insertMention(content, mentionHandle(selectedAgent)) : content;
       const thread = await api.createThread(targetProjectId, {
         title: content.slice(0, 60),
-        provider_id: selected?.id,
+        provider_id: selected?.id && selectedProviderId !== "__default__" ? selected.id : undefined,
       });
       try {
-        await api.sendChatStream(thread.id, content, (chunk) => {
+        await api.sendChatStream(thread.id, finalContent, (chunk) => {
           setStreaming((prev) => prev + chunk);
         }, undefined, undefined, "chat", { signal: controller.signal });
       } catch (err) {
@@ -2576,7 +2520,7 @@ function CommandCenter({
     }
     setBusy(true);
     try {
-      const res = await api.createProjectResearchJob(projectId, { query });
+      const res = await api.createProjectResearchJob(selectedWorkspaceId || projectId, { query });
       const job = res.job as ResearchJob;
       if (job?.id) {
         setResearchJobIds((prev) => [job.id, ...prev.filter((id) => id !== job.id)].slice(0, 6));
@@ -2717,7 +2661,7 @@ function CommandCenter({
                 onClick={async () => {
                   setBusy(true);
                   try {
-                    const result = await api.createObjective(projectId, {
+                    const result = await api.createObjective(selectedWorkspaceId || projectId, {
                       objective: planObjective,
                       plan: planDraft.plan,
                       create_board: true,
@@ -2742,23 +2686,67 @@ function CommandCenter({
 
         {/* Primary composer */}
         <div className="scroll-mt-6">
-          {(() => {
-            const selected = providers.find((p) => p.id === selectedProviderId) || usable[0];
-            const targetProjectId = selected?.project_id ?? projectId;
-            const targetWorkspace = workspaces.find((w) => w.id === targetProjectId)?.repository || (selected as any)?.project_name || "Home";
-            const agentCount = summary.summary.bots.length || bots.length;
-            return (
-              <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-step--2 text-[var(--muted)]">
-                <span>Workspace: <span className="font-medium text-[var(--text-soft)]">{targetWorkspace}</span></span>
-                <span aria-hidden>·</span>
-                <span>Model: <span className="font-medium text-[var(--text-soft)]">{selected?.name || (hasProvider ? "Default" : "Not connected")}</span></span>
-                <span aria-hidden>·</span>
-                <span>{agentCount > 0 ? `${agentCount} agent${agentCount === 1 ? "" : "s"} available` : "No agents yet"}</span>
-                {agentCount === 0 ? <button type="button" className="text-[var(--accent)] hover:underline" onClick={() => navigate("/bots")}>Create agent</button> : null}
-                {!hasProvider ? <button type="button" className="text-[var(--warn)] hover:underline" onClick={() => navigate("/settings")}>Connect a model to send</button> : null}
-              </div>
-            );
-          })()}
+          <div className="mb-3 flex flex-col gap-2 rounded-xl border border-[var(--border-dim)] bg-[var(--surface)] p-3">
+            <div className="grid gap-2 sm:grid-cols-3">
+              <label className="flex flex-col gap-1 text-step--2 text-[var(--muted)]">
+                <span>Workspace</span>
+                <select
+                  value={selectedWorkspaceId}
+                  onChange={(e) => setSelectedWorkspaceId(e.target.value)}
+                  className={`${FORM_SELECT} h-9`}
+                  aria-label="Workspace"
+                >
+                  {workspaces.length === 0 ? <option value={projectId}>Home</option> : null}
+                  {workspaces.map((w) => (
+                    <option key={w.id} value={w.id}>{w.repository || "Workspace"}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-step--2 text-[var(--muted)]">
+                <span>Model</span>
+                <select
+                  value={selectedProviderId}
+                  onChange={(e) => setExplicitProviderId(e.target.value)}
+                  className={`${FORM_SELECT} h-9`}
+                  aria-label="Model"
+                  disabled={workspaceProviders.length === 0}
+                >
+                  <option value="__default__">Default model</option>
+                  {workspaceProviders.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name} ({p.kind}){providerIsUsable(p as any) ? "" : " · not ready"}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-step--2 text-[var(--muted)]">
+                <span>Agent (optional)</span>
+                <select
+                  value={selectedAgentId}
+                  onChange={(e) => setSelectedAgentId(e.target.value)}
+                  className={`${FORM_SELECT} h-9`}
+                  aria-label="Agent"
+                >
+                  <option value="">No specific agent</option>
+                  {workspaceAgents.map((b) => (
+                    <option key={b.id} value={b.id}>{b.persona || b.name || "Agent"}{b.status ? ` · ${b.status}` : ""}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-step--2">
+              {!hasProvider ? (
+                <span className="text-[var(--warn)]">Model not ready for this workspace. <button type="button" className="font-medium underline underline-offset-4" onClick={() => navigate("/settings")}>Connect a model</button></span>
+              ) : (
+                <span className="text-[var(--muted)]">Ready to chat in <span className="font-medium text-[var(--text-soft)]">{workspaces.find((w) => w.id === selectedWorkspaceId)?.repository || "selected workspace"}</span>.</span>
+              )}
+              {workspaceAgents.length === 0 ? (
+                <span className="text-[var(--muted)]">No agents in this workspace. <button type="button" className="font-medium text-[var(--accent)] hover:underline" onClick={() => navigate("/bots")}>Create agent</button></span>
+              ) : selectedAgent ? (
+                <span className="text-[var(--muted)]">Will mention <span className="font-medium text-[var(--text-soft)]">@{mentionHandle(selectedAgent) || selectedAgent.persona || "agent"}</span> when you send.</span>
+              ) : (
+                <span className="text-[var(--muted)]">Tip: mention an agent with @name or pick one above.</span>
+              )}
+            </div>
+          </div>
           <form onSubmit={send}>
             <div className="flex flex-col gap-2 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-3 shadow-sm transition-colors focus-within:border-[var(--border-focus)] sm:flex-row sm:items-end">
               <textarea
@@ -2782,12 +2770,6 @@ function CommandCenter({
                 className="max-h-56 min-h-[96px] w-full min-w-0 resize-none bg-transparent p-2 text-step-0 leading-relaxed outline-none placeholder:text-[var(--faint)] disabled:opacity-50 sm:w-auto sm:flex-1"
               />
               <div className="flex items-center gap-2 justify-end">
-                <ModelChip
-                  providers={providers}
-                  value={selectedProviderId}
-                  onChange={setExplicitProviderId}
-                  disabled={busy || !hasProvider}
-                />
                 {busy ? (
                   <Button variant="danger" type="button" onClick={stop} disabled={!streaming}>
                     ■ Stop
@@ -2810,7 +2792,7 @@ function CommandCenter({
                         if (!content) return;
                         setBusy(true);
                         try {
-                          const result = await api.createObjective(projectId, { objective: content, preview: true });
+                          const result = await api.createObjective(selectedWorkspaceId || projectId, { objective: content, preview: true });
                           setPlanObjective(content);
                           setPlanDraft(result as PlanDraftState);
                           setDraft("");
