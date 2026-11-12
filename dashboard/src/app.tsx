@@ -629,7 +629,7 @@ export default function App() {
 
       <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden pb-14 md:pb-0">
         <button
-          className="fixed top-3 left-3 z-40 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] transition-colors hover:border-[var(--faint)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--bg)] md:hidden"
+          className="fixed top-3 left-3 z-40 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step--1 text-[var(--text)] shadow-sm transition-colors hover:bg-[var(--surface-2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] md:hidden"
           aria-label="Open navigation"
           onClick={() => setDrawerOpen(true)}
         >
@@ -748,55 +748,54 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }) {
 
   return (
     <div className="flex h-full bg-[var(--bg)] text-[var(--text)]">
-      <main className="flex h-full flex-1 flex-col items-center justify-center px-6">
-        <div className="w-full max-w-[460px]">
-          <h1 className="mb-2 font-semibold tracking-tight text-step-4">
-            NerdBot
-          </h1>
-          <p className="mb-6 text-[var(--muted)] text-step-0">
-            Connect to a running NerdBot API server.
-          </p>
+      <main className="flex h-full flex-1 items-center justify-center px-6 py-10">
+        <div className="w-full max-w-[440px] rounded-xl border border-[var(--border-dim)] bg-[var(--surface)] p-6 shadow-sm md:p-8">
+          <div className="mb-6">
+            <div className="mb-2 text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--faint)]">NerdBot</div>
+            <h1 className="text-step-2 font-semibold tracking-[-0.02em] text-[var(--text)]">Connect to your workspace</h1>
+            <p className="mt-2 text-step-0 leading-relaxed text-[var(--muted)]">
+              Enter your API server to continue.
+            </p>
+          </div>
           {error ? (
             <div
-              className="mb-4 rounded-lg border border-[var(--danger)] bg-[var(--danger-dim)] px-4 py-3 text-step-0"
+              className="mb-4 rounded-lg border border-[var(--danger-dim)] bg-[var(--danger-dim)]/40 px-4 py-3 text-step--1 text-[var(--text)]"
               role="alert"
             >
               {error}
             </div>
           ) : null}
           <form onSubmit={connect} className="space-y-4">
-            <div>
-              <span className="mb-1.5 block font-medium tracking-wide text-[var(--muted)] text-step--1 uppercase">
+            <label className="block">
+              <span className="mb-1.5 block text-step--1 font-medium text-[var(--text-soft)]">
                 API base URL
               </span>
               <input
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
                 required
-                className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step-0 text-[var(--text)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
+                className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 text-step-0 text-[var(--text)] outline-none transition-colors focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
+                placeholder="http://localhost:8080"
               />
-            </div>
-            <div>
-              <span className="mb-1.5 block font-medium tracking-wide text-[var(--muted)] text-step--1 uppercase">
-                API token
-                <span className="ml-1 normal-case text-[var(--faint)]">
-                  (optional in dev mode — the server hands one back)
-                </span>
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-step--1 font-medium text-[var(--text-soft)]">
+                API token <span className="font-normal text-[var(--faint)]">(optional in dev mode)</span>
               </span>
               <input
                 type="password"
                 value={token}
                 onChange={(e) => setToken(e.target.value)}
                 autoComplete="off"
-                className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step-0 text-[var(--text)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
+                className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 text-step-0 text-[var(--text)] outline-none transition-colors focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
               />
-            </div>
+            </label>
             <button
-              className="mt-2 inline-flex w-full items-center justify-center rounded-md border border-[var(--accent)] bg-[var(--accent)] px-3 py-2 font-semibold text-step--1 text-[var(--text-inverse)] transition-colors hover:border-[var(--accent-hover)] hover:bg-[var(--accent-hover)] disabled:pointer-events-none disabled:opacity-50"
+              className="mt-2 inline-flex w-full items-center justify-center rounded-md border border-[var(--accent)] bg-[var(--accent)] px-3 py-2.5 text-step--1 font-semibold text-white transition-colors hover:border-[var(--accent-hover)] hover:bg-[var(--accent-hover)] disabled:pointer-events-none disabled:opacity-50"
               type="submit"
               disabled={busy}
             >
-              {busy ? "Connecting…" : "Connect"}
+              {busy ? "Connecting..." : "Connect"}
             </button>
           </form>
         </div>

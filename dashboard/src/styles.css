@@ -18,74 +18,65 @@
   src: url("/fonts/geist-mono-variable.woff2") format("woff2");
 }
 
-/* Dark theme (default) */
+/* Dark theme (default): calm, neutral, product-grade surfaces. */
 :root {
-  /* Typography */
   --font-sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
-  /* Fluid type scale (clamp) */
+  /* Type scale */
   --step-minus-3: clamp(0.62rem, 0.6rem + 0.08vw, 0.68rem);
   --step-minus-2: clamp(0.72rem, 0.7rem + 0.08vw, 0.76rem);
-  --step-minus-1: clamp(0.8rem, 0.78rem + 0.1vw, 0.85rem);
-  --step-0: clamp(1rem, 0.98rem + 0.12vw, 1.125rem);
-  --step-1: clamp(1.25rem, 1.15rem + 0.35vw, 1.6rem);
-  --step-2: clamp(1.5rem, 1.35rem + 0.6vw, 2rem);
-  --step-3: clamp(1.9rem, 1.65rem + 1vw, 2.75rem);
-  --step-4: clamp(2.4rem, 1.95rem + 1.9vw, 4rem);
-  --step-5: clamp(3.2rem, 2.4rem + 3vw, 5.5rem);
+  --step-minus-1: clamp(0.8rem, 0.78rem + 0.1vw, 0.86rem);
+  --step-0: clamp(0.95rem, 0.93rem + 0.12vw, 1rem);
+  --step-1: clamp(1.12rem, 1.06rem + 0.25vw, 1.28rem);
+  --step-2: clamp(1.35rem, 1.22rem + 0.5vw, 1.7rem);
+  --step-3: clamp(1.7rem, 1.45rem + 0.9vw, 2.2rem);
+  --step-4: clamp(2.1rem, 1.75rem + 1.4vw, 2.8rem);
+  --step-5: clamp(2.6rem, 2rem + 2.2vw, 3.6rem);
 
-  /* Surfaces — cool gray family, one accent */
-  --bg: #0a0d10;
-  --bg-inverse: #f4f6f8;
-  --surface: #12181c;
-  --surface-2: #192128;
-  --surface-3: #202a33;
-  --surface-hover: #242e37;
-  --border: #242e37;
-  --border-dim: #1c242c;
-  --border-focus: #f59e0b;
-  --text: #e7ecf0;
-  --text-soft: #b9c4cf;
-  --text-inverse: #071014;
-  --muted: #8b98a5;
-  /* AA-checked: 4.99:1 on --surface, 5.43:1 on --bg */
-  --faint: #79899a;
-  --ring: rgba(245, 158, 11, 0.35);
+  /* Surfaces: one neutral family, subtle depth */
+  --bg: #0b0d10;
+  --bg-inverse: #f5f7fa;
+  --surface: #12161b;
+  --surface-2: #171c22;
+  --surface-3: #1d232b;
+  --surface-hover: #222a33;
+  --border: #27303a;
+  --border-dim: #1e2630;
+  --border-focus: #3b82f6;
+  --text: #e8edf3;
+  --text-soft: #c3ccd6;
+  --text-inverse: #0b0d10;
+  --muted: #93a0ad;
+  --faint: #748291;
+  --ring: rgba(59, 130, 246, 0.35);
 
-  /* Bot faces — the plate a face is drawn on. The eyes of a bot are holes
-     punched through its body, so the plate is what shows in them, and the
-     palette holds both a near-black and a near-white body: the plate is
-     therefore the opposite of the body, and it does not change with the
-     theme (a face is a portrait, and a portrait medallion reads the same
-     way in both). Mirrors PLATE_LIGHT / PLATE_DARK in src/bot/face.ts. */
+  /* Bot faces (unchanged semantics) */
   --face-plate-light: #f2f3f2;
   --face-plate-dark: #0c1116;
 
-  /* Semantic colors */
-  --accent: #f59e0b;
-  --accent-dim: rgba(245, 158, 11, 0.10);
-  --accent-hover: #fbbf24;
-  --danger: #d75f5d;
-  --danger-dim: rgba(215, 95, 93, 0.08);
-  --warn: #c98f33;
-  --warn-dim: rgba(201, 143, 51, 0.08);
-  --info: #5aa9e6;
-  --info-dim: rgba(90, 169, 230, 0.08);
-  --success: #f59e0b;
+  /* Semantic: one accent, restrained */
+  --accent: #2563eb;
+  --accent-dim: rgba(37, 99, 235, 0.14);
+  --accent-hover: #3b82f6;
+  --success: #22a06b;
+  --danger: #dc5a5a;
+  --danger-dim: rgba(220, 90, 90, 0.14);
+  --warn: #d97706;
+  --warn-dim: rgba(217, 119, 6, 0.14);
+  --info: #5b8def;
+  --info-dim: rgba(91, 141, 239, 0.14);
 
-  /* Radius / shadows / motion */
-  --radius: 8px;
-  --radius-sm: 6px;
-  --radius-lg: 12px;
-  --shadow: 0 1px 3px rgba(0, 0, 0, 0.35), 0 1px 2px rgba(0, 0, 0, 0.22);
-  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --radius: 10px;
+  --radius-sm: 8px;
+  --radius-lg: 14px;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.35);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-sharp: cubic-bezier(0.2, 0, 0.38, 0.9);
-  --duration-in: 200ms;
-  --duration-out: 150ms;
+  --duration-in: 180ms;
+  --duration-out: 140ms;
 
-  /* Spacing scale */
   --space-1: 2px;
   --space-2: 4px;
   --space-3: 8px;
@@ -99,70 +90,62 @@
   --space-20: 64px;
   --space-24: 80px;
 
-  /* Content widths */
-  --width-sidebar: 240px;
+  --width-sidebar: 252px;
   --width-conversation-sidebar: 288px;
-  --max-width-read: 68ch;
-  --max-width-wide: 960px;
+  --max-width-read: 72ch;
+  --max-width-wide: 1120px;
 }
 
 /* Light theme */
 [data-theme="light"] {
-  --bg: #f7f8f9;
-  --bg-inverse: #0a0d10;
+  --bg: #f6f7f9;
+  --bg-inverse: #0b0d10;
   --surface: #ffffff;
-  --surface-2: #f0f2f4;
-  --surface-3: #e7e9ec;
-  --surface-hover: #e1e4e8;
-  --border: #d4d9dd;
-  --border-dim: #c4c9d0;
-  --border-focus: #f59e0b;
-  --text: #0f171d;
-  --text-soft: #47535f;
-  --text-inverse: #f7f8f9;
-  --muted: #5d6873;
-  /* AA-checked: 4.83:1 on --surface, 4.54:1 on --bg; muted stays a legible
-     step above (5.69:1 on surface). */
-  --faint: #68737f;
-  --ring: rgba(46, 158, 107, 0.25);
+  --surface-2: #f1f3f6;
+  --surface-3: #e8ebf0;
+  --surface-hover: #e2e7ee;
+  --border: #d7dde6;
+  --border-dim: #e3e7ee;
+  --border-focus: #2563eb;
+  --text: #121720;
+  --text-soft: #3a4654;
+  --text-inverse: #ffffff;
+  --muted: #5b6878;
+  --faint: #738294;
+  --ring: rgba(37, 99, 235, 0.22);
 
-  --accent: #f59e0b;
-  --accent-dim: rgba(245, 158, 11, 0.12);
-  --accent-hover: #fbbf24;
-  --danger: #c0504f;
-  --danger-dim: rgba(192, 80, 79, 0.10);
-  --warn: #b07a2c;
-  --warn-dim: rgba(176, 122, 44, 0.10);
-  --info: #4589c7;
-  --info-dim: rgba(69, 137, 199, 0.10);
-  --success: #f59e0b;
+  --accent: #2563eb;
+  --accent-dim: rgba(37, 99, 235, 0.1);
+  --accent-hover: #1d4ed8;
+  --success: #178a5a;
+  --danger: #c64545;
+  --danger-dim: rgba(198, 69, 69, 0.1);
+  --warn: #b45309;
+  --warn-dim: rgba(180, 83, 9, 0.1);
+  --info: #2563eb;
+  --info-dim: rgba(37, 99, 235, 0.1);
 
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 1px 1px rgba(0, 0, 0, 0.04);
-  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.08);
+  --shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+  --shadow-lg: 0 12px 28px rgba(16, 24, 40, 0.1);
 }
 
-/* System preference dark override */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #0a0d10;
-    --bg-inverse: #f4f6f8;
-    --surface: #12181c;
-    --surface-2: #192128;
-    --surface-3: #202a33;
-    --surface-hover: #242e37;
-    --border: #242e37;
-    --border-dim: #1c242c;
-    --text: #e7ecf0;
-    --text-soft: #b9c4cf;
-    --text-inverse: #071014;
-    --muted: #8b98a5;
-    --faint: #79899a;
-    --accent-dim: rgba(245, 158, 11, 0.10);
-    --danger-dim: rgba(215, 95, 93, 0.08);
-    --warn-dim: rgba(201, 143, 51, 0.08);
-    --info-dim: rgba(90, 169, 230, 0.08);
-    --shadow: 0 1px 3px rgba(0, 0, 0, 0.35), 0 1px 2px rgba(0, 0, 0, 0.22);
-    --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.45);
+    --bg: #0b0d10;
+    --bg-inverse: #f5f7fa;
+    --surface: #12161b;
+    --surface-2: #171c22;
+    --surface-3: #1d232b;
+    --surface-hover: #222a33;
+    --border: #27303a;
+    --border-dim: #1e2630;
+    --text: #e8edf3;
+    --text-soft: #c3ccd6;
+    --text-inverse: #0b0d10;
+    --muted: #93a0ad;
+    --faint: #748291;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+    --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.35);
   }
 }
 
@@ -172,49 +155,39 @@
 @tailwind utilities;
 
 /* ===== Base ===== */
-* {
-  box-sizing: border-box;
-}
+* { box-sizing: border-box; }
 
-html,
-body,
-#root {
+html, body, #root {
   margin: 0;
+  height: 100%;
+  overflow: hidden;
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
   font-size: 14px;
-  line-height: 1.55;
-  height: 100%;
-  overflow: hidden;
+  line-height: 1.5;
+  text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-.dark {
-  color-scheme: dark;
-}
+.dark { color-scheme: dark; }
+[data-theme="light"] { color-scheme: light; }
 
-[data-theme="light"] {
-  color-scheme: light;
-}
+::selection { background: var(--accent-dim); color: var(--text); }
 
-a {
-  color: var(--accent);
-  text-decoration: none;
-}
+a { color: inherit; text-decoration: none; }
+a:hover { color: var(--text); }
 
-a:hover {
-  text-decoration: underline;
-}
+.mono { font-family: var(--font-mono); }
 
-.mono {
-  font-family: var(--font-mono);
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  *, *::before, *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
@@ -223,20 +196,8 @@ a:hover {
 }
 
 /* ===== Terminal chrome (workbench) ===== */
-/* xterm.css sets its own defaults; bring the chrome onto the design system
- * so the terminal reads as part of the workspace in both themes. */
-#workbench-terminal {
-  border: 1px solid var(--border-dim);
-}
-#workbench-terminal .xterm-focus-glow {
-  display: none !important;
-}
-#workbench-terminal .xterm .xterm-scrollbar-state {
-  background: transparent !important;
-}
-#workbench-terminal .xterm .xterm-scrollbar .xterm-scrollbar-area {
-  opacity: 0.45 !important;
-}
-#workbench-terminal .xterm .xterm-scrollbar .xterm-scrollbar-area:not(:hover) {
-  transition: background-color 200ms ease;
-}
+#workbench-terminal { border: 1px solid var(--border-dim); border-radius: var(--radius-sm); overflow: hidden; }
+#workbench-terminal .xterm-focus-glow { display: none !important; }
+#workbench-terminal .xterm .xterm-scrollbar-state { background: transparent !important; }
+#workbench-terminal .xterm .xterm-scrollbar .xterm-scrollbar-area { opacity: 0.45 !important; }
+#workbench-terminal .xterm .xterm-scrollbar .xterm-scrollbar-area:not(:hover) { transition: background-color 200ms ease; }

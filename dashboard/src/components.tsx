@@ -170,12 +170,10 @@ export function Page({
   className?: string;
   width?: "reading" | "data" | "fill";
 }) {
-  const max = width === "reading" ? "max-w-[880px]" : width === "data" ? "max-w-[1280px]" : "max-w-none";
-  /* `fill` keeps the page gutters; only the max-width is waived, so a
-     full-width view still clears the sidebar and the window edge. */
+  const max = width === "reading" ? "max-w-[860px]" : width === "data" ? "max-w-[1120px]" : "max-w-none";
   const pad = "px-4 py-6 pl-14 md:px-8 md:py-8";
   return (
-    <div className={`flex-1 overflow-y-auto overflow-x-hidden ${className}`}>
+    <div className={`flex-1 overflow-y-auto overflow-x-hidden bg-[var(--bg)] ${className}`}>
       <div className={`mx-auto w-full ${max} ${pad}`}>
         {children}
       </div>
@@ -201,36 +199,34 @@ export function PageHeader({
       {back ? (
         <button
           onClick={back.onClick}
-          className="mb-3 inline-flex items-center gap-1 text-step--1 text-[var(--muted)] hover:text-[var(--text)] transition-colors"
+          className="mb-4 inline-flex items-center gap-1.5 rounded-md px-1 py-0.5 text-step--1 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
         >
           <span aria-hidden>←</span> {back.label}
         </button>
       ) : null}
-      {/* The title block grows but shrinks, so the actions stay on the right
-          instead of wrapping under the description on a wide window. */}
-      <div className="flex flex-wrap items-start justify-between gap-x-8 gap-y-3">
+      <div className="flex flex-wrap items-start justify-between gap-x-8 gap-y-4">
         <div className="min-w-[14rem] flex-1">
           {eyebrow ? (
-            <div className="mb-1 text-step--2 uppercase tracking-[0.16em] text-[var(--faint)]">
+            <div className="mb-2 text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--faint)]">
               {eyebrow}
             </div>
           ) : null}
-          <h1 className="text-step-1 font-semibold tracking-tight text-[var(--text)]">
+          <h1 className="text-step-2 font-semibold tracking-[-0.02em] text-[var(--text)]">
             {title}
           </h1>
           {description ? (
             typeof description === "string" ? (
-              <p className="mt-1 max-w-[68ch] text-step-0 text-[var(--muted)] leading-relaxed">
+              <p className="mt-2 max-w-[68ch] text-step-0 leading-relaxed text-[var(--muted)]">
                 {description}
               </p>
             ) : (
-              <div className="mt-1 max-w-[68ch] text-step-0 text-[var(--muted)] leading-relaxed">
+              <div className="mt-2 max-w-[68ch] text-step-0 leading-relaxed text-[var(--muted)]">
                 {description}
               </div>
             )
           ) : null}
         </div>
-        {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
+        {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
       </div>
     </div>
   );
@@ -252,8 +248,8 @@ export function PageSection({
   className?: string;
 }) {
   return (
-    <section className={`mb-10 last:mb-0 ${className}`}>
-      <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
+    <section className={`mb-8 last:mb-0 ${className}`}>
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-x-6 gap-y-2">
         <div className="min-w-0">
           <h2 className="text-step-0 font-semibold tracking-tight text-[var(--text)]">
             {title}
@@ -696,14 +692,14 @@ export function Button({
   ariaLabel?: string;
 }) {
   const base =
-    "inline-flex items-center justify-center gap-1.5 rounded-md border px-3 py-1.5 text-step--1 font-medium transition-[background-color,border-color,color,transform] duration-150 ease-out active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--bg)] max-lg:min-h-11";
+    "inline-flex items-center justify-center gap-1.5 rounded-md border px-3 py-2 text-step--1 font-medium transition-[background-color,border-color,color,box-shadow] duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-0 max-lg:min-h-10";
   const variants: Record<string, string> = {
     default:
-      "border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] hover:border-[var(--faint)] hover:text-[var(--text)]",
+      "border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-2)] hover:border-[var(--faint)]",
     primary:
-      "bg-[var(--accent)] border-[var(--accent)] text-[var(--text-inverse)] font-semibold hover:bg-[var(--accent-hover)] hover:border-[var(--accent-hover)]",
+      "border-[var(--accent)] bg-[var(--accent)] text-white font-semibold hover:bg-[var(--accent-hover)] hover:border-[var(--accent-hover)]",
     danger:
-      "border-[var(--danger)] text-[var(--danger)] hover:bg-[var(--danger-dim)]",
+      "border-[var(--danger-dim)] bg-[var(--danger-dim)] text-[var(--danger)] hover:border-[var(--danger)] hover:bg-transparent",
     ghost:
       "border-transparent bg-transparent text-[var(--text-soft)] hover:bg-[var(--surface-2)] hover:text-[var(--text)]",
   };

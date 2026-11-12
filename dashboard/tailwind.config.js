@@ -1,10 +1,7 @@
 /** @type {import('tailwindcss').Config} */
 export default {
   darkMode: "class",
-  content: [
-    "./index.html",
-    "./src/**/*.{js,ts,jsx,tsx}",
-  ],
+  content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
   theme: {
     extend: {
       fontFamily: {
@@ -46,25 +43,10 @@ export default {
         4: "var(--space-4)",
         5: "var(--space-5)",
         6: "var(--space-6)",
-        7: "var(--space-6)",
         8: "var(--space-8)",
-        9: "var(--space-8)",
-        10: "var(--space-10)",
-        11: "var(--space-10)",
         10: "var(--space-10)",
         12: "var(--space-12)",
-        13: "var(--space-12)",
-        14: "var(--space-12)",
-        15: "var(--space-12)",
         16: "var(--space-16)",
-        17: "var(--space-16)",
-        18: "var(--space-16)",
-        19: "var(--space-16)",
-        20: "var(--space-20)",
-        21: "var(--space-20)",
-        22: "var(--space-20)",
-        23: "var(--space-20)",
-        24: "var(--space-24)",
         20: "var(--space-20)",
         24: "var(--space-24)",
       },
@@ -73,7 +55,7 @@ export default {
         "step--2": ["var(--step-minus-2)", { lineHeight: "1.4" }],
         "step--1": ["var(--step-minus-1)", { lineHeight: "1.45" }],
         "step-0": ["var(--step-0)", { lineHeight: "1.55" }],
-        "step-1": ["var(--step-1)", { lineHeight: "1.5" }],
+        "step-1": ["var(--step-1)", { lineHeight: "1.3" }],
         "step-2": ["var(--step-2)", { lineHeight: "1.15" }],
         "step-3": ["var(--step-3)", { lineHeight: "1.1" }],
         "step-4": ["var(--step-4)", { lineHeight: "1.05" }],
@@ -87,6 +69,7 @@ export default {
       },
       boxShadow: {
         sm: "var(--shadow)",
+        DEFAULT: "var(--shadow)",
         lg: "var(--shadow-lg)",
       },
       animation: {
@@ -101,4 +84,4 @@ export default {
     },
   },
   plugins: [],
-}
+};
