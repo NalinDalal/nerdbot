@@ -14,7 +14,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml uv.lock README.md ./
 RUN pip install --no-cache-dir uv && uv sync --frozen --no-dev
 COPY backend/src ./backend/src
 # SPA static files are resolved by backend at /app/dashboard/dist
