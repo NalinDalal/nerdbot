@@ -404,6 +404,36 @@ export function HomeOverviewView() {
           </div>
         ) : null}
 
+        {actionable.length > 0 ? (
+          <PageSection title="Needs attention" description="Important operational notifications and actionable issues.">
+            <div className="flex flex-col gap-2">
+              {actionable.map((item) => (
+                <div key={item.key} className={`rounded-lg border px-4 py-3 ${item.tone === "danger" ? "border-[var(--danger)] bg-[var(--danger-dim)]" : "border-[var(--warn)] bg-[var(--warn-dim)]"}`}>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium text-[var(--text)]">{item.title}</span>
+                        <Badge variant={item.tone === "danger" ? "bad" : "warn"}>{item.tone === "danger" ? "Blocked/failed" : "Needs decision"}</Badge>
+                      </div>
+                      <div className="mt-1 text-step--1 text-[var(--muted)]">{item.detail}</div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {item.approval ? (
+                        <>
+                          <Button variant="primary" disabled={busyApproval === item.approval.id} onClick={() => void decide(item.approval!.id, "approved")}>Approve</Button>
+                          <Button variant="danger" disabled={busyApproval === item.approval.id} onClick={() => void decide(item.approval!.id, "denied")}>Reject</Button>
+                        </>
+                      ) : item.href ? (
+                        <Button onClick={() => navigate(item.href!)}>Open</Button>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </PageSection>
+        ) : null}
+
         <PageSection title="System and operational health" description="Important indicators, notifications, and recovery signals.">
           <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
             {systemSignals.map((s) => (
@@ -546,36 +576,6 @@ export function HomeOverviewView() {
             </div>
           )}
         </PageSection>
-
-        {actionable.length > 0 ? (
-          <PageSection title="Needs attention" description="Important operational notifications and actionable issues.">
-            <div className="flex flex-col gap-2">
-              {actionable.map((item) => (
-                <div key={item.key} className={`rounded-lg border px-4 py-3 ${item.tone === "danger" ? "border-[var(--danger)] bg-[var(--danger-dim)]" : "border-[var(--warn)] bg-[var(--warn-dim)]"}`}>
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-medium text-[var(--text)]">{item.title}</span>
-                        <Badge variant={item.tone === "danger" ? "bad" : "warn"}>{item.tone === "danger" ? "Blocked/failed" : "Needs decision"}</Badge>
-                      </div>
-                      <div className="mt-1 text-step--1 text-[var(--muted)]">{item.detail}</div>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      {item.approval ? (
-                        <>
-                          <Button variant="primary" disabled={busyApproval === item.approval.id} onClick={() => void decide(item.approval!.id, "approved")}>Approve</Button>
-                          <Button variant="danger" disabled={busyApproval === item.approval.id} onClick={() => void decide(item.approval!.id, "denied")}>Reject</Button>
-                        </>
-                      ) : item.href ? (
-                        <Button onClick={() => navigate(item.href!)}>Open</Button>
-                      ) : null}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </PageSection>
-        ) : null}
 
         <PageSection title="Recent results" description="Openable results from your workspaces, when available.">
           {recentResults.loading && !recentResults.data ? <LoadingState lines={3} /> : results.length === 0 ? (
