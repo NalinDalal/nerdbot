@@ -7,6 +7,7 @@ import type { ChatMessage, ChatThread, Plan, Provider, ResearchJob, ResearchJobE
 import { useWorkspaceSummary } from "./views-home";
 import { Markdown } from "./markdown";
 import { insertMention, mentionHandle, splitMentions } from "./mentions";
+import { executionStages } from "./chatParts";
 import { explainRunError } from "./explainRunError";
 import { providerIsUsable, usableProviders } from "./readiness";
 import {
@@ -639,6 +640,7 @@ function ThreadWorkSection({ projectId, threadId, refreshKey }: { projectId: str
   const docs = useAsync(() => api.listLibrary(projectId).then((r) => (r.docs || []).slice(0, 8)), [projectId, threadId, refreshKey]);
   const gallery = useAsync(() => api.listGallery(projectId, { limit: 8 }).then((r) => r.assets || []), [projectId, threadId, refreshKey]);
   const [busyTask, setBusyTask] = useState<string | null>(null);
+  const [expandedTask, setExpandedTask] = useState<string | null>(null);
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -654,7 +656,7 @@ function ThreadWorkSection({ projectId, threadId, refreshKey }: { projectId: str
 
   const recentTasks = (tasks.data || [])
     .filter((t: any) => !["archived"].includes(t.status))
-    .sort((a: any, b: any) => String(b.created_at || b.updated_at || "").localeCompare(String(a.created_at || a.updated_at || "")))
+    .sort((a: any, b: any) => String(b.updated_at || b.created_at || "").localeCompare(String(a.updated_at || a.created_at || "")))
     .slice(0, 6);
   const runByTask = new Map<string, any>();
   for (const r of (runs.data || [])) {
@@ -675,35 +677,69 @@ function ThreadWorkSection({ projectId, threadId, refreshKey }: { projectId: str
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <div>
           <div className="text-step--1 font-semibold text-[var(--text)]">Work & results</div>
-          <div className="text-step--2 text-[var(--muted)]">Workspace activity shown here; items linked to this conversation are labeled.</div>
+          <div className="text-step--2 text-[var(--muted)]">Data-backed workspace activity. Items explicitly linked to this conversation are labeled; task-to-thread linkage is not assumed.</div>
         </div>
         <Button variant="ghost" onClick={() => navigate(`/p/${projectId}?tab=Work`)}>Open workspace</Button>
       </div>
 
       {recentTasks.length > 0 ? (
         <div className="mb-3">
-          <div className="mb-1.5 text-step--2 font-medium uppercase tracking-wider text-[var(--faint)]">Tasks</div>
+          <div className="mb-1.5 text-step--2 font-medium uppercase tracking-wider text-[var(--faint)]">Execution (workspace activity)</div>
           <div className="flex flex-col gap-2">
             {recentTasks.map((task: any) => {
               const run = runByTask.get(task.id);
               const failed = task.status === "failed" || run?.status === "failed";
+              const stages = executionStages(task, run);
+              const expanded = expandedTask === task.id;
               return (
-                <div key={task.id} className="rounded-lg border border-[var(--border-dim)] bg-[var(--bg)] px-3 py-2">
+                <div key={task.id} className="rounded-lg border border-[var(--border-dim)] bg-[var(--bg)] px-3 py-2.5">
                   <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <div className="truncate text-step--1 font-medium text-[var(--text)]">{task.description || "Untitled task"}</div>
-                      <div className="mt-0.5 flex flex-wrap items-center gap-2 text-step--2 text-[var(--muted)]">
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-step--2 text-[var(--muted)]">
                         <StatusBadge status={task.status} />
-                        {task.owner_teammate_id ? <span>Agent assigned</span> : <span>Unassigned</span>}
-                        {run ? <span>Run: {run.status}</span> : null}
+                        <span>{task.owner_teammate_id ? "Agent assigned" : "Unassigned"}</span>
+                        {run ? <span>Latest run: {run.status}{run.status === "running" ? " (live)" : ""}</span> : <span>No run recorded yet</span>}
                       </div>
-                      {task.blocked_reason ? <div className="mt-1 text-step--2 text-[var(--warn)]">{task.blocked_reason}</div> : null}
+                      {task.blocked_reason ? <div className="mt-1 text-step--2 text-[var(--warn)]">Needs attention: {task.blocked_reason}</div> : null}
+                      {failed && run ? (
+                        <div className="mt-1 text-step--2 text-[var(--danger)]">
+                          {explainRunError({ command: task.command || "", project_id: projectId }, { stderr: run.stderr || "", output_excerpt: run.output_excerpt || "" }).message || "Latest run failed."}
+                        </div>
+                      ) : null}
                     </div>
                     <div className="flex flex-wrap items-center gap-1.5">
-                      <Button onClick={() => openTask(projectId, task.id)}>Open</Button>
+                      <Button onClick={() => setExpandedTask(expanded ? null : task.id)}>{expanded ? "Hide" : "Timeline"}</Button>
+                      <Button onClick={() => openTask(projectId, task.id)}>Open task</Button>
                       {failed ? <Button variant="primary" disabled={busyTask === task.id} onClick={async () => { setBusyTask(task.id); try { await api.retryTask(task.id); toast.success("Retry started"); tasks.reload(); runs.reload(); } catch (e) { notifyError(e); } finally { setBusyTask(null); } }}>{busyTask === task.id ? "Retrying…" : "Retry"}</Button> : null}
                     </div>
                   </div>
+                  {expanded ? (
+                    <div className="mt-3 border-t border-[var(--border-dim)] pt-3">
+                      <div className="mb-2 text-step--2 font-medium uppercase tracking-wider text-[var(--faint)]">Execution timeline (observed state)</div>
+                      <ol className="flex flex-col gap-2">
+                        {stages.map((s) => (
+                          <li key={s.label} className="flex items-start gap-2">
+                            <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${s.state === "done" ? "bg-[var(--success)]" : s.state === "active" ? "bg-[var(--info)] animate-pulse" : s.state === "warn" ? "bg-[var(--warn)]" : s.state === "error" ? "bg-[var(--danger)]" : "bg-[var(--border)]"}`} aria-hidden />
+                            <div className="min-w-0">
+                              <div className="text-step--1 text-[var(--text)]">{s.label}</div>
+                              <div className="text-step--2 text-[var(--muted)]">{s.detail}</div>
+                            </div>
+                          </li>
+                        ))}
+                      </ol>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Button onClick={() => openTask(projectId, task.id)}>Open task details</Button>
+                        {task.status === "awaiting_approval" || task.status === "blocked" ? <Button onClick={() => navigate("/approvals")}>Review approvals</Button> : null}
+                      </div>
+                      {run?.output_excerpt ? (
+                        <details className="mt-2 rounded-md border border-[var(--border-dim)] bg-[var(--surface)] p-2">
+                          <summary className="cursor-pointer text-step--2 text-[var(--muted)]">Latest run output (excerpt)</summary>
+                          <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-step--2 text-[var(--text-soft)]">{String(run.output_excerpt).slice(0, 1200)}</pre>
+                        </details>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
               );
             })}
@@ -717,13 +753,13 @@ function ThreadWorkSection({ projectId, threadId, refreshKey }: { projectId: str
           <div className="flex flex-col gap-1.5">
             {threadDocs.map((d: any) => (
               <button key={d.id} type="button" className="flex items-center justify-between rounded-md border border-[var(--border-dim)] bg-[var(--bg)] px-3 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => navigate(`/library/${d.id}`)}>
-                <span className="min-w-0 truncate text-step--1 text-[var(--text)]">{d.title || "Untitled document"}</span>
+                <span className="min-w-0"><span className="block truncate text-step--1 text-[var(--text)]">{d.title || "Untitled document"}</span><span className="block text-step--2 text-[var(--muted)]">Linked to this thread · {d.format || d.kind || "document"}</span></span>
                 <span className="ml-2 shrink-0 text-step--2 text-[var(--accent)]">Open</span>
               </button>
             ))}
             {threadAssets.map((a: any) => (
               <button key={a.id} type="button" className="flex items-center justify-between rounded-md border border-[var(--border-dim)] bg-[var(--bg)] px-3 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => navigate(`/gallery`)}>
-                <span className="min-w-0 truncate text-step--1 text-[var(--text)]">{a.name || "Asset"}</span>
+                <span className="min-w-0"><span className="block truncate text-step--1 text-[var(--text)]">{a.name || "Asset"}</span><span className="block text-step--2 text-[var(--muted)]">Linked to this thread · {a.mime_type || "asset"}</span></span>
                 <span className="ml-2 shrink-0 text-step--2 text-[var(--accent)]">Open gallery</span>
               </button>
             ))}
@@ -737,13 +773,13 @@ function ThreadWorkSection({ projectId, threadId, refreshKey }: { projectId: str
           <div className="flex flex-col gap-1.5">
             {otherDocs.map((d: any) => (
               <button key={d.id} type="button" className="flex items-center justify-between rounded-md border border-[var(--border-dim)] bg-[var(--bg)] px-3 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => navigate(`/library/${d.id}`)}>
-                <span className="min-w-0 truncate text-step--1 text-[var(--text)]">{d.title || "Untitled document"}</span>
+                <span className="min-w-0"><span className="block truncate text-step--1 text-[var(--text)]">{d.title || "Untitled document"}</span><span className="block text-step--2 text-[var(--muted)]">Workspace result · {d.format || d.kind || "document"}</span></span>
                 <span className="ml-2 shrink-0 text-step--2 text-[var(--muted)]">Open</span>
               </button>
             ))}
             {otherAssets.map((a: any) => (
               <button key={a.id} type="button" className="flex items-center justify-between rounded-md border border-[var(--border-dim)] bg-[var(--bg)] px-3 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => navigate(`/gallery`)}>
-                <span className="min-w-0 truncate text-step--1 text-[var(--text)]">{a.name || "Asset"}</span>
+                <span className="min-w-0"><span className="block truncate text-step--1 text-[var(--text)]">{a.name || "Asset"}</span><span className="block text-step--2 text-[var(--muted)]">Workspace result · {a.mime_type || "asset"}</span></span>
                 <span className="ml-2 shrink-0 text-step--2 text-[var(--muted)]">Open gallery</span>
               </button>
             ))}
