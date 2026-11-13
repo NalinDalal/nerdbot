@@ -25,18 +25,18 @@ export function parseRoute() {
     const params = new URLSearchParams(window.location.search);
     const parts = window.location.pathname.split("/").filter(Boolean);
     if (parts.length === 0)
-        return { name: "chat" };
+        return { name: "overview" };
     if (parts[0] === "overview" || parts[0] === "home")
         return { name: "overview" };
-    if (parts[0] === "work") {
-        // Compatibility redirect: /work -> /activity (Phase 1).
-        if (typeof window !== "undefined") {
-            window.history.replaceState(null, "", "/activity" + window.location.search + window.location.hash);
+    if (parts[0] === "work")
+        return { name: "work" };
+    if (parts[0] === "activity") {
+        // Compatibility: /activity remains a valid deep link for cross-workspace execution.
+        if (typeof window !== "undefined" && window.history?.replaceState) {
+            window.history.replaceState(null, "", "/work" + window.location.search + window.location.hash);
         }
-        return { name: "activity" };
+        return { name: "work" };
     }
-    if (parts[0] === "activity")
-        return { name: "activity" };
     if (parts[0] === "workbench") {
         return {
             name: "workbench",
@@ -87,7 +87,7 @@ export function parseRoute() {
         return { name: "gallery" };
     if (parts[0] === "approvals")
         return { name: "approvals" };
-    return { name: "chat" };
+    return { name: "overview" };
 }
 export { navigate } from "./router";
 /* --- Sidebar --- */

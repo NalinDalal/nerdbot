@@ -28,6 +28,7 @@ from . import boards, fleet, gates, store
 from . import decomposition as decomposition_mod
 from . import delegation as delegation_mod
 from . import faces as faces_mod
+from . import notify as notify_mod
 from .agent_context import AgentContext
 from .agent_tools import truncate_output
 from .models import (
@@ -137,12 +138,33 @@ TOOL_PERMISSIONS: dict[str, str] = {
     "archive_teammate": "teammate.delete",
     "create_team": "team.create",
     "add_teammate_to_team": "team.membership",
+    # External actions: holding the permission lets the bot *ask*; the owner's
+    # approval (gates.EXTERNAL_PERMISSIONS) is what lets the action run.
+    "send_email": "email.send",
+    "post_social": "social.post",
+    "send_social_dm": "social.dm",
+    "comment_github": "github.comment",
+    "publish_cms": "cms.publish",
+    "submit_form": "form.submit",
+    "make_payment": "payment.make",
+    "record_decision": "memory.write",
 }
 
 APP_TOOL_NAMES = frozenset(
     AMBIENT_TOOLS
     | set(TOOL_PERMISSIONS)
 )
+
+# External-action tool name -> the exact-action permission its use is gated on.
+_EXTERNAL_TOOL_TO_PERMISSION: dict[str, str] = {
+    "send_email": "email.send",
+    "post_social": "social.post",
+    "send_social_dm": "social.dm",
+    "comment_github": "github.comment",
+    "publish_cms": "cms.publish",
+    "submit_form": "form.submit",
+    "make_payment": "payment.make",
+}
 
 
 def app_tool_schemas(permissions: frozenset[str] | set[str]) -> list[dict[str, Any]]:
@@ -599,6 +621,127 @@ def app_tool_schemas(permissions: frozenset[str] | set[str]) -> list[dict[str, A
                 ["team_id", "teammate_id"],
             )
         )
+    if "email.send" in granted:
+        schemas.append(
+            _schemas(
+                "send_email",
+                "Send an email. REQUIRES the owner's approval of this exact"
+                " message first. The approved message is recorded in the"
+                " workspace outbox; there is no mail transport, so nothing is"
+                " transmitted without a configured channel.",
+                {
+                    "to": {"type": "string", "description": "recipient email address"},
+                    "subject": {"type": "string"},
+                    "body": {"type": "string"},
+                },
+                ["to", "subject", "body"],
+            )
+        )
+    if "social.post" in granted:
+        schemas.append(
+            _schemas(
+                "post_social",
+                "Post publicly on a social platform. REQUIRES the owner's"
+                " approval of this exact content first; recorded in the outbox.",
+                {
+                    "platform": {"type": "string"},
+                    "content": {"type": "string"},
+                    "url": {"type": "string", "description": "optional link to attach"},
+                },
+                ["platform", "content"],
+            )
+        )
+    if "social.dm" in granted:
+        schemas.append(
+            _schemas(
+                "send_social_dm",
+                "Send a direct message on a social platform. REQUIRES the"
+                " owner's approval first; recorded in the outbox.",
+                {
+                    "platform": {"type": "string"},
+                    "handle": {"type": "string"},
+                    "content": {"type": "string"},
+                },
+                ["platform", "handle", "content"],
+            )
+        )
+    if "github.comment" in granted:
+        schemas.append(
+            _schemas(
+                "comment_github",
+                "Comment on a GitHub issue or PR. REQUIRES the owner's approval"
+                " first; recorded in the outbox.",
+                {
+                    "repo": {"type": "string", "description": "owner/name"},
+                    "target": {"type": "string", "description": "issue/PR number or URL"},
+                    "body": {"type": "string"},
+                },
+                ["repo", "target", "body"],
+            )
+        )
+    if "cms.publish" in granted:
+        schemas.append(
+            _schemas(
+                "publish_cms",
+                "Publish content to a CMS or site. REQUIRES the owner's"
+                " approval first; recorded in the outbox.",
+                {
+                    "target": {"type": "string", "description": "site or collection"},
+                    "title": {"type": "string"},
+                    "content": {"type": "string"},
+                },
+                ["target", "title", "content"],
+            )
+        )
+    if "form.submit" in granted:
+        schemas.append(
+            _schemas(
+                "submit_form",
+                "Submit a form (e.g. an application). REQUIRES the owner's"
+                " approval first; recorded in the outbox.",
+                {
+                    "purpose": {"type": "string"},
+                    "fields": {"type": "string", "description": "JSON object of field values"},
+                },
+                ["purpose", "fields"],
+            )
+        )
+    if "payment.make" in granted:
+        schemas.append(
+            _schemas(
+                "make_payment",
+                "Request a payment. REQUIRES the owner's approval first; the"
+                " record never executes a payment by itself.",
+                {
+                    "purpose": {"type": "string"},
+                    "amount": {"type": "string"},
+                    "currency": {"type": "string"},
+                },
+                ["purpose", "amount"],
+            )
+        )
+    if "memory.write" in granted:
+        schemas.append(
+            _schemas(
+                "record_decision",
+                "Record a non-trivial decision in the org decision log"
+                " (append-only). Every decision needs a reason.",
+                {
+                    "decision": {"type": "string"},
+                    "reason": {"type": "string"},
+                    "alternatives": {
+                        "type": "string",
+                        "description": "alternatives considered, briefly",
+                    },
+                    "evidence_refs": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "source links or task ids backing the decision",
+                    },
+                },
+                ["decision", "reason"],
+            )
+        )
     return schemas
 
 
@@ -647,6 +790,18 @@ def _record_gate_request(
     approvals = _approvals_from_conflict(exc)
     if not approvals:
         return []
+    _record_approval_checkpoints(ctx, approvals, tool_name, arguments)
+    return approvals
+
+
+def _record_approval_checkpoints(
+    ctx: AgentContext,
+    approvals: list[Approval],
+    tool_name: str,
+    arguments: dict[str, Any],
+) -> None:
+    """Checkpoint every pending approval with the tool and arguments that
+    asked for it, and remember them on the run context."""
     try:
         payload = json.dumps(arguments, sort_keys=True, default=str)
     except (TypeError, ValueError):  # pragma: no cover - default=str covers this
@@ -663,7 +818,6 @@ def _record_gate_request(
             task_id=ctx.task.id,
         )
     ctx.pending_approvals.extend(approvals)
-    return approvals
 
 
 def execute_app_tool(
@@ -698,6 +852,13 @@ def execute_app_tool(
             raise
         return f"permission denied: {exc}"
     except gates.GateApprovalRequired as exc:
+        # Record the exact ask on the approval row so the owner's decision can
+        # carry it out, and let the run park instead of finishing: the bot did
+        # not complete its work, it is waiting on a human.
+        if not raise_on_denial:
+            _record_approval_checkpoints(ctx, exc.approvals, name, arguments)
+        if raise_on_denial:
+            raise
         return _approval_result(exc)
 
 
@@ -1314,6 +1475,61 @@ def _dispatch(
         except HTTPException as exc:
             return _gate_result(exc, ctx, name, args)
         return f"added teammate {member.teammate_id} to team {member.team_id}"
+
+    # -- External actions (v3 policy.approval.required_for) ------------------
+    # Shared shape: gate on the exact payload (digest binds arguments), then
+    # record in the workspace outbox. No transport is configured anywhere, so
+    # an approved action is an owner-approved record — honest about what it is.
+    if name in _EXTERNAL_TOOL_TO_PERMISSION:
+        permission = _EXTERNAL_TOOL_TO_PERMISSION[name]
+        payload = {
+            k: v for k, v in args.items() if isinstance(v, (str, int, float, bool))
+        }
+        try:
+            gates.require(
+                conn, mate, permission,
+                payload=payload, run_id=run_id, task_id=task.id,
+            )
+        except gates.GateDenied as exc:
+            return f"permission denied: {exc}"
+        except gates.GateApprovalRequired:
+            # Re-raise: execute_app_tool records the exact tool+arguments on
+            # the approval row (making the owner's decision resumable) and
+            # marks the run as waiting on a human.
+            raise
+        try:
+            notification = notify_mod.send_notification(
+                conn,
+                task.project_id,
+                notify_mod.OUTBOX_CHANNEL,
+                f"external.{permission}",
+                {"tool": name, "actor": mate.id, "task_id": task.id, **payload},
+            )
+        except Exception as exc:  # pragma: no cover - outbox persistence
+            return f"tool error: could not record approved action: {exc}"
+        return (
+            f"approved action recorded in the outbox"
+            f" (id={notification.id}, kind=external.{permission})."
+            " No external delivery was performed: there is no transport"
+            " configured. The owner sees the approved content in the outbox."
+        )
+
+    if name == "record_decision":
+        decision = str(args.get("decision", "") or "").strip()
+        reason = str(args.get("reason", "") or "").strip()
+        if not decision or not reason:
+            return "tool error: decision and reason are required"
+        entry = store.create_decision(
+            conn,
+            task.project_id,
+            teammate_id=mate.id,
+            task_id=task.id,
+            decision=decision,
+            reason=reason,
+            alternatives=str(args.get("alternatives", "") or ""),
+            evidence_refs=[str(e) for e in args.get("evidence_refs", []) or []],
+        )
+        return f"decision recorded: id={entry['id']}"
 
     raise ValueError(f"unknown app tool: {name!r}")
 

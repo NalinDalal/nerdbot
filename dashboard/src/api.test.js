@@ -417,11 +417,14 @@ describe("views", () => {
             window.location.search = search ? `?${search}` : "";
             return parseRoute();
         };
-        expect(at("/")).toEqual({ name: "chat" });
+        expect(at("/")).toEqual({ name: "overview" });
         expect(at("/chat")).toEqual({ name: "chat" });
         expect(at("/overview")).toEqual({ name: "overview" });
+        expect(at("/home")).toEqual({ name: "overview" });
+        expect(at("/work")).toEqual({ name: "work" });
+        expect(at("/activity")).toEqual({ name: "work" });
         expect(at("/projects")).toEqual({ name: "projects" });
-        expect(at("/nope")).toEqual({ name: "chat" });
+        expect(at("/nope")).toEqual({ name: "overview" });
         vi.unstubAllGlobals();
     });
     it("a workspace route carries the tab to open", async () => {

@@ -10,11 +10,21 @@ services:
       - path: .env
         required: false
     environment:
-      # Persist runtime state under /app/.nerdbot-data by default; override in .env if needed.
       NERDBOT_DB: ${NERDBOT_DB:-/app/.nerdbot-data/nerdbot.db}
       NERDBOT_DATA: ${NERDBOT_DATA:-/app/.nerdbot-data}
     volumes:
       - nerdbot-data:/app/.nerdbot-data
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    image: nerdbot-dashboard:local
+    ports:
+      - "5173:80"
+    depends_on:
+      - nerdbot
     restart: unless-stopped
 
 volumes:

@@ -91,6 +91,12 @@ def available_providers(config: SearchConfig | None = None) -> list[dict[str, An
             "credential_free": True,
         },
         {
+            "id": "bing",
+            "name": "Bing RSS (fallback)",
+            "configured": True,
+            "credential_free": True,
+        },
+        {
             "id": "tavily",
             "name": "Tavily",
             "configured": bool(cfg.tavily_api_key),
@@ -263,6 +269,57 @@ def _search_duckduckgo(
 # --- API providers (config-driven) ---
 
 
+BING_RSS_URL = "https://www.bing.com/search"
+_BING_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+
+
+def _search_bing(query: str, max_results: int, transport: httpx.BaseTransport | None) -> list[SearchResult]:
+    """Credential-free fallback backend using Bing's RSS output.
+
+    DuckDuckGo serves anti-bot 202 challenges to datacenter IPs; Bing's RSS
+    endpoint has no such gate, so it is used as the automatic fallback.
+    """
+    import xml.etree.ElementTree as ET
+
+    url = f"{BING_RSS_URL}?q={quote_plus(query)}&format=rss&count={min(max_results * 2, 30)}"
+    headers = {
+        "User-Agent": _BING_UA,
+        "Accept": "application/rss+xml, application/xml, text/xml",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    try:
+        with httpx.Client(timeout=DEFAULT_TIMEOUT_S, transport=transport, follow_redirects=True) as client:
+            resp = client.get(url, headers=headers)
+    except httpx.TimeoutException as exc:
+        raise SearchProviderError(f"search provider timed out: {exc}") from exc
+    except httpx.RequestError as exc:
+        raise SearchProviderError(f"search provider failed: {exc}") from exc
+    if resp.status_code == 429:
+        raise SearchProviderError("search provider rate-limited; retry later")
+    if resp.status_code >= 400:
+        raise SearchProviderError(f"search provider failed: HTTP {resp.status_code}")
+
+    results: list[SearchResult] = []
+    try:
+        root = ET.fromstring(resp.content)
+        for item in root.iter("item"):
+            title = (item.findtext("title") or "").strip()
+            link = (item.findtext("link") or "").strip()
+            snippet = (item.findtext("description") or "").strip()
+            if not link.lower().startswith(("http://", "https://")):
+                continue
+            results.append({"title": title, "url": link, "snippet": snippet, "source": "bing"})
+            if len(results) >= max_results:
+                break
+    except ET.ParseError as exc:
+        raise SearchProviderError(f"search provider returned malformed XML: {exc}") from exc
+    return _dedupe(results)
+
+
 def _http_json(
     method: str,
     url: str,
@@ -423,8 +480,15 @@ def web_search(
     if provider:
         cfg.provider = str(provider).strip().lower()
 
-    if cfg.provider in ("", "duckduckgo", "ddg", "duckduckgo-lite"):
-        return _search_duckduckgo(query, max_results, transport)
+    if cfg.provider in ("", "duckduckgo", "ddg", "duckduckgo-lite", "bing"):
+        # DuckDuckGo is the default; Bing RSS is the credential-free fallback
+        # (DDG serves anti-bot 202 challenges to datacenter IPs).
+        if cfg.provider == "bing":
+            return _search_bing(query, max_results, transport)
+        try:
+            return _search_duckduckgo(query, max_results, transport)
+        except SearchProviderError:
+            return _search_bing(query, max_results, transport)
     if cfg.provider == "tavily":
         return _search_tavily(query, max_results, cfg, transport)
     if cfg.provider in ("serper", "google", "google-serper"):

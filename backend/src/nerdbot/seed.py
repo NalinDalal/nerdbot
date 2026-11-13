@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 from . import store
@@ -32,7 +33,10 @@ def load_seed():
             data = yaml.safe_load(path.read_text())
         else:
             data = json.loads(path.read_text())
-    except Exception:
+    except Exception as exc:
+        # A broken seed file must never pass silently: the operator would see
+        # zero bots and no explanation. Log loudly and continue with none.
+        print(f"seed: failed to load {path}: {exc}", file=sys.stderr)
         return []
     if isinstance(data, dict):
         data = data.get("teammates", [])

@@ -81,6 +81,15 @@ class ProviderToolCallRejected(ProviderProtocolError):
         self.tool_name = tool_name
 
 
+class ProviderParseRejected(ProviderProtocolError):
+    """Provider could not parse the model's own generation (HTTP 400).
+
+    Groq-hosted reasoning models occasionally emit output their parser cannot
+    read. Recoverable: ``_authed_post`` retries the same messages a bounded
+    number of times before surfacing the failure.
+    """
+
+
 class ProviderNetworkError(RuntimeError):
     """Transport-level failure reaching the provider (unreachable / bad body)."""
 
@@ -192,6 +201,25 @@ def _error_detail(response: httpx.Response) -> str:
     return f": {text[:300]}" if text else ""
 
 
+def _is_parse_failure(response: httpx.Response) -> bool:
+    """True when the 400 is the model's unparseable generation, not our error.
+
+    Groq answers with ``{"error": {"message": "Parsing failed. The model
+    generated output that could not be parsed. ...", ...}}``. Retrying the
+    same messages usually succeeds; failing the run does not.
+    """
+    try:
+        body = response.json()
+    except Exception:
+        return False
+    if not isinstance(body, dict):
+        return False
+    error = body.get("error")
+    message = error.get("message") if isinstance(error, dict) else ""
+    text = str(message)
+    return "Parsing failed" in text or "could not be parsed" in text
+
+
 def _rejected_tool_name(response: httpx.Response) -> str | None:
     """Name of the tool in a provider ``tool_use_failed`` response, if any.
 
@@ -263,6 +291,47 @@ def _emit_progress(context: Any | None, kind: str, text: str) -> None:
     try:
         callback(kind, text)
     except Exception:
+        return
+
+
+def _account_usage(context: Any | None, data: dict[str, Any]) -> None:
+    """Record one model call's token usage and enforce the org budgets.
+
+    The upstream ``usage`` block is the only source of truth; when absent
+    nothing is recorded (never estimated, never invented). A cap breach stops
+    the run with BudgetExceeded — recorded as a failure, never as success —
+    after the owner has been notified through the outbox.
+    """
+    usage = data.get("usage") if isinstance(data, dict) else None
+    if not isinstance(usage, dict):
+        return
+    prompt_tokens = int(usage.get("prompt_tokens") or 0)
+    completion_tokens = int(usage.get("completion_tokens") or 0)
+    if prompt_tokens <= 0 and completion_tokens <= 0:
+        return
+    if context is None:
+        return
+    conn = getattr(context, "conn", None)
+    if conn is None:
+        return
+    task = getattr(context, "task", None)
+    mate = getattr(context, "teammate", None)
+    try:
+        from . import budgets
+
+        budgets.check_and_record(
+            conn,
+            run_id=str(getattr(context, "run_id", "") or ""),
+            task_id=str(getattr(task, "id", "") or ""),
+            teammate_id=str(getattr(mate, "id", "") or ""),
+            project_id=str(getattr(task, "project_id", "") or ""),
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+    except budgets.BudgetExceeded:
+        raise
+    except Exception:
+        # Accounting must never break a healthy run; the next call retries.
         return
 
 
@@ -382,6 +451,7 @@ class OpenAICompatibleAdapter:
                     messages.append({"role": "user", "content": correction})
                     transcript.append({"role": "user", "content": correction})
                     continue
+                _account_usage(context, data)
                 message = self._first_message(data)
                 transcript.append({"role": "assistant", "content": message.get("content") or ""})
                 calls = _parse_tool_calls(message)
@@ -553,6 +623,21 @@ class OpenAICompatibleAdapter:
                         f"provider rejected a tool call (HTTP 400){_error_detail(response)}",
                         rejected,
                     )
+                if _is_parse_failure(response):
+                    # Groq-hosted reasoning models occasionally emit output the
+                    # upstream parser cannot read ("Parsing failed..."). It is
+                    # the model's fluke, not the caller's mistake: retry the
+                    # same messages a bounded number of times.
+                    last_error = ProviderParseRejected(
+                        f"provider could not parse model output (HTTP 400)"
+                        f"{_error_detail(response)}"
+                    )
+                    if attempt < MAX_RETRIES:
+                        import time as _time
+                        import random as _random
+
+                        _time.sleep(min(1.5 * (attempt + 1) + _random.uniform(0, 1), 6.0))
+                    continue
             if response.status_code != 200:
                 raise ProviderProtocolError(
                     f"unexpected provider status (HTTP {response.status_code})"

@@ -176,6 +176,7 @@ export function ProjectDetailView({
           <ProjectOperatingOverview
             projectId={projectId}
             workspaceName={workspaceName}
+            project={project}
             onOpenTask={onOpenTask}
             onSelectTab={(t) => selectTab(resolveTab(t))}
           />

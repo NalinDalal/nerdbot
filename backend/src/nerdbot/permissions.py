@@ -52,7 +52,23 @@ AGENT_PERMISSIONS: frozenset[str] = frozenset(
     }
 )
 
-ALL_PERMISSIONS: frozenset[str] = ADMIN_PERMISSIONS | AGENT_PERMISSIONS
+# External actions: a bot may hold them, but holding is never enough — every
+# use needs the owner's approval (policy.approval.required_for in the v3
+# persona spec). The gate treats them exactly like admin permissions, minus
+# the auto-approve escape hatch, so these actions stay fail-closed.
+EXTERNAL_PERMISSIONS: frozenset[str] = frozenset(
+    {
+        "email.send",
+        "social.post",
+        "social.dm",
+        "github.comment",
+        "cms.publish",
+        "form.submit",
+        "payment.make",
+    }
+)
+
+ALL_PERMISSIONS: frozenset[str] = ADMIN_PERMISSIONS | AGENT_PERMISSIONS | EXTERNAL_PERMISSIONS
 
 # permission -> {kind, summary}. "kind" is "admin" or "agent".
 PERMISSION_INFO: dict[str, dict[str, str]] = {
@@ -103,6 +119,34 @@ PERMISSION_INFO: dict[str, dict[str, str]] = {
     "message.send": {
         "kind": "agent",
         "summary": "Send messages on a task board to a teammate.",
+    },
+    "email.send": {
+        "kind": "external",
+        "summary": "Draft and request approval to send an email. Owner-gated; delivery is an outbox record.",
+    },
+    "social.post": {
+        "kind": "external",
+        "summary": "Draft and request approval for a public social post. Owner-gated.",
+    },
+    "social.dm": {
+        "kind": "external",
+        "summary": "Draft and request approval for a direct message. Owner-gated.",
+    },
+    "github.comment": {
+        "kind": "external",
+        "summary": "Draft and request approval for a GitHub issue/PR comment. Owner-gated.",
+    },
+    "cms.publish": {
+        "kind": "external",
+        "summary": "Draft and request approval to publish content to a CMS. Owner-gated.",
+    },
+    "form.submit": {
+        "kind": "external",
+        "summary": "Draft and request approval to submit a form (e.g. an application). Owner-gated.",
+    },
+    "payment.make": {
+        "kind": "external",
+        "summary": "Request approval for a payment. Owner-gated; recorded, never executed automatically.",
     },
     "teammate.create": {
         "kind": "admin",

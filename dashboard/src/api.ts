@@ -626,6 +626,14 @@ export const api = {
     post<Notification>(`/projects/${projectId}/notify`, body),
   listNotifications: (projectId: string) =>
     req<{ notifications: Notification[] }>(`/projects/${projectId}/notifications`),
+  listBudgets: (projectId: string) =>
+    req<{ caps: Record<string, number>; usage: Record<string, number> }>(
+      `/projects/${projectId}/budgets`,
+    ),
+  listDecisions: (projectId: string, limit = 50) =>
+    req<{ decisions: Array<Record<string, unknown>> }>(
+      `/projects/${projectId}/decisions?limit=${limit}`,
+    ),
   deliverNotification: (id: string) => post<Notification>(`/notifications/${id}/deliver`),
   unlockNotification: (id: string) => post<{ id: string; locked: boolean }>(`/notifications/${id}/unlock`),
   sweepWebhooks: () =>

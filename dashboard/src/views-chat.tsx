@@ -215,9 +215,6 @@ export function ConversationView({
         : Promise.resolve({ providers: [] }),
     [resolvedProjectId],
   );
-  /* Home is a real project, but the owner thinks of models as belonging to
-     the machine. On Home, offer every usable model across projects and route
-     the new conversation to the project that owns the chosen one. */
   const allProviders = useAsync(async () => {
     if (projectId) return [] as Provider[];
     const { projects } = await api.listProjects();
@@ -237,108 +234,154 @@ export function ConversationView({
     );
     return groups.flat();
   }, [projectId]);
-  // The Command Center resume list spans every project the owner owns, so a
-  // conversation started in another workspace is still reachable from here.
   const [recentSearch, setRecentSearch] = useState("");
   const [showArchivedRecent, setShowArchivedRecent] = useState(false);
   const recentThreads = useAsync(
-    () => api.listRecentThreads(50, { q: recentSearch.trim() || undefined, include_archived: showArchivedRecent }),
+    () =>
+      api.listRecentThreads(50, {
+        q: recentSearch.trim() || undefined,
+        include_archived: showArchivedRecent,
+      }),
     [recentSearch, showArchivedRecent],
   );
   const [activeId, setActiveId] = useState<string | null>(initialThreadId ?? null);
   const [objectiveId, setObjectiveId] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
-  const [railOpen, setRailOpen] = useState(true);
-  const [mobileRailOpen, setMobileRailOpen] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(false);
 
   useEffect(() => {
-    if (activeId) {
-      onSetActiveThread?.(activeId);
-    }
+    if (activeId) onSetActiveThread?.(activeId);
   }, [activeId, onSetActiveThread]);
 
   if (!resolvedProjectId) {
-    return <LoadingState lines={2} />;
+    return (
+      <div className="flex h-full items-center justify-center text-step--1 text-[var(--muted)]">
+        Loading workspace…
+      </div>
+    );
   }
 
   const isHome = !projectId;
   const workspaceName = summary.data?.summary.bundles.find(
     (bundle) => bundle.project.id === resolvedProjectId,
   )?.project.repository;
+  const s = summary.data?.summary;
+  const activityCount = s
+    ? s.pendingApprovals.length + s.failedRuns.length + s.activeRuns.length
+    : 0;
+  const hasActivity = activityCount > 0;
+
+  const openThread = (thread: ChatThread) => {
+    setActiveId(thread.id);
+    onSetActiveThread?.(thread.id);
+    if (thread.project_id !== resolvedProjectId) {
+      navigate(`/chat/${thread.project_id}?thread=${thread.id}`);
+    }
+  };
 
   return (
-    <div className="flex h-full flex-col overflow-hidden">
-      {/* Header */}
-      {/* Header. The mobile left padding reserves the gutter the fixed menu
-          button floats in (app.tsx: `fixed left-3 top-3`), so "Home" is not
-          painted underneath it. */}
-      <header className="flex items-center justify-between gap-3 border-b border-[var(--border-dim)] px-4 py-3 pl-14 md:px-6">
+    <div className="flex h-full min-h-0 flex-col bg-[var(--bg)]">
+      <header className="flex shrink-0 items-center justify-between gap-3 px-4 py-3 pl-14 md:px-6 md:pl-6">
         <div className="min-w-0">
-          {isHome ? (
-            <h1 className="text-step-1 font-semibold tracking-tight text-[var(--text)]">Chat</h1>
+          {activeId ? (
+            <div className="flex items-center gap-2 text-step--1 text-[var(--muted)]">
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveId(null);
+                  setObjectiveId(null);
+                  onSetActiveThread?.(null);
+                }}
+                className="rounded-md px-1.5 py-1 transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
+              >
+                Chat
+              </button>
+              <span aria-hidden className="text-[var(--faint)]">/</span>
+              <span className="truncate text-[var(--text-soft)]">
+                {workspaceName || (isHome ? "Home" : "Workspace")}
+              </span>
+            </div>
           ) : (
-            <div className="min-w-0">
-              <div className="text-step--2 text-[var(--faint)]">Workspace chat</div>
-              <h1 className="truncate text-step-1 font-semibold tracking-tight text-[var(--text)]">
-                {workspaceName || "Workspace"}
+            <div className="flex items-baseline gap-2">
+              <h1 className="text-step-0 font-semibold tracking-tight text-[var(--text)]">
+                {isHome ? "Chat" : workspaceName || "Workspace"}
               </h1>
+              {!isHome ? (
+                <span className="text-step--2 text-[var(--faint)]">Workspace</span>
+              ) : null}
             </div>
           )}
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {!isHome && activeId ? (
-            <Button variant="ghost" onClick={() => { setActiveId(null); onSetActiveThread?.(null); }}>
-              Conversations
-            </Button>
+        <div className="flex shrink-0 items-center gap-1.5">
+          {hasActivity ? (
+            <button
+              type="button"
+              onClick={() => setActivityOpen((v) => !v)}
+              className="inline-flex items-center gap-2 rounded-md px-2.5 py-1.5 text-step--1 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
+              aria-expanded={activityOpen}
+              aria-label="Toggle activity"
+            >
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${
+                  s && (s.pendingApprovals.length > 0 || s.failedRuns.length > 0)
+                    ? "bg-[var(--warn)]"
+                    : "bg-[var(--info)]"
+                }`}
+                aria-hidden
+              />
+              <span>Activity</span>
+              <span className="tabular-nums text-[var(--faint)]">{activityCount}</span>
+            </button>
           ) : null}
-          <Button variant="primary" onClick={() => setShowNew(true)} disabled={!home.data}>
+          <Button onClick={() => setShowNew(true)} disabled={!home.data}>
             New chat
           </Button>
         </div>
       </header>
 
-      {/* Workspace-wide attention banner. Kept to the same column as the
-          composer and the lists below, so the page has one left edge. */}
-      <div className="px-4 pt-3 md:px-6">
-        <div className="mx-auto w-full max-w-[860px]">
-        {summary.loadFailed && !summary.loading ? (
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-step--1 text-[var(--danger)]">
-            <span>Couldn't load some fleet data. This page may be incomplete.</span>
-            <Button onClick={summary.reload}>Retry</Button>
-          </div>
-        ) : null}
-        {(() => {
-          const s = summary.data?.summary;
-          if (!s) return null;
-          const parts: string[] = [];
-          if (s.pendingApprovals.length) parts.push(`${s.pendingApprovals.length} need${s.pendingApprovals.length === 1 ? "s" : ""} approval`);
-          if (s.failedRuns.length) parts.push(`${s.failedRuns.length} failed`);
-          if (s.activeRuns.length) parts.push(`${s.activeRuns.length} running`);
-          if (parts.length === 0) return null;
-          return (
-            <div className="mb-2 text-step--1 text-[var(--muted)]">
-              {parts.join(" · ")}{" "}
+      {summary.loadFailed && !summary.loading ? (
+        <div className="mx-4 mb-2 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step--1 text-[var(--muted)] md:mx-6">
+          <span>Some activity could not be loaded.</span>
+          <Button onClick={summary.reload}>Retry</Button>
+        </div>
+      ) : null}
+
+      {hasActivity && activityOpen ? (
+        <div className="mx-4 mb-3 md:mx-6">
+          <div className="mx-auto w-full max-w-[860px] rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--faint)]">
+                Current activity
+              </span>
               <button
                 type="button"
-                onClick={() => navigate("/approvals")}
-                className="text-[var(--accent)] hover:underline"
+                onClick={() => setActivityOpen(false)}
+                className="text-step--2 text-[var(--muted)] hover:text-[var(--text)]"
               >
-                Open activity →
+                Close
               </button>
             </div>
-          );
-        })()}
+            {objectiveId ? (
+              <TeamView objectiveId={objectiveId} onOpenTask={openTask} />
+            ) : (
+              <ActivityRailContent
+                summary={summary}
+                projectId={!isHome ? resolvedProjectId : undefined}
+                onOpenTask={openTask}
+                onReload={() => summary.reload()}
+              />
+            )}
+          </div>
         </div>
-      </div>
+      ) : null}
 
-      {/* Body: active conversation pane (no competing workspace sidebar). */}
-      <div className="flex min-h-0 flex-1">
-        <section className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col">
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col">
           {activeId ? (
             <ThreadPane
               threadId={activeId}
               projectId={resolvedProjectId}
-              workspaceName={isHome ? "Home" : (workspaceName || "Workspace")}
+              workspaceName={isHome ? "Home" : workspaceName || "Workspace"}
               providers={providers.data?.providers ?? []}
               onPlanApproved={(id) => setObjectiveId(id)}
               onReload={() => threads.reload()}
@@ -349,14 +392,12 @@ export function ConversationView({
               summary={summary}
               projectId={resolvedProjectId}
               recentThreads={recentThreads.data?.threads ?? []}
-              projects={(allProviders.data ? undefined : undefined) as any}
+              projects={undefined as any}
               recentSearch={recentSearch}
               onRecentSearch={setRecentSearch}
               showArchivedRecent={showArchivedRecent}
               onShowArchivedRecent={setShowArchivedRecent}
-              providers={
-                (isHome ? allProviders.data : providers.data?.providers) ?? []
-              }
+              providers={(isHome ? allProviders.data : providers.data?.providers) ?? []}
               onThreadCreated={(threadId, targetProjectId) => {
                 if (targetProjectId && targetProjectId !== resolvedProjectId) {
                   navigate(`/chat/${targetProjectId}?thread=${threadId}`);
@@ -365,13 +406,7 @@ export function ConversationView({
                 setActiveId(threadId);
                 onSetActiveThread?.(threadId);
               }}
-              onOpenThread={(thread) => {
-                setActiveId(thread.id);
-                onSetActiveThread?.(thread.id);
-                if (thread.project_id !== resolvedProjectId) {
-                  navigate(`/chat/${thread.project_id}`);
-                }
-              }}
+              onOpenThread={openThread}
               refreshProviders={() => {
                 providers.reload();
                 allProviders.reload();
@@ -379,60 +414,94 @@ export function ConversationView({
               refreshThreads={() => recentThreads.reload()}
             />
           ) : (
-            <div className="flex flex-1 flex-col overflow-y-auto px-4 py-6 md:px-6">
-              <div className="mx-auto w-full max-w-[860px]">
-                <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-                  <div>
-                    <h2 className="text-step-1 font-semibold tracking-tight text-[var(--text)]">Conversations</h2>
-                    <p className="mt-1 text-step--1 text-[var(--muted)]">
-                      Scoped to {workspaceName || "this workspace"}. Search, resume, or start a new conversation.
-                    </p>
-                  </div>
-                  <Button variant="primary" onClick={() => setShowNew(true)}>New chat</Button>
+            <div className="flex flex-1 flex-col overflow-y-auto px-4 py-8 md:px-6">
+              <div className="mx-auto w-full max-w-[720px]">
+                <div className="mb-6">
+                  <h2 className="text-step-1 font-semibold tracking-tight text-[var(--text)]">
+                    Conversations
+                  </h2>
+                  <p className="mt-1 text-step--1 text-[var(--muted)]">
+                    Search and resume work in {workspaceName || "this workspace"}.
+                  </p>
                 </div>
-                <div className="mb-4 flex flex-wrap items-center gap-3">
+                <div className="mb-4 flex flex-wrap items-center gap-2">
                   <input
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                     placeholder="Search conversations"
                     aria-label="Search conversations"
-                    className="h-9 w-full max-w-sm rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-step--1 outline-none transition-colors placeholder:text-[var(--faint)] focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
+                    className="h-9 w-full max-w-sm rounded-md border border-[var(--border)] bg-transparent px-3 text-step--1 outline-none transition-colors placeholder:text-[var(--faint)] focus:border-[var(--border-focus)]"
                   />
                   <label className="flex items-center gap-2 text-step--2 text-[var(--muted)]">
-                    <input type="checkbox" checked={showArchivedThreads} onChange={(e) => setShowArchivedThreads(e.target.checked)} />
-                    Show archived
+                    <input
+                      type="checkbox"
+                      checked={showArchivedThreads}
+                      onChange={(e) => setShowArchivedThreads(e.target.checked)}
+                    />
+                    Archived
                   </label>
+                  <div className="ml-auto">
+                    <Button variant="primary" onClick={() => setShowNew(true)}>
+                      New chat
+                    </Button>
+                  </div>
                 </div>
-                {threads.loading ? <LoadingState lines={4} /> : threads.error ? <ErrorState error={threads.error} onRetry={threads.reload} /> : null}
+                {threads.loading ? <LoadingState lines={4} /> : null}
+                {threads.error ? <ErrorState error={threads.error} onRetry={threads.reload} /> : null}
                 {!threads.loading && !threads.error && (threads.data?.threads ?? []).length === 0 ? (
-                  <EmptyState
-                    title={showArchivedThreads ? "No conversations found" : "No conversations yet"}
-                    hint={showArchivedThreads ? "Try a different search or clear filters." : `Start a conversation in ${workspaceName || "this workspace"}.`}
-                    action={<Button variant="primary" onClick={() => setShowNew(true)}>New chat</Button>}
-                  />
+                  <div className="py-12 text-center">
+                    <p className="text-step-0 text-[var(--text-soft)]">No conversations yet.</p>
+                    <p className="mt-1 text-step--1 text-[var(--muted)]">
+                      Start a conversation to work with your AI team in this workspace.
+                    </p>
+                    <div className="mt-4">
+                      <Button variant="primary" onClick={() => setShowNew(true)}>
+                        New chat
+                      </Button>
+                    </div>
+                  </div>
                 ) : (
-                  <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
-                    {(threads.data?.threads ?? []).map((thread: ChatThread, index) => (
-                      <div key={thread.id} className={`flex items-center gap-2 px-2 py-1.5 ${index > 0 ? "border-t border-[var(--border-dim)]" : ""}`}>
+                  <div className="flex flex-col">
+                    {(threads.data?.threads ?? []).map((thread: ChatThread) => (
+                      <div
+                        key={thread.id}
+                        className="group flex items-center gap-2 border-b border-[var(--border-dim)] py-1"
+                      >
                         <button
                           type="button"
-                          onClick={() => { setActiveId(thread.id); onSetActiveThread?.(thread.id); }}
-                          className="min-w-0 flex-1 rounded-md px-2 py-2 text-left transition-colors hover:bg-[var(--surface-2)]"
+                          onClick={() => {
+                            setActiveId(thread.id);
+                            onSetActiveThread?.(thread.id);
+                          }}
+                          className="min-w-0 flex-1 rounded-md px-2 py-2.5 text-left transition-colors hover:bg-[var(--surface-2)]"
                         >
                           <div className="flex items-center gap-2 min-w-0">
-                            {thread.pinned ? <span className="text-[10px] text-[var(--accent)]" title="Pinned">●</span> : null}
-                            <span className="truncate text-step--1 font-medium text-[var(--text)]">{thread.title || "Untitled"}</span>
-                            {thread.archived ? <span className="rounded bg-[var(--surface-2)] px-1.5 py-0.5 text-step--2 text-[var(--faint)]">archived</span> : null}
+                            {thread.pinned ? (
+                              <span className="text-[10px] text-[var(--faint)]" title="Pinned">Pinned</span>
+                            ) : null}
+                            <span className="truncate text-step--1 text-[var(--text)]">
+                              {thread.title || "Untitled"}
+                            </span>
+                            {thread.archived ? (
+                              <span className="text-step--2 text-[var(--faint)]">Archived</span>
+                            ) : null}
                           </div>
-                          <div className="mt-0.5 text-step--2 text-[var(--faint)]">{relativeTime((thread.updated_at || thread.created_at) ?? "")}</div>
+                          <div className="mt-0.5 text-step--2 text-[var(--faint)]">
+                            {relativeTime((thread.updated_at || thread.created_at) ?? "")}
+                          </div>
                         </button>
-                        <div className="shrink-0 pr-1">
+                        <div className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                           <ThreadRowActions
                             thread={thread}
-                            onChanged={() => { threads.reload(); recentThreads.reload(); }}
+                            onChanged={() => {
+                              threads.reload();
+                              recentThreads.reload();
+                            }}
                             onMoved={(targetProjectId) => {
-                              if (targetProjectId !== resolvedProjectId) setActiveId((id) => (id === thread.id ? null : id));
-                              threads.reload(); recentThreads.reload();
+                              if (targetProjectId !== resolvedProjectId)
+                                setActiveId((id) => (id === thread.id ? null : id));
+                              threads.reload();
+                              recentThreads.reload();
                             }}
                           />
                         </div>
@@ -444,99 +513,7 @@ export function ConversationView({
             </div>
           )}
         </section>
-
-        {/* Contextual activity rail (desktop). */}
-        {railOpen ? (
-          <aside
-            aria-label="Activity"
-            className="hidden w-72 shrink-0 flex-col border-l border-[var(--border-dim)] bg-[var(--bg)] lg:flex"
-          >
-            <div className="flex items-center justify-between px-3 py-2.5">
-              <div>
-                <span className="text-step--2 font-medium uppercase tracking-[0.16em] text-[var(--faint)]">
-                  Live activity
-                </span>
-                <div className="mt-0.5 text-step--2 text-[var(--muted)]">Runs, approvals, and agent work</div>
-              </div>
-              <button
-                type="button"
-                aria-label="Collapse activity rail"
-                onClick={() => setRailOpen(false)}
-                className="rounded-sm p-1 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
-              >
-                ›
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto px-3 pb-4">
-              {objectiveId ? (
-                <TeamView objectiveId={objectiveId} onOpenTask={openTask} />
-              ) : (
-                <ActivityRailContent
-                  summary={summary}
-                  projectId={!isHome ? resolvedProjectId : undefined}
-                  onOpenTask={openTask}
-                  onReload={() => summary.reload()}
-                />
-              )}
-            </div>
-          </aside>
-        ) : (
-          <button
-            type="button"
-            aria-label="Expand activity rail"
-            onClick={() => setRailOpen(true)}
-            className="hidden w-8 shrink-0 items-center justify-center border-l border-[var(--border-dim)] bg-[var(--bg)] text-[var(--muted)] transition-colors hover:text-[var(--text)] lg:flex"
-          >
-            ‹
-          </button>
-        )}
       </div>
-
-      {/* Mobile activity drawer. */}
-      <button
-        type="button"
-        aria-label="Open activity"
-        onClick={() => setMobileRailOpen(true)}
-        className="fixed bottom-20 right-4 z-40 rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step--1 text-[var(--text-soft)] shadow-lg transition-colors hover:text-[var(--text)] lg:hidden"
-      >
-        Activity
-      </button>
-      {mobileRailOpen ? (
-        <div
-          className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px] lg:hidden"
-          onClick={() => setMobileRailOpen(false)}
-        >
-          <aside
-            className="absolute right-0 top-0 flex h-full w-full max-w-sm flex-col border-l border-[var(--border)] bg-[var(--surface)] shadow-lg"
-            onClick={(e) => e.stopPropagation()}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Activity"
-          >
-            <div className="flex items-center justify-between border-b border-[var(--border-dim)] px-4 py-3">
-              <span className="text-step-0 font-semibold">Activity</span>
-              <button
-                onClick={() => setMobileRailOpen(false)}
-                aria-label="Close"
-                className="rounded-sm p-1 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
-              >
-                ×
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto px-4 py-3">
-              <ActivityRailContent
-                summary={summary}
-                projectId={!isHome ? resolvedProjectId : undefined}
-                onOpenTask={(pid, tid) => {
-                  setMobileRailOpen(false);
-                  openTask(pid, tid);
-                }}
-                onReload={() => summary.reload()}
-              />
-            </div>
-          </aside>
-        </div>
-      ) : null}
 
       {showNew ? (
         <NewThreadModal
@@ -1199,7 +1176,7 @@ function ThreadPane({
                   <button className="w-full rounded-md px-2.5 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => void runThreadAction(async () => { if (thread.archived) await api.unarchiveThread(thread.id); else await api.archiveThread(thread.id); }, thread.archived ? "Unarchived" : "Archived")}>{thread.archived ? "Unarchive" : "Archive"}</button>
                   <a className="block w-full rounded-md px-2.5 py-2 text-left hover:bg-[var(--surface-2)]" href={api.exportThreadUrl(thread.id, threadToken)} target="_blank" rel="noreferrer">Export (JSON)</a>
                   <button className="w-full rounded-md px-2.5 py-2 text-left hover:bg-[var(--surface-2)]" onClick={async () => { setShowMove(true); try { const r = await api.listProjects(); setMoveProjects(r.projects.map((p: any) => ({ id: p.id, repository: p.repository }))); } catch (e) { notifyError(e); } }}>Move to workspace…</button>
-                  <button className="w-full rounded-md px-2.5 py-2 text-left text-[var(--danger)] hover:bg-[var(--danger-dim)]" onClick={() => void runThreadAction(async () => { if (!window.confirm("Remove this conversation from your lists? This is a safe delete (it can be restored via API).")) return; await api.deleteThread(thread.id); navigate("/"); }, "Removed")}>Delete</button>
+                  <button className="w-full rounded-md px-2.5 py-2 text-left text-[var(--danger)] hover:bg-[var(--danger-dim)]" onClick={() => void runThreadAction(async () => { if (!window.confirm("Remove this conversation from your lists? This is a safe delete (it can be restored via API).")) return; await api.deleteThread(thread.id); navigate("/chat"); }, "Removed")}>Delete</button>
                   {showMove ? (
                     <div className="mt-1 border-t border-[var(--border-dim)] pt-1">
                       <div className="px-2 py-1 text-step--2 text-[var(--muted)]">Move to workspace (clears workspace-scoped model binding)</div>
@@ -2641,7 +2618,6 @@ function CommandCenter({
   onShowArchivedRecent,
 }: {
   projectId: string;
-  /** Recent conversations across every project the owner owns. */
   recentThreads: ChatThread[];
   providers: Array<Provider & { project_name?: string }>;
   summary: ReturnType<typeof useWorkspaceSummary>;
@@ -2655,40 +2631,33 @@ function CommandCenter({
   onShowArchivedRecent?: (v: boolean) => void;
   projects?: any;
 }) {
-  const usableGlobal = usableProviders(providers);
-  void usableGlobal;
   const [draft, setDraft] = useState("");
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string>(projectId);
   const [selectedAgentId, setSelectedAgentId] = useState<string>("");
-  /* The owner's explicit choice wins; until they make one, start on the
-     project's default model when it has one, otherwise on the first usable
-     model anywhere so Home is never disabled above a working machine. A
-     real model beats a demo one when both exist. The chosen workspace/model
-     decides which project the thread belongs to. */
   const [explicitProviderId, setExplicitProviderId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [streaming, setStreaming] = useState("");
+  type PlanDraftState = { plan?: { tasks?: Array<{ description?: string; command?: string } & Record<string, unknown>> } & Record<string, unknown> } & Record<string, unknown>;
+  const [planDraft, setPlanDraft] = useState<PlanDraftState | null>(null);
+  const [planObjective, setPlanObjective] = useState("");
+  const [researchJobIds, setResearchJobIds] = useState<string[]>([]);
+  const [showConfigure, setShowConfigure] = useState(false);
+  const [provName, setProvName] = useState("");
+  const [provBaseUrl, setProvBaseUrl] = useState("");
+  const [provModel, setProvModel] = useState("");
+  const [provApiKey, setProvApiKey] = useState("");
+  const [provBusy, setProvBusy] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
-  /* Discovery data for the getting-started path: what workspaces exist,
-   * which bots are available, and which models are connected. */
   const workspacesLoader = useAsync(() => api.listProjects(), []);
   const botsLoader = useAsync(() => api.listAllTeammates(), []);
   const workspaces = workspacesLoader.data?.projects ?? [];
-  void workspacesLoader.data?.counts;
   const bots = botsLoader.data?.teammates ?? [];
 
-  useAsync(async () => {
-    const result: Record<string, Provider[]> = {};
-    for (const project of workspaces) {
-      try {
-        const res = await api.listProviders(project.id);
-        result[project.id] = res.providers;
-      } catch {
-        result[project.id] = [];
-      }
-    }
-    return result;
-  }, [workspaces]);
-
-  const workspaceProviders = (providers || []).filter((p) => (p as any).project_id === selectedWorkspaceId);
+  const workspaceProviders = (providers || []).filter(
+    (p) => (p as any).project_id === selectedWorkspaceId,
+  );
   const workspaceUsable = usableProviders(workspaceProviders);
   const hasProvider = workspaceUsable.length > 0;
   const homeHasProvider = workspaceProviders.length > 0;
@@ -2699,46 +2668,35 @@ function CommandCenter({
       ? "__default__"
       : (realFirst[0]?.id ?? workspaceUsable[0]?.id ?? "__default__"));
   const isMockModel = workspaceProviders.some(
-    (p) => p.kind === "mock" && (p.id === selectedProviderId || selectedProviderId === "__default__"),
+    (p) =>
+      p.kind === "mock" &&
+      (p.id === selectedProviderId || selectedProviderId === "__default__"),
   );
-  const workspaceAgents = (bots || []).filter((b) => b.project_id === selectedWorkspaceId);
+  const workspaceAgents = bots.filter((b) => b.project_id === selectedWorkspaceId);
   const selectedAgent = bots.find((b) => b.id === selectedAgentId) || null;
 
   useEffect(() => {
-    // reset model choice when switching workspace
     setExplicitProviderId(null);
   }, [selectedWorkspaceId]);
 
   useEffect(() => {
-    // keep agent selection valid for workspace
     if (selectedAgentId && !workspaceAgents.some((b) => b.id === selectedAgentId)) {
       setSelectedAgentId("");
     }
   }, [selectedWorkspaceId, workspaceAgents, selectedAgentId]);
 
   useEffect(() => {
-    // pick a sensible default workspace once loaded (prefer one with a usable model)
     if (workspaces.length === 0) return;
     const current = workspaces.find((w) => w.id === selectedWorkspaceId);
     if (current) return;
-    const preferred = workspaces.find((w) => (providers || []).some((p: any) => p.project_id === w.id && providerIsUsable(p as any))) || workspaces[0];
+    const preferred =
+      workspaces.find((w) =>
+        (providers || []).some(
+          (p: any) => p.project_id === w.id && providerIsUsable(p as any),
+        ),
+      ) || workspaces[0];
     if (preferred) setSelectedWorkspaceId(preferred.id);
-  }, [workspaces, providers]);
-
-  const [busy, setBusy] = useState(false);
-  const [streaming, setStreaming] = useState("");
-  type PlanDraftState = { plan?: { tasks?: Array<{ description?: string; command?: string } & Record<string, unknown>> } & Record<string, unknown> } & Record<string, unknown>;
-  const [planDraft, setPlanDraft] = useState<PlanDraftState | null>(null);
-  const [planObjective, setPlanObjective] = useState("");
-  const [researchJobIds, setResearchJobIds] = useState<string[]>([]);
-  const abortRef = useRef<AbortController | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const [showConfigure, setShowConfigure] = useState(false);
-  const [provName, setProvName] = useState("");
-  const [provBaseUrl, setProvBaseUrl] = useState("");
-  const [provModel, setProvModel] = useState("");
-  const [provApiKey, setProvApiKey] = useState("");
-  const [provBusy, setProvBusy] = useState(false);
+  }, [workspaces, providers, selectedWorkspaceId]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
@@ -2754,19 +2712,30 @@ function CommandCenter({
     setStreaming("");
     let stopped = false;
     try {
-      const selected = workspaceProviders.find(
-        (provider) => provider.id === selectedProviderId,
-      ) || providers.find((provider) => provider.id === selectedProviderId);
+      const selected =
+        workspaceProviders.find((provider) => provider.id === selectedProviderId) ||
+        providers.find((provider) => provider.id === selectedProviderId);
       const targetProjectId = selectedWorkspaceId || selected?.project_id || projectId;
-      const finalContent = selectedAgent ? insertMention(content, mentionHandle(selectedAgent)) : content;
+      const finalContent = selectedAgent
+        ? insertMention(content, mentionHandle(selectedAgent))
+        : content;
       const thread = await api.createThread(targetProjectId, {
         title: content.slice(0, 60),
-        provider_id: selected?.id && selectedProviderId !== "__default__" ? selected.id : undefined,
+        provider_id:
+          selected?.id && selectedProviderId !== "__default__" ? selected.id : undefined,
       });
       try {
-        await api.sendChatStream(thread.id, finalContent, (chunk) => {
-          setStreaming((prev) => prev + chunk);
-        }, undefined, undefined, "chat", { signal: controller.signal });
+        await api.sendChatStream(
+          thread.id,
+          finalContent,
+          (chunk) => {
+            setStreaming((prev) => prev + chunk);
+          },
+          undefined,
+          undefined,
+          "chat",
+          { signal: controller.signal },
+        );
       } catch (err) {
         if (err instanceof ApiError && err.detail === "Stream stopped") {
           stopped = true;
@@ -2787,9 +2756,7 @@ function CommandCenter({
     }
   };
 
-  const stop = () => {
-    abortRef.current?.abort();
-  };
+  const stop = () => abortRef.current?.abort();
 
   const startDeepResearch = async () => {
     const query = draft.trim();
@@ -2813,122 +2780,87 @@ function CommandCenter({
     }
   };
 
-  // The resume list spans every project the owner owns, so a conversation
-  // started elsewhere is still one click away from here. Backend orders by
-  // pinned then recency; preserve that order.
   const sorted = recentThreads;
   const projectLabel = (id: string) => {
     const bundle = summary.data?.summary.bundles.find((b) => b.project.id === id);
     if (id === projectId) return "Home";
-    return bundle?.project.repository || "workspace";
+    return bundle?.project.repository || "Workspace";
   };
 
-  const suggestions = [
-    "Research the best alternatives to Linear and prepare a comparison.",
-    "Build a simple app plan and break it into tasks.",
-    "Analyze the documents in my workspace and summarize key points.",
-    "Delegate a coding task to an agent and show progress.",
-    "Help me decide what to work on next.",
+  const starters = [
+    { label: "Research a market or competitor", prompt: "Research a market or competitor and summarize the findings." },
+    { label: "Plan and break down work", prompt: "Help me plan this work and break it into clear tasks." },
+    { label: "Delegate to an agent", prompt: "Delegate this task to the right agent and track progress: " },
+    { label: "Review what needs attention", prompt: "What needs my attention right now, and what should I do first?" },
   ];
+
+  const activeWorkspaceName =
+    workspaces.find((w) => w.id === selectedWorkspaceId)?.repository || "Workspace";
+  const s = summary.data?.summary;
+  const attentionBits: string[] = [];
+  if (s?.pendingApprovals.length) attentionBits.push(`${s.pendingApprovals.length} awaiting approval`);
+  if (s?.failedRuns.length) attentionBits.push(`${s.failedRuns.length} need review`);
+  if (s?.activeRuns.length) attentionBits.push(`${s.activeRuns.length} running`);
 
   return (
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-[860px] flex-col gap-6 px-4 py-8 md:px-6 md:py-10">
-        {/* The workspace banner renders once above this pane (ConversationView). */}
-
-        <div className="space-y-3 pt-2 md:pt-6">
-          <h1 className="text-step-3 font-semibold tracking-tight text-[var(--text)] md:text-[2rem]">
+      <div className="mx-auto flex w-full max-w-[760px] flex-col px-4 pb-10 pt-8 md:px-6 md:pt-14">
+        <div className="mb-8 md:mb-10">
+          <p className="mb-3 text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--faint)]">
+            {activeWorkspaceName}
+          </p>
+          <h1 className="max-w-2xl text-[1.9rem] font-semibold leading-[1.1] tracking-[-0.03em] text-[var(--text)] md:text-[2.35rem]">
             What are we working on?
           </h1>
-          <p className="max-w-2xl text-step-0 text-[var(--muted)]">
-            Chat with NerdBot to research, plan, delegate work to agents, and track results in one place.
+          <p className="mt-3 max-w-xl text-step-0 leading-relaxed text-[var(--muted)]">
+            Start with a task. NerdBot can research, plan, delegate to agents, and keep work moving in this workspace.
           </p>
-          <div className="flex flex-wrap gap-2 pt-1">
-            {suggestions.map((s) => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => setDraft(s)}
-                className="rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-left text-step--1 text-[var(--text-soft)] transition-colors hover:border-[var(--border-focus)] hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
-              >
-                {s}
-              </button>
-            ))}
-          </div>
+          {attentionBits.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => navigate("/approvals")}
+              className="mt-4 inline-flex items-center gap-2 text-step--1 text-[var(--muted)] transition-colors hover:text-[var(--text)]"
+            >
+              <span className={`h-1.5 w-1.5 rounded-full ${s && s.pendingApprovals.length ? "bg-[var(--warn)]" : "bg-[var(--info)]"}`} aria-hidden />
+              <span>{attentionBits.join(" · ")}</span>
+            </button>
+          ) : null}
         </div>
 
-        {(summary.summary.bots.length > 0 || bots.length > 0) ? (
-          <section aria-label="Your agents" className="rounded-xl border border-[var(--border-dim)] bg-[var(--surface)] p-3">
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <SectionLabel>Your agents</SectionLabel>
-              <Button variant="ghost" onClick={() => navigate("/bots")}>Manage agents</Button>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {(summary.summary.bots.length > 0 ? summary.summary.bots : bots).slice(0, 8).map((bot) => {
-                const handle = mentionHandle(bot);
-                return (
-                  <div
-                    key={bot.id}
-                    className="inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--bg)] pr-1"
-                  >
-                    <button
-                      type="button"
-                      className="inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-step--1 text-[var(--text)] hover:bg-[var(--surface-2)]"
-                      onClick={() => navigate(`/bot/${bot.id}`)}
-                      title="Open agent"
-                    >
-                      <BotFace face={bot.face} size={18} status={bot.status} />
-                      <span className="max-w-[10rem] truncate">{bot.persona || bot.name || "Agent"}</span>
-                      <StatusDot status={bot.status} />
-                    </button>
-                    {handle ? (
-                      <button
-                        type="button"
-                        className="rounded-full px-1.5 py-0.5 text-step--2 text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
-                        onClick={() => setDraft((d) => insertMention(d, handle))}
-                        title={`Mention @${handle}`}
-                        aria-label={`Mention @${handle}`}
-                      >
-                        @
-                      </button>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-        ) : null}
-
         {planDraft?.plan?.tasks ? (
-          <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="text-step-1 font-semibold">Plan preview</h3>
+          <section className="mb-6 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-step-0 font-semibold text-[var(--text)]">Plan</h2>
+                <p className="mt-0.5 text-step--1 text-[var(--muted)]">{planObjective}</p>
+              </div>
               <Button variant="ghost" onClick={() => { setPlanDraft(null); setPlanObjective(""); }}>
                 Cancel
               </Button>
             </div>
-            <p className="mb-3 text-step--1 text-[var(--muted)]">{planObjective}</p>
-            <div className="space-y-3">
+            <div className="space-y-2">
               {(planDraft.plan?.tasks ?? []).map((task, idx) => (
                 <div key={idx} className="rounded-lg border border-[var(--border-dim)] p-3">
                   <input
-                    className="mb-2 w-full rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2 py-1 text-step--1"
-                    value={task.description}
+                    className="mb-2 w-full rounded-md border border-[var(--border)] bg-transparent px-2.5 py-2 text-step--1"
+                    value={task.description || ""}
                     onChange={(e) => {
                       const next = { ...planDraft };
                       if (next.plan?.tasks?.[idx]) next.plan.tasks[idx] = { ...next.plan.tasks[idx], description: e.target.value };
                       setPlanDraft(next);
                     }}
+                    aria-label={`Task ${idx + 1} description`}
                   />
                   <input
-                    className="w-full rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2 py-1 font-mono text-step--2"
+                    className="mono w-full rounded-md border border-[var(--border)] bg-transparent px-2.5 py-2 text-step--2"
                     value={task.command || ""}
-                    placeholder="command (optional)"
+                    placeholder="Command (optional)"
                     onChange={(e) => {
                       const next = { ...planDraft };
                       if (next.plan?.tasks?.[idx]) next.plan.tasks[idx] = { ...next.plan.tasks[idx], command: e.target.value };
                       setPlanDraft(next);
                     }}
+                    aria-label={`Task ${idx + 1} command`}
                   />
                 </div>
               ))}
@@ -2945,7 +2877,7 @@ function CommandCenter({
                       plan: planDraft.plan,
                       create_board: true,
                     });
-                    toast.success("Plan executed");
+                    toast.success("Plan created");
                     setPlanDraft(null);
                     setPlanObjective("");
                     const boardId = (result as { board?: { id?: string } })?.board?.id;
@@ -2957,77 +2889,15 @@ function CommandCenter({
                   }
                 }}
               >
-                Execute plan
+                Create tasks
               </Button>
             </div>
           </section>
         ) : null}
 
-        {/* Primary composer */}
-        <div className="scroll-mt-6">
-          <div className="mb-3 flex flex-col gap-2 rounded-xl border border-[var(--border-dim)] bg-[var(--surface)] p-3">
-            <div className="grid gap-2 sm:grid-cols-3">
-              <label className="flex flex-col gap-1 text-step--2 text-[var(--muted)]">
-                <span>Workspace</span>
-                <select
-                  value={selectedWorkspaceId}
-                  onChange={(e) => setSelectedWorkspaceId(e.target.value)}
-                  className={`${FORM_SELECT} h-9`}
-                  aria-label="Workspace"
-                >
-                  {workspaces.length === 0 ? <option value={projectId}>Home</option> : null}
-                  {workspaces.map((w) => (
-                    <option key={w.id} value={w.id}>{w.repository || "Workspace"}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="flex flex-col gap-1 text-step--2 text-[var(--muted)]">
-                <span>Model</span>
-                <select
-                  value={selectedProviderId}
-                  onChange={(e) => setExplicitProviderId(e.target.value)}
-                  className={`${FORM_SELECT} h-9`}
-                  aria-label="Model"
-                  disabled={workspaceProviders.length === 0}
-                >
-                  <option value="__default__">Default model</option>
-                  {workspaceProviders.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name} ({p.kind}){providerIsUsable(p as any) ? "" : " · not ready"}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="flex flex-col gap-1 text-step--2 text-[var(--muted)]">
-                <span>Agent (optional)</span>
-                <select
-                  value={selectedAgentId}
-                  onChange={(e) => setSelectedAgentId(e.target.value)}
-                  className={`${FORM_SELECT} h-9`}
-                  aria-label="Agent"
-                >
-                  <option value="">No specific agent</option>
-                  {workspaceAgents.map((b) => (
-                    <option key={b.id} value={b.id}>{b.persona || b.name || "Agent"}{b.status ? ` · ${b.status}` : ""}</option>
-                  ))}
-                </select>
-              </label>
-            </div>
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-step--2">
-              {!hasProvider ? (
-                <span className="text-[var(--warn)]">Model not ready for this workspace. <button type="button" className="font-medium underline underline-offset-4" onClick={() => navigate("/settings")}>Connect a model</button></span>
-              ) : (
-                <span className="text-[var(--muted)]">Ready to chat in <span className="font-medium text-[var(--text-soft)]">{workspaces.find((w) => w.id === selectedWorkspaceId)?.repository || "selected workspace"}</span>.</span>
-              )}
-              {workspaceAgents.length === 0 ? (
-                <span className="text-[var(--muted)]">No agents in this workspace. <button type="button" className="font-medium text-[var(--accent)] hover:underline" onClick={() => navigate("/bots")}>Create agent</button></span>
-              ) : selectedAgent ? (
-                <span className="text-[var(--muted)]">Will mention <span className="font-medium text-[var(--text-soft)]">@{mentionHandle(selectedAgent) || selectedAgent.persona || "agent"}</span> when you send.</span>
-              ) : (
-                <span className="text-[var(--muted)]">Tip: mention an agent with @name or pick one above.</span>
-              )}
-            </div>
-          </div>
+        <div className="sticky top-0 z-[1] -mx-1 mb-8 bg-[var(--bg)]/95 px-1 pb-2 pt-1 backdrop-blur supports-[backdrop-filter]:bg-[var(--bg)]/85">
           <form onSubmit={send}>
-            <div className="flex flex-col gap-2 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-3 shadow-sm transition-colors focus-within:border-[var(--border-focus)] sm:flex-row sm:items-end">
+            <div className={`rounded-2xl border bg-[var(--surface)] p-2 transition-colors ${hasProvider ? "border-[var(--border)] focus-within:border-[var(--border-focus)]" : "border-[var(--border-dim)]"}`}>
               <textarea
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
@@ -3037,67 +2907,152 @@ function CommandCenter({
                     void send(e);
                   }
                 }}
-                placeholder={
-                  hasProvider
-                    ? "Ask NerdBot anything, or describe work for your agents…"
-                    : "Connect a model to start chatting with NerdBot."
-                }
-                disabled={busy || !hasProvider}
+                placeholder={hasProvider ? "Message NerdBot..." : "Describe what you want to do"}
+                disabled={busy}
                 spellCheck
                 rows={4}
-                aria-label="Start a conversation"
-                className="max-h-56 min-h-[96px] w-full min-w-0 resize-none bg-transparent p-2 text-step-0 leading-relaxed outline-none placeholder:text-[var(--faint)] disabled:opacity-50 sm:w-auto sm:flex-1"
+                aria-label="Message NerdBot"
+                className="max-h-56 min-h-[112px] w-full resize-none bg-transparent px-3 py-2.5 text-step-0 leading-relaxed text-[var(--text)] outline-none placeholder:text-[var(--faint)] disabled:opacity-70"
               />
-              <div className="flex items-center gap-2 justify-end">
-                {busy ? (
-                  <Button variant="danger" type="button" onClick={stop} disabled={!streaming}>
-                    ■ Stop
-                  </Button>
-                ) : (
-                  <>
-                    <Button
-                      type="button"
-                      disabled={busy || !draft.trim()}
-                      onClick={() => void startDeepResearch()}
-                      title="Run multi-source deep research in the background with citations"
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border-dim)] px-2 pt-2">
+                <div className="flex flex-wrap items-center gap-1.5 text-step--2">
+                  <label className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[var(--muted)] hover:bg-[var(--surface-2)]">
+                    <span className="sr-only">Workspace</span>
+                    <select
+                      value={selectedWorkspaceId}
+                      onChange={(e) => setSelectedWorkspaceId(e.target.value)}
+                      className="max-w-[10rem] bg-transparent text-step--2 text-[var(--text-soft)] outline-none"
+                      aria-label="Workspace"
                     >
-                      Deep research
-                    </Button>
-                    <Button
-                      type="button"
-                      disabled={busy || !draft.trim() || !hasProvider}
-                      onClick={async () => {
-                        const content = draft.trim();
-                        if (!content) return;
-                        setBusy(true);
-                        try {
-                          const result = await api.createObjective(selectedWorkspaceId || projectId, { objective: content, preview: true });
-                          setPlanObjective(content);
-                          setPlanDraft(result as PlanDraftState);
-                          setDraft("");
-                        } catch (err) {
-                          notifyError(err);
-                        } finally {
-                          setBusy(false);
-                        }
-                      }}
-                      title="Create a plan preview from your message"
+                      {workspaces.length === 0 ? <option value={projectId}>Home</option> : null}
+                      {workspaces.map((w) => (
+                        <option key={w.id} value={w.id}>{w.repository || "Workspace"}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <span className="text-[var(--border)]" aria-hidden>·</span>
+                  <label className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[var(--muted)] hover:bg-[var(--surface-2)]">
+                    <span className="sr-only">Model</span>
+                    <select
+                      value={selectedProviderId}
+                      onChange={(e) => setExplicitProviderId(e.target.value)}
+                      className="max-w-[11rem] bg-transparent text-step--2 text-[var(--text-soft)] outline-none disabled:opacity-60"
+                      aria-label="Model"
+                      disabled={workspaceProviders.length === 0}
                     >
-                      Plan &amp; execute
+                      <option value="__default__">Default model</option>
+                      {workspaceProviders.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}{providerIsUsable(p as any) ? "" : " (not ready)"}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <span className="text-[var(--border)]" aria-hidden>·</span>
+                  <label className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[var(--muted)] hover:bg-[var(--surface-2)]">
+                    <span className="sr-only">Agent</span>
+                    <select
+                      value={selectedAgentId}
+                      onChange={(e) => setSelectedAgentId(e.target.value)}
+                      className="max-w-[10rem] bg-transparent text-step--2 text-[var(--text-soft)] outline-none"
+                      aria-label="Agent"
+                    >
+                      <option value="">No agent</option>
+                      {workspaceAgents.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.persona || b.name || "Agent"}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {!hasProvider ? (
+                    <>
+                      <span className="text-[var(--border)]" aria-hidden>·</span>
+                      <button
+                        type="button"
+                        onClick={() => setShowConfigure((v) => !v)}
+                        className="rounded-md px-2 py-1 text-[var(--text-soft)] underline-offset-4 hover:text-[var(--text)] hover:underline"
+                      >
+                        Connect model
+                      </button>
+                    </>
+                  ) : null}
+                </div>
+                <div className="flex items-center gap-2">
+                  {busy ? (
+                    <Button variant="danger" type="button" onClick={stop} disabled={!streaming}>
+                      Stop
                     </Button>
-                    <Button variant="primary" type="submit" disabled={busy || !draft.trim() || !hasProvider}>
-                      Send ⏎
-                    </Button>
-                  </>
-                )}
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        disabled={busy || !draft.trim()}
+                        onClick={() => void startDeepResearch()}
+                        className="rounded-md px-2.5 py-1.5 text-step--2 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)] disabled:opacity-50"
+                        title="Run research in the background"
+                      >
+                        Research
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy || !draft.trim() || !hasProvider}
+                        onClick={async () => {
+                          const content = draft.trim();
+                          if (!content) return;
+                          setBusy(true);
+                          try {
+                            const result = await api.createObjective(selectedWorkspaceId || projectId, { objective: content, preview: true });
+                            setPlanObjective(content);
+                            setPlanDraft(result as PlanDraftState);
+                            setDraft("");
+                          } catch (err) {
+                            notifyError(err);
+                          } finally {
+                            setBusy(false);
+                          }
+                        }}
+                        className="rounded-md px-2.5 py-1.5 text-step--2 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)] disabled:opacity-50"
+                        title="Create a plan before running work"
+                      >
+                        Plan
+                      </button>
+                      <Button variant="primary" type="submit" disabled={busy || !draft.trim() || !hasProvider}>
+                        Send
+                      </Button>
+                    </>
+                  )}
+                </div>
               </div>
             </div>
-            {streaming && (
-              <div className="mt-2 max-h-60 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step--1 text-[var(--text-soft)]">
-                <Markdown text={streaming} />
-                <span className="ml-0.5 inline-block h-4 w-2 animate-pulse rounded-[1px] bg-[var(--accent)] align-middle" aria-hidden />
+            {!hasProvider ? (
+              <div className="mt-3 rounded-xl border border-[var(--border-dim)] bg-[var(--surface)] px-4 py-3">
+                <p className="text-step--1 font-medium text-[var(--text)]">Connect a model to start working</p>
+                <p className="mt-1 text-step--1 leading-relaxed text-[var(--muted)]">
+                  NerdBot can run in this workspace once a model is connected. You can choose the workspace and agent now, then add a model when ready.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button variant="primary" type="button" onClick={() => setShowConfigure((v) => !v)}>
+                    {showConfigure ? "Hide setup" : "Connect model"}
+                  </Button>
+                  <Button type="button" onClick={() => navigate("/settings")}>Settings</Button>
+                </div>
               </div>
+            ) : isMockModel ? (
+              <p className="mt-2 px-1 text-step--2 text-[var(--muted)]">
+                Demo model selected. Replies are simulated. <button type="button" onClick={() => setShowConfigure((v) => !v)} className="underline underline-offset-4 hover:text-[var(--text)]">Connect a real model</button>
+              </p>
+            ) : (
+              <p className="mt-2 px-1 text-step--2 text-[var(--faint)]">
+                Enter to send. Shift+Enter for a new line.
+              </p>
             )}
+            {streaming ? (
+              <div className="mt-3 max-h-56 overflow-y-auto rounded-xl border border-[var(--border-dim)] bg-[var(--surface)] px-4 py-3 text-step--1 text-[var(--text-soft)]">
+                <Markdown text={streaming} />
+                <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse rounded-[1px] bg-[var(--accent)] align-middle" aria-hidden />
+              </div>
+            ) : null}
             {researchJobIds.length > 0 ? (
               <div className="mt-3 flex flex-col gap-3">
                 {researchJobIds.map((id) => (
@@ -3112,51 +3067,18 @@ function CommandCenter({
             ) : null}
           </form>
 
-          {!hasProvider ? (
-            <div className="mt-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-step--1">
-              <p className="font-medium text-[var(--text)]">Connect a model to start</p>
-              <p className="mt-1 text-[var(--muted)]">
-                NerdBot needs a model connection to chat, research, or run work. Your data stays in your workspaces.
-              </p>
-              <div className="mt-2 flex flex-wrap gap-2">
-                <Button variant="primary" type="button" onClick={() => setShowConfigure((v) => !v)}>
-                  Connect a model
-                </Button>
-                <Button type="button" onClick={() => navigate("/settings")}>Open settings</Button>
-              </div>
-            </div>
-          ) : hasProvider && isMockModel ? (
-            <div
-              className="mt-3 rounded-lg border border-[var(--info)] bg-[var(--info-dim)] px-4 py-3"
-              role="status"
-            >
-              <p className="text-step--1 font-medium text-[var(--text)]">Demo mode</p>
-              <p className="mt-1 text-step--1 text-[var(--text-soft)]">
-                Replies are simulated and no real work runs. Connect a model to use your team for real tasks.
-              </p>
-              <button
-                type="button"
-                onClick={() => setShowConfigure((v) => !v)}
-                className="mt-2 text-step--1 font-medium text-[var(--text)] underline underline-offset-4"
-              >
-                Connect a real model
-              </button>
-            </div>
-          ) : (
-            <p className="mt-2 text-step--2 text-[var(--faint)]">
-              New messages start in chat. Inside a conversation you can switch to Research (web search) or Delegate work when available.
-            </p>
-          )}
-
-          {showConfigure && (
+          {showConfigure ? (
             <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
-              <SectionLabel className="mb-3">Configure model connection</SectionLabel>
+              <div className="mb-3 flex items-center justify-between">
+                <span className="text-step--1 font-medium text-[var(--text)]">Connect a model</span>
+                <button type="button" onClick={() => setShowConfigure(false)} className="text-step--2 text-[var(--muted)] hover:text-[var(--text)]">Close</button>
+              </div>
               <form
                 onSubmit={async (e: React.FormEvent) => {
                   e.preventDefault();
                   setProvBusy(true);
                   try {
-                    await api.createProvider(projectId, {
+                    await api.createProvider(selectedWorkspaceId || projectId, {
                       kind: "openai-compatible",
                       name: provName.trim() || "model",
                       config: {
@@ -3177,113 +3099,137 @@ function CommandCenter({
                     setProvBusy(false);
                   }
                 }}
-                className="flex flex-wrap items-end gap-3"
+                className="grid gap-2 sm:grid-cols-2"
               >
-                <input
-                  value={provName}
-                  onChange={(e) => setProvName(e.target.value)}
-                  placeholder="Name (e.g. groq)"
-                  aria-label="Provider name"
-                  className="w-40 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-step--1 outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
-                />
-                <input
-                  value={provBaseUrl}
-                  onChange={(e) => setProvBaseUrl(e.target.value)}
-                  placeholder="Base URL (e.g. https://api.groq.com/openai/v1)"
-                  aria-label="Base URL"
-                  required
-                  className="mono min-w-64 flex-1 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-step--1 outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
-                />
-                <input
-                  value={provModel}
-                  onChange={(e) => setProvModel(e.target.value)}
-                  placeholder="Model (optional)"
-                  aria-label="Model"
-                  className="w-44 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-step--1 outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
-                />
-                <input
-                  type="password"
-                  value={provApiKey}
-                  onChange={(e) => setProvApiKey(e.target.value)}
-                  placeholder="API key"
-                  aria-label="API key"
-                  autoComplete="off"
-                  className="w-48 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-step--1 outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
-                />
-                <Button variant="primary" type="submit" disabled={provBusy || !provBaseUrl.trim()}>
-                  {provBusy ? "Connecting…" : "Connect"}
-                </Button>
-                <Button type="button" onClick={() => setShowConfigure(false)}>
-                  Cancel
-                </Button>
+                <input value={provName} onChange={(e) => setProvName(e.target.value)} placeholder="Name" aria-label="Provider name" className="rounded-md border border-[var(--border)] bg-transparent px-3 py-2 text-step--1 outline-none focus:border-[var(--border-focus)]" />
+                <input value={provModel} onChange={(e) => setProvModel(e.target.value)} placeholder="Model (optional)" aria-label="Model name" className="rounded-md border border-[var(--border)] bg-transparent px-3 py-2 text-step--1 outline-none focus:border-[var(--border-focus)]" />
+                <input value={provBaseUrl} onChange={(e) => setProvBaseUrl(e.target.value)} placeholder="Base URL" aria-label="Base URL" required className="mono rounded-md border border-[var(--border)] bg-transparent px-3 py-2 text-step--1 outline-none focus:border-[var(--border-focus)] sm:col-span-2" />
+                <input type="password" value={provApiKey} onChange={(e) => setProvApiKey(e.target.value)} placeholder="API key (optional)" aria-label="API key" autoComplete="off" className="rounded-md border border-[var(--border)] bg-transparent px-3 py-2 text-step--1 outline-none focus:border-[var(--border-focus)] sm:col-span-2" />
+                <div className="flex items-center justify-between gap-2 sm:col-span-2">
+                  <p className="text-step--2 text-[var(--faint)]">Stored encrypted when NERDBOT_SECRET_KEY is set.</p>
+                  <Button variant="primary" type="submit" disabled={provBusy || !provBaseUrl.trim()}>
+                    {provBusy ? "Connecting…" : "Connect"}
+                  </Button>
+                </div>
               </form>
-              <p className="mt-2 text-step--2 text-[var(--faint)]">
-                Keys are stored encrypted at rest when the server has NERDBOT_SECRET_KEY set.
-              </p>
             </div>
-          )}
+          ) : null}
         </div>
 
-
-        {/* One list. Home has no conversation rail, so this is the whole
-            history rather than a second copy of it. */}
-        <section>
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-baseline gap-2">
-              <SectionLabel>Conversations</SectionLabel>
-              <span className="text-step--2 text-[var(--faint)]">Home + all workspaces</span>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <input
-                value={recentSearch ?? ""}
-                onChange={(e) => onRecentSearch?.(e.target.value)}
-                placeholder="Search conversations"
-                aria-label="Search recent conversations"
-                className="h-8 w-44 rounded-md border border-[var(--border)] bg-[var(--surface)] px-2.5 text-step--1 outline-none focus:border-[var(--border-focus)]"
-              />
-              <label className="flex items-center gap-1.5 text-step--2 text-[var(--muted)]">
-                <input type="checkbox" checked={!!showArchivedRecent} onChange={(e) => onShowArchivedRecent?.(e.target.checked)} />
-                Archived
-              </label>
-              {refreshThreads ? <Button variant="ghost" onClick={() => void refreshThreads()}>Refresh</Button> : null}
-            </div>
-          </div>
-          {sorted.length === 0 ? (
-            <p className="rounded-xl border border-dashed border-[var(--border-dim)] px-4 py-6 text-center text-step--1 text-[var(--faint)]">
-              {recentSearch || showArchivedRecent ? "No conversations match." : "No recent conversations yet. Start one above."}
-            </p>
-          ) : (
-            <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
-              {sorted.slice(0, 20).map((t) => (
-                <div key={t.id} className="flex items-center gap-2 border-t border-[var(--border-dim)] first:border-t-0 px-2 py-1 hover:bg-[var(--surface-2)]">
-                  <button
-                    type="button"
-                    onClick={() => onOpenThread(t)}
-                    aria-label={`Resume: ${t.title || "Untitled"}`}
-                    className="flex min-w-0 flex-1 items-center gap-3 px-2 py-1.5 text-left"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5">
-                        {t.pinned ? <span className="text-[10px] text-[var(--accent)]" title="Pinned">●</span> : null}
-                        <span className="truncate text-step--1 text-[var(--text)]">{t.title || "Untitled"}</span>
-                        {t.archived ? <span className="rounded bg-[var(--surface-2)] px-1 text-[10px] text-[var(--faint)]">archived</span> : null}
-                      </div>
-                      <div className="flex items-center gap-2 text-step--2 text-[var(--faint)]">
-                        <span className={`mono rounded px-1 ${t.project_id === projectId ? "bg-[var(--accent-dim,rgba(59,130,246,0.12))] text-[var(--accent)]" : "bg-[var(--surface-2)]"}`}>
-                          {projectLabel(t.project_id)}
-                        </span>
-                        <span className="mono">{relativeTime((t.updated_at || t.created_at) ?? "")}</span>
-                      </div>
-                    </div>
-                  </button>
-                  <div className="shrink-0 pr-1">
-                    <ThreadRowActions thread={t} onChanged={() => { refreshThreads?.(); }} onMoved={() => { refreshThreads?.(); }} />
-                  </div>
-                </div>
+        {!draft && !planDraft ? (
+          <div className="mb-8">
+            <p className="mb-2 text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--faint)]">Start with a task</p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {starters.map((s) => (
+                <button
+                  key={s.label}
+                  type="button"
+                  onClick={() => setDraft(s.prompt)}
+                  className="rounded-lg border border-[var(--border-dim)] bg-transparent px-3 py-3 text-left text-step--1 text-[var(--text-soft)] transition-colors hover:border-[var(--border)] hover:bg-[var(--surface)] hover:text-[var(--text)]"
+                >
+                  {s.label}
+                </button>
               ))}
             </div>
-          )}
-        </section>
+          </div>
+        ) : null}
+
+        <div className="grid gap-8 md:grid-cols-[minmax(0,1fr)_220px]">
+          <section aria-label="Recent conversations">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-step--1 font-medium text-[var(--text)]">Recent</h2>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  value={recentSearch ?? ""}
+                  onChange={(e) => onRecentSearch?.(e.target.value)}
+                  placeholder="Search"
+                  aria-label="Search recent conversations"
+                  className="h-8 w-36 rounded-md border border-transparent bg-transparent px-2 text-step--2 text-[var(--text)] outline-none placeholder:text-[var(--faint)] hover:border-[var(--border-dim)] focus:border-[var(--border-focus)]"
+                />
+                <label className="flex items-center gap-1.5 text-step--2 text-[var(--muted)]">
+                  <input type="checkbox" checked={!!showArchivedRecent} onChange={(e) => onShowArchivedRecent?.(e.target.checked)} />
+                  Archived
+                </label>
+              </div>
+            </div>
+            {sorted.length === 0 ? (
+              <p className="py-6 text-step--1 text-[var(--faint)]">
+                {recentSearch || showArchivedRecent ? "No conversations match." : "No conversations yet. Your work will appear here."}
+              </p>
+            ) : (
+              <div className="flex flex-col">
+                {sorted.slice(0, 12).map((t) => (
+                  <div key={t.id} className="group flex items-center gap-2 border-b border-[var(--border-dim)] py-0.5 last:border-b-0">
+                    <button
+                      type="button"
+                      onClick={() => onOpenThread(t)}
+                      className="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-md px-2 py-2.5 text-left transition-colors hover:bg-[var(--surface-2)]"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          {t.pinned ? <span className="text-[10px] uppercase tracking-wide text-[var(--faint)]">Pinned</span> : null}
+                          <span className="truncate text-step--1 text-[var(--text)]">{t.title || "Untitled"}</span>
+                          {t.archived ? <span className="text-step--2 text-[var(--faint)]">Archived</span> : null}
+                        </div>
+                        <div className="mt-0.5 flex items-center gap-2 text-step--2 text-[var(--faint)]">
+                          <span>{projectLabel(t.project_id)}</span>
+                          <span aria-hidden>·</span>
+                          <span>{relativeTime((t.updated_at || t.created_at) ?? "")}</span>
+                        </div>
+                      </div>
+                    </button>
+                    <div className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                      <ThreadRowActions thread={t} onChanged={() => refreshThreads?.()} onMoved={() => refreshThreads?.()} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <aside aria-label="Workspace context" className="space-y-6">
+            <section>
+              <div className="mb-2 flex items-center justify-between">
+                <h2 className="text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--faint)]">Agents</h2>
+                <button type="button" onClick={() => navigate("/bots")} className="text-step--2 text-[var(--muted)] hover:text-[var(--text)]">Manage</button>
+              </div>
+              {(summary.summary.bots.length > 0 || bots.length > 0) ? (
+                <ul className="space-y-1">
+                  {(summary.summary.bots.length > 0 ? summary.summary.bots : bots).slice(0, 6).map((bot) => {
+                    const handle = mentionHandle(bot);
+                    return (
+                      <li key={bot.id} className="flex items-center gap-2 rounded-md px-1 py-1.5">
+                        <BotFace face={bot.face} size={22} status={bot.status} />
+                        <button type="button" className="min-w-0 flex-1 truncate text-left text-step--1 text-[var(--text-soft)] hover:text-[var(--text)]" onClick={() => navigate(`/bot/${bot.id}`)}>
+                          {bot.persona || bot.name || "Agent"}
+                        </button>
+                        {handle ? (
+                          <button type="button" className="text-step--2 text-[var(--faint)] hover:text-[var(--text)]" onClick={() => setDraft((d) => insertMention(d, handle))} title={`Mention @${handle}`}>@</button>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <p className="text-step--1 text-[var(--faint)]">
+                  No agents yet. <button type="button" onClick={() => navigate("/bots")} className="underline underline-offset-4 hover:text-[var(--text)]">Create one</button>
+                </p>
+              )}
+            </section>
+
+            <section>
+              <h2 className="mb-2 text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--faint)]">Workspace</h2>
+              <div className="space-y-1 text-step--1 text-[var(--muted)]">
+                <div className="truncate text-[var(--text-soft)]">{activeWorkspaceName}</div>
+                <div>{hasProvider ? "Model connected" : "No model connected"}</div>
+                <div className="pt-1 flex flex-wrap gap-x-3 gap-y-1 text-step--2">
+                  <button type="button" onClick={() => navigate("/projects")} className="hover:text-[var(--text)]">Workspaces</button>
+                  <button type="button" onClick={() => navigate("/activity")} className="hover:text-[var(--text)]">Activity</button>
+                </div>
+              </div>
+            </section>
+          </aside>
+        </div>
       </div>
     </div>
   );

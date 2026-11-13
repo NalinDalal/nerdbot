@@ -14,7 +14,7 @@ import re
 import sqlite3
 import uuid
 from collections.abc import Iterator
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -180,6 +180,18 @@ CREATE TABLE IF NOT EXISTS providers (
   kind TEXT NOT NULL DEFAULT 'local', name TEXT NOT NULL DEFAULT '',
   config TEXT NOT NULL DEFAULT '{}', capabilities TEXT NOT NULL DEFAULT '[]',
   status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS decisions (
+  id TEXT PRIMARY KEY, project_id TEXT NOT NULL, teammate_id TEXT NOT NULL DEFAULT '',
+  task_id TEXT NOT NULL DEFAULT '', decision TEXT NOT NULL DEFAULT '',
+  reason TEXT NOT NULL DEFAULT '', alternatives TEXT NOT NULL DEFAULT '',
+  evidence_refs TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS token_usage (
+  id TEXT PRIMARY KEY, run_id TEXT NOT NULL DEFAULT '', task_id TEXT NOT NULL DEFAULT '',
+  teammate_id TEXT NOT NULL DEFAULT '', project_id TEXT NOT NULL DEFAULT '',
+  prompt_tokens INTEGER NOT NULL DEFAULT 0, completion_tokens INTEGER NOT NULL DEFAULT 0,
+  total_tokens INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS knowledge_sources (
   id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
@@ -4512,6 +4524,123 @@ def set_task_board(conn: sqlite3.Connection, task_id: str, board_id: str) -> Tas
     updated = get_task(conn, task_id)
     assert updated is not None
     return updated
+
+
+def create_decision(
+    conn: sqlite3.Connection,
+    project_id: str,
+    teammate_id: str = "",
+    task_id: str = "",
+    decision: str = "",
+    reason: str = "",
+    alternatives: str = "",
+    evidence_refs: list[str] | None = None,
+) -> dict[str, Any]:
+    """Record one non-trivial decision in the org-wide decision log.
+
+    The decision log is append-only shared state: the retro and briefing
+    personas read it, nobody rewrites it.
+    """
+    row = {
+        "id": new_id("dec"),
+        "project_id": project_id,
+        "teammate_id": teammate_id,
+        "task_id": task_id,
+        "decision": str(decision or "")[:2000],
+        "reason": str(reason or "")[:2000],
+        "alternatives": str(alternatives or "")[:2000],
+        "evidence_refs": json.dumps(list(evidence_refs or []), ensure_ascii=False),
+        "created_at": _now_iso(),
+    }
+    conn.execute(
+        "INSERT INTO decisions (id, project_id, teammate_id, task_id, decision,"
+        " reason, alternatives, evidence_refs, created_at)"
+        " VALUES (:id, :project_id, :teammate_id, :task_id, :decision,"
+        " :reason, :alternatives, :evidence_refs, :created_at)",
+        row,
+    )
+    conn.commit()
+    out = dict(row)
+    out["evidence_refs"] = json.loads(out["evidence_refs"])
+    return out
+
+
+def list_decisions(conn: sqlite3.Connection, project_id: str, limit: int = 200) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM decisions WHERE project_id = ? ORDER BY created_at DESC LIMIT ?",
+        (project_id, int(limit)),
+    ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["evidence_refs"] = json.loads(d.get("evidence_refs") or "[]")
+        except (ValueError, TypeError):
+            d["evidence_refs"] = []
+        out.append(d)
+    return out
+
+
+def record_token_usage(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str = "",
+    task_id: str = "",
+    teammate_id: str = "",
+    project_id: str = "",
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+) -> int:
+    """Persist one model call's token usage and return the total recorded."""
+    prompt_tokens = max(int(prompt_tokens or 0), 0)
+    completion_tokens = max(int(completion_tokens or 0), 0)
+    total = prompt_tokens + completion_tokens
+    conn.execute(
+        "INSERT INTO token_usage (id, run_id, task_id, teammate_id, project_id,"
+        " prompt_tokens, completion_tokens, total_tokens, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            new_id("tku"),
+            run_id,
+            task_id,
+            teammate_id,
+            project_id,
+            prompt_tokens,
+            completion_tokens,
+            total,
+            _now_iso(),
+        ),
+    )
+    conn.commit()
+    return total
+
+
+def _token_sum(conn: sqlite3.Connection, where: str, params: tuple[Any, ...]) -> int:
+    row = conn.execute(
+        f"SELECT COALESCE(SUM(total_tokens), 0) AS t FROM token_usage WHERE {where}",
+        params,
+    ).fetchone()
+    return int(row["t"] if row else 0)
+
+
+def token_usage_for_task(conn: sqlite3.Connection, task_id: str) -> int:
+    return _token_sum(conn, "task_id = ?", (task_id,))
+
+
+def token_usage_for_teammate_today(conn: sqlite3.Connection, teammate_id: str) -> int:
+    return _token_sum(
+        conn,
+        "teammate_id = ? AND created_at >= ?",
+        (teammate_id, datetime.now(UTC).strftime("%Y-%m-%d")),
+    )
+
+
+def token_usage_for_org_today(conn: sqlite3.Connection) -> int:
+    return _token_sum(
+        conn,
+        "created_at >= ?",
+        (datetime.now(UTC).strftime("%Y-%m-%d"),),
+    )
 
 
 def list_events(conn: sqlite3.Connection, project_id: str) -> list[Event]:

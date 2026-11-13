@@ -55,7 +55,9 @@ export function parseRoute(): Route {
   exact screen the owner needs: /p/<id>?tab=Providers */
   const params = new URLSearchParams(window.location.search);
   const parts = window.location.pathname.split("/").filter(Boolean);
-  if (parts.length === 0) return { name: "chat" };
+  // The workspace opens on the operating overview, not the chat: the owner
+  // lands on what the org is doing, and conversations are one click away.
+  if (parts.length === 0) return { name: "overview" };
   if (parts[0] === "overview" || parts[0] === "home") return { name: "overview" };
   if (parts[0] === "work") {
     // Compatibility redirect: /work -> /activity (Phase 1).
@@ -255,13 +257,8 @@ function Sidebar({
     href: string;
     badge?: number;
   }> = [
-    { label: "Chat", icon: "chat", routes: ["chat"], href: "/" },
-    {
-      label: "Workspaces",
-      icon: "projects",
-      routes: ["projects", "project"],
-      href: "/projects",
-    },
+    // Workspace-first: the operating overview leads, conversations follow.
+    { label: "Overview", icon: "home", routes: ["overview"], href: "/" },
     {
       label: "Agents",
       icon: "teammates",
@@ -273,7 +270,19 @@ function Sidebar({
       icon: "work",
       routes: ["activity", "work", "task"],
       href: "/activity",
+    },
+    {
+      label: "Approvals",
+      icon: "approvals",
+      routes: ["approvals"],
+      href: "/approvals",
       badge: nav.pendingApprovals,
+    },
+    {
+      label: "Workspaces",
+      icon: "projects",
+      routes: ["projects", "project"],
+      href: "/projects",
     },
     {
       label: "Library",
@@ -281,6 +290,7 @@ function Sidebar({
       routes: ["library", "libraryDoc"],
       href: "/library",
     },
+    { label: "Chat", icon: "chat", routes: ["chat"], href: "/chat" },
   ];
 
   return (
@@ -294,6 +304,14 @@ function Sidebar({
           <strong className="font-semibold tracking-tight text-step-1 text-[var(--text)]">
             NerdBot
           </strong>
+          <svg
+            className="h-6 w-6 text-[--accent] transition-colors"
+            viewBox="0 0 24 24"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5.5 13.5l-1.4-1.4a.75.75 0 0 0-1.1 0L14.5 21H10a.75.75 0 0 1 0-1.5h4.5l-2.76-5.47a.75.75 0 0 0-1.1-1.1l2.08-2.08a.75.75 0 0 0 0-1.06l-2.76 5.47a.75.75 0 0 0 0 1.1L15.5 21h1.1z"/>
+          </svg>
           <button
             className="rounded-sm p-1.5 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)] md:hidden"
             onClick={onClose}
@@ -340,11 +358,9 @@ function Sidebar({
               <NavItem label="Teams & Groups" icon="teams" active={route.name === "teams" || route.name === "team"} onClick={() => onNavigate("/teams")} />
               <NavItem label="Boards" icon="boards" active={route.name === "boards" || route.name === "board"} onClick={() => onNavigate("/boards")} />
               <NavItem label="Workbench" icon="workbench" active={route.name === "workbench"} onClick={() => onNavigate("/workbench")} />
-              <NavItem label="Approvals" icon="approvals" active={route.name === "approvals"} onClick={() => onNavigate("/approvals")} />
               <NavItem label="Gallery" icon="gallery" active={route.name === "gallery"} onClick={() => onNavigate("/gallery")} />
               <NavItem label="Capabilities" icon="settings" active={route.name === "capabilities"} onClick={() => onNavigate("/capabilities")} />
               <NavItem label="Settings" icon="settings" active={route.name === "settings"} onClick={() => onNavigate("/settings")} />
-              <NavItem label="Overview" icon="home" active={route.name === "overview"} onClick={() => onNavigate("/overview")} />
             </div>
           ) : null}
         </div>
@@ -356,7 +372,7 @@ function Sidebar({
                 Recent
               </span>
               <button
-                onClick={() => onNavigate("/")}
+                onClick={() => onNavigate("/chat")}
                 className="text-step--2 text-[var(--faint)] hover:text-[var(--text)]"
               >
                 All
@@ -612,11 +628,11 @@ export default function App() {
         className="fixed inset-x-0 bottom-0 z-40 flex items-stretch border-t border-[var(--border-dim)] bg-[var(--bg)]/95 backdrop-blur md:hidden"
       >
         {[
-          { label: "Chat", icon: "chat", href: "/", routes: ["chat"] },
-          { label: "Workspaces", icon: "projects", href: "/projects", routes: ["projects", "project"] },
+          { label: "Overview", icon: "home", href: "/", routes: ["overview"] },
           { label: "Agents", icon: "teammates", href: "/bots", routes: ["bots", "bot"] },
           { label: "Activity", icon: "work", href: "/activity", routes: ["activity", "work", "task"] },
-          { label: "Library", icon: "library", href: "/library", routes: ["library", "libraryDoc"] },
+          { label: "Workspaces", icon: "projects", href: "/projects", routes: ["projects", "project"] },
+          { label: "Chat", icon: "chat", href: "/chat", routes: ["chat"] },
         ].map((item) => {
           const active = item.routes.includes(route.name);
           return (

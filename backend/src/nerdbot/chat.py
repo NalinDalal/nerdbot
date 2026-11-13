@@ -1052,8 +1052,36 @@ def chat_complete_with_tools(
                 {"role": "tool", "tool_call_id": tc.get("id"), "content": str(result)[:4000]}
             )
 
-    # Final pass without tools to force a text answer.
-    data = _openai_post(provider, msgs, tools=None, transport=transport, timeout_s=timeout_s)
+    # Final pass without tools to force a text answer. Some upstreams (e.g.
+    # Groq-hosted gpt-oss) still emit a tool call when the conversation was
+    # tool-heavy and then fail the request outright ("tool choice is none, but
+    # model called a tool"). An explicit instruction to answer in text prevents
+    # that, and a retry that drops the tool transcript is the last resort.
+    final_msgs = msgs + [
+        {
+            "role": "user",
+            "content": (
+                "Write your final answer now in plain text based on the "
+                "conversation and tool results above. Do not call any more tools."
+            ),
+        }
+    ]
+    try:
+        data = _openai_post(provider, final_msgs, tools=None, transport=transport, timeout_s=timeout_s)
+    except ProviderProtocolError:
+        # Retry without the tool transcript so no tool-call pattern remains.
+        stripped: list[dict[str, Any]] = []
+        for m in msgs:
+            if m.get("role") == "assistant" and m.get("tool_calls"):
+                content = m.get("content")
+                if not content:
+                    continue
+                stripped.append({"role": "assistant", "content": content})
+            elif m.get("role") == "tool":
+                continue
+            else:
+                stripped.append(m)
+        data = _openai_post(provider, stripped + [final_msgs[-1]], tools=None, transport=transport, timeout_s=timeout_s)
     try:
         return str(data["choices"][0]["message"].get("content") or "")[:RESPONSE_MAX_CHARS], parts
     except (KeyError, IndexError, TypeError, AttributeError):
@@ -1185,7 +1213,32 @@ def chat_stream_with_tools(
         with contextlib.suppress(Exception):
             store.set_thread_tainted(conn, thread_id, True)
     yield {"kind": "status", "text": "Writing…"}
-    data = _openai_post(provider, msgs, tools=None, transport=transport, timeout_s=timeout_s)
+    final_msgs = msgs + [
+        {
+            "role": "user",
+            "content": (
+                "Write your final answer now in plain text based on the "
+                "conversation and tool results above. Do not call any more tools."
+            ),
+        }
+    ]
+    try:
+        data = _openai_post(provider, final_msgs, tools=None, transport=transport, timeout_s=timeout_s)
+    except ProviderProtocolError:
+        # Groq-hosted gpt-oss fails the tool-less final pass with
+        # "tool choice is none, but model called a tool"; retry without the
+        # tool transcript so no tool-call pattern remains.
+        stripped: list[dict[str, Any]] = []
+        for m in msgs:
+            if m.get("role") == "assistant" and m.get("tool_calls"):
+                content = m.get("content")
+                if content:
+                    stripped.append({"role": "assistant", "content": content})
+            elif m.get("role") == "tool":
+                continue
+            else:
+                stripped.append(m)
+        data = _openai_post(provider, stripped + [final_msgs[-1]], tools=None, transport=transport, timeout_s=timeout_s)
     try:
         text = str(data["choices"][0]["message"].get("content") or "")[:RESPONSE_MAX_CHARS]
     except (KeyError, IndexError, TypeError, AttributeError):

@@ -3074,6 +3074,31 @@ def create_app() -> FastAPI:
             events = [e for e in events if e["entity"] == entity]
         return {"events": events}
 
+    # -- Org decision log (v3 spec: decision_log) ------------------------------
+
+    @app.get("/projects/{project_id}/decisions")
+    def list_decisions(
+        project_id: str,
+        limit: int = 200,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        return {"decisions": store.list_decisions(conn, project_id, limit=limit)}
+
+    # -- Token budgets (v3 spec: policy.spawn_policy.budgets) ------------------
+
+    @app.get("/projects/{project_id}/budgets")
+    def budget_report(
+        project_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        from . import budgets as budgets_mod
+
+        return budgets_mod.budget_report(conn, project_id)
+
     # -- Phase 4: providers ----------------------------------------------------
 
     def _provider_public(provider: Provider) -> dict[str, Any]:

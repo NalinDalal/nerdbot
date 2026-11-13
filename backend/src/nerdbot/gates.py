@@ -34,6 +34,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 # names without importing this module (which imports the store). Re-exported
 # here because the gate is the natural entry point for permission questions.
 ADMIN_PERMISSIONS = permissions_mod.ADMIN_PERMISSIONS
+EXTERNAL_PERMISSIONS = permissions_mod.EXTERNAL_PERMISSIONS
 
 # Non-admin permissions an agent tool may exercise. Knowledge read and task
 # listing are ambient (no permission needed); everything else is checked.
@@ -136,9 +137,12 @@ def require(
     (marked executed) and the action proceeds.
     """
     check_permission(mate, permission)
-    if permission not in ADMIN_PERMISSIONS:
+    if permission not in ADMIN_PERMISSIONS and permission not in EXTERNAL_PERMISSIONS:
         return None  # permission-only action
-    if policy_allows_auto(mate, permission):
+    if (
+        permission in ADMIN_PERMISSIONS
+        and policy_allows_auto(mate, permission)
+    ):
         return None
     digest = action_digest(permission, payload)
     existing = store.find_approved_action(conn, permission, digest)
@@ -196,9 +200,12 @@ def require_many(
         check_permission(mate, permission)
     pending: list[Approval] = []
     for permission, payload in requirements:
-        if permission not in ADMIN_PERMISSIONS:
+        if permission not in ADMIN_PERMISSIONS and permission not in EXTERNAL_PERMISSIONS:
             continue  # permission-only action
-        if policy_allows_auto(mate, permission):
+        if (
+            permission in ADMIN_PERMISSIONS
+            and policy_allows_auto(mate, permission)
+        ):
             continue
         digest = action_digest(permission, payload)
         existing = store.find_approved_action(conn, permission, digest)

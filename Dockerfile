@@ -9,6 +9,8 @@ WORKDIR /app
 COPY pyproject.toml uv.lock README.md ./
 RUN pip install --no-cache-dir uv && uv sync --frozen --no-dev
 COPY backend/src ./backend/src
+# Seed data must sit at the server's working directory (cwd lookup in seed.py).
+COPY backend/src/nerdbot/teammates.seed.yaml ./teammates.seed.yaml
 
 ENV PYTHONPATH=/app/backend/src
 EXPOSE 8080

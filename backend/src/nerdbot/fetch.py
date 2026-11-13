@@ -249,7 +249,16 @@ def fetch_url_document(
                     f"fetch exceeded total time budget ({budget:.1f}s)"
                 )
             try:
-                response = client.get(current, headers={"User-Agent": "nerdbot-fetch/0.1"})
+                response = client.get(
+                    current,
+                    headers={
+                        "User-Agent": (
+                            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/124.0.0.0 Safari/537.36"
+                        )
+                    },
+                )
             except httpx.TimeoutException as exc:
                 raise FetchTimeoutError(f"fetch timed out: {exc}") from exc
             except httpx.TransportError as exc:

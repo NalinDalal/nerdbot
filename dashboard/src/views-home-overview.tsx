@@ -14,7 +14,7 @@ import {
 } from "./components";
 import { useWorkspaceSummary } from "./views-home";
 import { providerIsUsable } from "./readiness";
-import type { Approval, LibraryDoc, Task } from "./types";
+import type { Approval, LibraryDoc, Notification, Task } from "./types";
 
 type RecentWorkspace = {
   id: string;
@@ -338,6 +338,20 @@ export function HomeOverviewView() {
     return signals;
   }, [data, summary.loadFailed]);
 
+  /* Org governance: the primary workspace's token budgets, append-only
+   * decision log, and outbox. Loaded per workspace so the numbers are the
+   * server's own accounting, never estimated in the client. */
+  const orgProject = data.bundles[0]?.project ?? null;
+  const governance = useAsync(async () => {
+    if (!orgProject) return null;
+    const [budgets, decisions, notifications] = await Promise.all([
+      api.listBudgets(orgProject.id).catch(() => null),
+      api.listDecisions(orgProject.id, 5).catch(() => ({ decisions: [] as Array<Record<string, unknown>> })),
+      api.listNotifications(orgProject.id).catch(() => ({ notifications: [] as Notification[] })),
+    ]);
+    return { budgets, decisions: decisions.decisions, notifications: notifications.notifications };
+  }, [orgProject?.id]);
+
   return (
     <Page width="data">
       <div className="flex flex-col gap-5 pb-16 md:gap-8 md:pb-0">
@@ -353,7 +367,7 @@ export function HomeOverviewView() {
             <div className="flex flex-wrap gap-2">
               <Button onClick={() => navigate("/chat")}>Chat</Button>
               <Button onClick={() => navigate("/workbench")}>Workbench</Button>
-              <Button variant="primary" onClick={() => navigate("/activity")}>Activity</Button>
+              <Button variant="primary" onClick={() => navigate("/work")}>Work</Button>
             </div>
           }
         />
@@ -453,6 +467,82 @@ export function HomeOverviewView() {
           ) : null}
         </PageSection>
 
+        {orgProject ? (
+          <PageSection
+            title="Governance"
+            description={`Budgets, decisions, and the outbox for ${orgProject.repository || "the primary workspace"}.`}
+          >
+            {governance.loading && !governance.data ? (
+              <LoadingState lines={3} />
+            ) : (
+              <div className="grid gap-2 md:grid-cols-3">
+                <div className="rounded-lg border border-[var(--border-dim)] bg-[var(--surface)] px-4 py-3">
+                  <div className="text-step--2 font-medium uppercase tracking-[0.12em] text-[var(--faint)]">Token budgets</div>
+                  {governance.data?.budgets ? (
+                    <div className="mt-2 flex flex-col gap-1.5 text-step--1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[var(--muted)]">Org today</span>
+                        <span className="font-medium tabular-nums text-[var(--text)]">
+                          {(governance.data.budgets.usage?.org_today_used ?? 0).toLocaleString()} / {(governance.data.budgets.caps?.org_daily_max_tokens ?? 0).toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[var(--muted)]">Persona today</span>
+                        <span className="font-medium tabular-nums text-[var(--text)]">
+                          {(governance.data.budgets.usage?.persona_today_used ?? 0).toLocaleString()} / {(governance.data.budgets.caps?.per_persona_daily_max_tokens ?? 0).toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[var(--muted)]">Per task</span>
+                        <span className="font-medium tabular-nums text-[var(--text)]">
+                          {(governance.data.budgets.caps?.per_task_max_tokens ?? 0).toLocaleString()} cap
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-2 text-step--2 text-[var(--muted)]">Budget report unavailable.</div>
+                  )}
+                </div>
+                <div className="rounded-lg border border-[var(--border-dim)] bg-[var(--surface)] px-4 py-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-step--2 font-medium uppercase tracking-[0.12em] text-[var(--faint)]">Decision log</div>
+                    <button onClick={() => navigate(`/p/${orgProject.id}`)} className="text-step--2 text-[var(--faint)] hover:text-[var(--text)]">Open</button>
+                  </div>
+                  {(governance.data?.decisions ?? []).length === 0 ? (
+                    <div className="mt-2 text-step--2 text-[var(--muted)]">Agents record non-trivial decisions here, with reasons.</div>
+                  ) : (
+                    <div className="mt-2 flex flex-col gap-1.5">
+                      {(governance.data?.decisions ?? []).slice(0, 3).map((d) => (
+                        <div key={String(d.id)} className="text-step--1">
+                          <div className="truncate font-medium text-[var(--text)]">{String(d.decision || "")}</div>
+                          <div className="text-step--2 text-[var(--muted)]">{d.created_at ? relativeTime(String(d.created_at)) : ""}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="rounded-lg border border-[var(--border-dim)] bg-[var(--surface)] px-4 py-3">
+                  <div className="text-step--2 font-medium uppercase tracking-[0.12em] text-[var(--faint)]">Outbox</div>
+                  {(governance.data?.notifications ?? []).length === 0 ? (
+                    <div className="mt-2 text-step--2 text-[var(--muted)]">Approved external actions and owner notifications land here.</div>
+                  ) : (
+                    <div className="mt-2 flex flex-col gap-1.5">
+                      {(governance.data?.notifications ?? []).slice(0, 3).map((n) => (
+                        <div key={n.id} className="text-step--1">
+                          <div className="flex items-center gap-2">
+                            <span className="truncate font-medium text-[var(--text)]">{String(n.kind || "notification").replace(/_/g, " ")}</span>
+                            <Badge variant={n.status === "stored" ? "neutral" : "info"}>{n.status}</Badge>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </PageSection>
+        ) : null}
+
         <PageSection title="Recent workspaces" description="Active projects and where work was last happening.">
           {recentWorkspaces.length === 0 ? (
             <EmptyState
@@ -504,7 +594,7 @@ export function HomeOverviewView() {
 
         <PageSection title="Execution visibility" description="Running, recent, completed, and failed executions with recovery paths.">
           {recentRuns.length === 0 ? (
-            <EmptyState title="No recent executions" hint="Task runs and agent executions will appear here." action={<Button onClick={() => navigate("/activity")}>Open activity</Button>} />
+            <EmptyState title="No recent executions" hint="Task runs and agent executions will appear here." action={<Button onClick={() => navigate("/work")}>Open work</Button>} />
           ) : (
             <div className="flex flex-col divide-y divide-[var(--border-dim)] rounded-lg border border-[var(--border-dim)] bg-[var(--surface)]">
               {recentRuns.map((r) => (

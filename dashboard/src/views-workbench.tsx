@@ -933,7 +933,7 @@ export function WorkbenchView({
             <Button variant="primary" onClick={() => navigate("/projects")}>
               Create project
             </Button>
-            <Button onClick={() => navigate("/")}>Back to chat</Button>
+            <Button onClick={() => navigate("/chat")}>Back to chat</Button>
           </div>
         }
       />
