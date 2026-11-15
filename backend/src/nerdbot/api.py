@@ -308,6 +308,12 @@ def _project_counts(conn: sqlite3.Connection, project_id: str) -> dict[str, int]
         "running": sum(1 for t in tasks if t.status == TaskStatus.RUNNING),
         "blocked": sum(1 for t in tasks if t.status == TaskStatus.BLOCKED),
         "done": sum(1 for t in tasks if t.status == TaskStatus.DONE),
+        "cancelled": sum(1 for t in tasks if t.status == TaskStatus.CANCELLED),
+        "failed": sum(1 for t in tasks if t.status == TaskStatus.FAILED),
+        "ready": sum(1 for t in tasks if t.status == TaskStatus.READY),
+        "awaiting_approval": sum(
+            1 for t in tasks if t.status == TaskStatus.AWAITING_APPROVAL
+        ),
         "objectives": active_obj,
         "boards": len(boards),
         "runs": len(runs),
@@ -411,6 +417,23 @@ def create_app() -> FastAPI:
             },
         )
         return response
+
+    @app.middleware("http")
+    async def accept_api_prefix(request: Request, call_next: Any) -> Any:
+        """Accept the same routes under ``/api`` as under ``/``.
+
+        A dashboard served by a reverse proxy uses ``/api`` as its base so
+        every browser request stays same-origin. A dashboard served directly
+        by this process uses the page origin as its base. Supporting both
+        shapes here means neither deployment needs a special build.
+        """
+        path = request.scope.get("path", "")
+        if path == "/api" or path.startswith("/api/"):
+            request.scope["path"] = path[4:] or "/"
+            raw = request.scope.get("raw_path")
+            if raw:
+                request.scope["raw_path"] = raw[4:] or b"/"
+        return await call_next(request)
 
     @app.get("/health")
     def health() -> dict[str, Any]:
@@ -4242,18 +4265,18 @@ def create_app() -> FastAPI:
         try:
             if project_id:
                 require_project_owner(conn, project_id, principal)
-                tasks = store.list_tasks(conn, project_id)
+                tasks = store.list_tasks_for_project(conn, project_id)
                 task_ids = [t.id for t in tasks]
                 runs = []
                 for tid in task_ids[:100]:
-                    runs.extend(store.list_runs(conn, tid)[:5])
+                    runs.extend(store.list_runs_for_task(conn, tid)[:5])
             else:
                 # owner-wide: best-effort recent via projects
                 projs = store.list_projects(conn, principal)
                 runs = []
                 for pr in projs[:20]:
-                    for t in store.list_tasks(conn, pr.id)[:30]:
-                        runs.extend(store.list_runs(conn, t.id)[:3])
+                    for t in store.list_tasks_for_project(conn, pr.id)[:30]:
+                        runs.extend(store.list_runs_for_task(conn, t.id)[:3])
             runs = sorted(runs, key=lambda r: r.started_at.isoformat() if r.started_at else "", reverse=True)[:lim]
             add([{
                 "id": r.id, "source_type": "task_run", "status": r.status.value,
@@ -4499,6 +4522,349 @@ def create_app() -> FastAPI:
         except Exception:
             pass
         return home.model_dump(mode="json")
+
+    @app.get("/organization/overview")
+    def organization_overview(
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """One factual snapshot of the whole organisation.
+
+        The Home command center needs the state of every workspace at once.
+        Building it in the browser meant one request per project and a page
+        whose totals could disagree with one another. This endpoint reads the
+        same persisted rows once and returns one consistent picture.
+
+        Ownership is enforced here, not by the client: only projects owned by
+        the authenticated principal contribute to any count.
+        """
+        projects = store.list_projects(conn, principal)
+        project_ids = {p.id for p in projects}
+        counts = {p.id: _project_counts(conn, p.id) for p in projects}
+
+        project_rows: list[dict[str, Any]] = []
+        provider_ready = 0
+        for project in projects:
+            try:
+                provider = chat_mod.resolve_chat_provider(conn, project.id)
+            except Exception:
+                provider = None
+            ready = provider is not None
+            if ready:
+                provider_ready += 1
+            project_rows.append(
+                {
+                    "id": project.id,
+                    "name": project.repository or "Workspace",
+                    "counts": counts[project.id],
+                    "provider_ready": ready,
+                    "provider_name": provider.name if provider is not None else "",
+                }
+            )
+
+        teammates = [
+            mate for mate in store.list_all_teammates(conn) if mate.project_id in project_ids
+        ]
+        tasks = [task for project_id in project_ids for task in store.list_tasks_for_project(conn, project_id)]
+        runs = [run for project_id in project_ids for run in store.list_runs_for_project(conn, project_id)]
+
+        working_ids = {
+            task.owner_teammate_id
+            for task in tasks
+            if task.status == TaskStatus.RUNNING and task.owner_teammate_id
+        }
+        active_agents = [mate for mate in teammates if mate.status == TeammateStatus.ACTIVE]
+        idle_agents = [mate for mate in active_agents if mate.id not in working_ids]
+
+        task_total = len(tasks)
+        task_counts = {
+            "total": task_total,
+            "active": sum(
+                1
+                for task in tasks
+                if task.status
+                in (TaskStatus.PENDING, TaskStatus.READY, TaskStatus.RUNNING, TaskStatus.AWAITING_APPROVAL)
+            ),
+            "queued": sum(1 for task in tasks if task.status in (TaskStatus.PENDING, TaskStatus.READY)),
+            "running": sum(1 for task in tasks if task.status == TaskStatus.RUNNING),
+            "completed": sum(1 for task in tasks if task.status == TaskStatus.DONE),
+            "failed": sum(1 for task in tasks if task.status == TaskStatus.FAILED),
+            "blocked": sum(1 for task in tasks if task.status == TaskStatus.BLOCKED),
+            "awaiting_approval": sum(
+                1 for task in tasks if task.status == TaskStatus.AWAITING_APPROVAL
+            ),
+            "cancelled": sum(1 for task in tasks if task.status == TaskStatus.CANCELLED),
+        }
+
+        pending_approvals = 0
+        pending_approval_rows: list[tuple[str, Any]] = []
+        for project_id in project_ids:
+            for approval in store.list_approvals_for_project(conn, project_id):
+                if store.approval_is_pending(approval):
+                    pending_approvals += 1
+                    pending_approval_rows.append((project_id, approval))
+
+        # Deliverables: saved documents plus chat reports. Both are persisted
+        # outputs; neither is counted until it actually exists in the database.
+        deliverables: list[dict[str, Any]] = []
+        project_name = {p.id: (p.repository or "Workspace") for p in projects}
+        for project_id in project_ids:
+            for doc in store.list_library_docs(conn, project_id):
+                deliverables.append(
+                    {
+                        "id": doc.id,
+                        "kind": "document",
+                        "title": doc.title or "Untitled document",
+                        "project_id": project_id,
+                        "project_name": project_name[project_id],
+                        "href": f"/library/{doc.id}",
+                        "at": doc.updated_at.isoformat() if getattr(doc, "updated_at", None) else doc.created_at.isoformat(),
+                    }
+                )
+        if project_ids:
+            placeholders = ",".join("?" for _ in project_ids)
+            report_rows = conn.execute(
+                "SELECT r.id, r.title, r.created_at, t.project_id"
+                " FROM reports r JOIN chat_threads t ON t.id = r.thread_id"
+                f" WHERE t.project_id IN ({placeholders})"
+                " ORDER BY r.created_at DESC LIMIT 20",
+                tuple(project_ids),
+            ).fetchall()
+            for row in report_rows:
+                pid = row["project_id"]
+                deliverables.append(
+                    {
+                        "id": row["id"],
+                        "kind": "report",
+                        "title": row["title"] or "Report",
+                        "project_id": pid,
+                        "project_name": project_name.get(pid, "Workspace"),
+                        "href": "/library",
+                        "at": row["created_at"],
+                    }
+                )
+        deliverables.sort(key=lambda item: str(item.get("at") or ""), reverse=True)
+
+        task_by_id = {task.id: task for task in tasks}
+        activity: list[dict[str, Any]] = []
+        for run in sorted(runs, key=lambda run: run.started_at or "", reverse=True)[:16]:
+            task = task_by_id.get(run.task_id)
+            activity.append(
+                {
+                    "id": run.id,
+                    "kind": "run",
+                    "status": run.status.value,
+                    "title": (task.description if task is not None else "") or run.command or "Execution",
+                    "project_id": task.project_id if task is not None else "",
+                    "project_name": project_name.get(task.project_id, "Workspace") if task is not None else "Workspace",
+                    "task_id": run.task_id,
+                    "href": f"/p/{task.project_id}/t/{task.id}" if task is not None else "",
+                    "at": run.finished_at or run.started_at,
+                    "detail": (run.output_excerpt or "")[:180],
+                }
+            )
+        for item in deliverables[:8]:
+            activity.append(
+                {
+                    "id": item["id"],
+                    "kind": "deliverable",
+                    "status": "created",
+                    "title": item["title"],
+                    "project_id": item["project_id"],
+                    "project_name": item["project_name"],
+                    "task_id": None,
+                    "href": item["href"],
+                    "at": item["at"],
+                    "detail": "Deliverable saved",
+                }
+            )
+        activity.sort(key=lambda item: str(item.get("at") or ""), reverse=True)
+
+        notifications: list[dict[str, Any]] = []
+        for project_id in project_ids:
+            for notification in store.list_notifications(conn, project_id)[:5]:
+                payload = notification.payload or {}
+                notifications.append(
+                    {
+                        "id": notification.id,
+                        "kind": notification.kind,
+                        "project_id": project_id,
+                        "project_name": project_name.get(project_id, "Workspace"),
+                        "status": notification.status,
+                        "title": str(payload.get("title") or payload.get("message") or notification.kind),
+                        "at": notification.created_at.isoformat(),
+                    }
+                )
+        notifications.sort(key=lambda item: str(item.get("at") or ""), reverse=True)
+
+        # Recent work: what a human would look at first. Running and blocked
+        # work outranks finished work; inside a status, newest first. A task
+        # carries no timestamp of its own, so the latest run is used.
+        teammate_by_id = {mate.id: mate for mate in teammates}
+        latest_run_at: dict[str, str] = {}
+        for run in runs:
+            stamp = run.finished_at or run.started_at
+            if stamp is None:
+                continue
+            stamp_text = stamp.isoformat() if hasattr(stamp, "isoformat") else str(stamp)
+            if stamp_text > latest_run_at.get(run.task_id, ""):
+                latest_run_at[run.task_id] = stamp_text
+        task_priority = {
+            TaskStatus.RUNNING: 0,
+            TaskStatus.AWAITING_APPROVAL: 1,
+            TaskStatus.BLOCKED: 2,
+            TaskStatus.FAILED: 3,
+            TaskStatus.READY: 4,
+            TaskStatus.PENDING: 5,
+            TaskStatus.DONE: 6,
+            TaskStatus.CANCELLED: 7,
+        }
+        recent_tasks: list[dict[str, Any]] = []
+        ordered = sorted(tasks, key=lambda t: latest_run_at.get(t.id, ""), reverse=True)
+        ordered.sort(key=lambda t: task_priority.get(t.status, 9))
+        for task in ordered[:8]:
+            owner = teammate_by_id.get(task.owner_teammate_id or "")
+            recent_tasks.append(
+                {
+                    "id": task.id,
+                    "title": (task.title or task.description or "Untitled task").strip(),
+                    "description": (task.description or "").strip(),
+                    "status": task.status.value,
+                    "project_id": task.project_id,
+                    "project_name": project_name.get(task.project_id, "Workspace"),
+                    "owner_id": task.owner_teammate_id,
+                    "owner_name": (owner.name or owner.slug) if owner is not None else "",
+                    "objective_id": task.objective_id,
+                    "blocked_reason": task.blocked_reason,
+                    "href": f"/p/{task.project_id}/t/{task.id}",
+                    "at": latest_run_at.get(task.id, ""),
+                }
+            )
+
+        # The fleet, in the order a supervisor cares about: bots with work in
+        # hand, then idle bots, then inactive ones.
+        def _agent_rank(mate: Any) -> tuple[int, str]:
+            if mate.id in working_ids:
+                return (0, mate.name or mate.slug)
+            if mate.status == TeammateStatus.ACTIVE:
+                return (1, mate.name or mate.slug)
+            return (2, mate.name or mate.slug)
+
+        agent_rows: list[dict[str, Any]] = []
+        for mate in sorted(teammates, key=_agent_rank)[:10]:
+            current = next(
+                (
+                    task
+                    for task in tasks
+                    if task.owner_teammate_id == mate.id
+                    and task.status in (TaskStatus.RUNNING, TaskStatus.AWAITING_APPROVAL)
+                ),
+                None,
+            )
+            agent_rows.append(
+                {
+                    "id": mate.id,
+                    "name": mate.name or mate.slug or "Agent",
+                    "role": mate.slug or "",
+                    "status": mate.status.value,
+                    "working": mate.id in working_ids,
+                    "project_id": mate.project_id,
+                    "project_name": project_name.get(mate.project_id, "Workspace"),
+                    "current_task": (current.title or current.description) if current else "",
+                    "href": f"/agents/{mate.id}",
+                }
+            )
+
+        # Everything a human has to decide or unblock, in one list.
+        attention: list[dict[str, Any]] = []
+        for task in tasks:
+            if task.status not in (TaskStatus.BLOCKED, TaskStatus.FAILED):
+                continue
+            title = (task.title or task.description or "Untitled task").strip()
+            reason = (task.blocked_reason or "").strip()
+            if not reason:
+                reason = (
+                    "The last run failed and needs a retry."
+                    if task.status == TaskStatus.FAILED
+                    else "Work is blocked and needs a decision."
+                )
+            attention.append(
+                {
+                    "id": f"task:{task.id}",
+                    "kind": "task",
+                    "severity": "danger",
+                    "title": title,
+                    "detail": reason,
+                    "project_id": task.project_id,
+                    "project_name": project_name.get(task.project_id, "Workspace"),
+                    "href": f"/p/{task.project_id}/t/{task.id}",
+                    "at": latest_run_at.get(task.id, ""),
+                }
+            )
+        for project_id, approval in pending_approval_rows:
+            attention.append(
+                {
+                    "id": f"approval:{approval.id}",
+                    "kind": "approval",
+                    "severity": "warn",
+                    "title": approval.action or "Approval requested",
+                    "detail": f"{approval.requester or 'An agent'} is waiting for a decision.",
+                    "project_id": project_id,
+                    "project_name": project_name.get(project_id, "Workspace"),
+                    "href": "/approvals",
+                    "at": "",
+                }
+            )
+        for project_row in project_rows:
+            if project_row["provider_ready"]:
+                continue
+            attention.append(
+                {
+                    "id": f"provider:{project_row['id']}",
+                    "kind": "provider",
+                    "severity": "warn",
+                    "title": f"{project_row['name']} has no model provider",
+                    "detail": "Connect a provider before work can execute.",
+                    "project_id": project_row["id"],
+                    "project_name": project_row["name"],
+                    "href": "/settings",
+                    "at": "",
+                }
+            )
+        attention.sort(key=lambda item: 0 if item["severity"] == "danger" else 1)
+        attention = attention[:10]
+
+        active_projects = sum(
+            1
+            for project_id, project_counts in counts.items()
+            if project_counts.get("tasks", 0) - project_counts.get("done", 0) - project_counts.get("cancelled", 0) > 0
+        )
+
+        return {
+            "generated_at": datetime.now(UTC).isoformat(),
+            "projects": project_rows,
+            "project_count": len(project_rows),
+            "active_projects": active_projects,
+            "provider_ready_projects": provider_ready,
+            "agents": {
+                "total": len(teammates),
+                "active": len(active_agents),
+                "working": len(working_ids),
+                "idle": len(idle_agents),
+                "inactive": len(teammates) - len(active_agents),
+            },
+            "tasks": task_counts,
+            "recent_tasks": recent_tasks,
+            "approvals": {"pending": pending_approvals},
+            "attention": attention,
+            "agents_list": agent_rows,
+            "deliverables": {
+                "total": len(deliverables),
+                "recent": deliverables[:8],
+            },
+            "activity": activity[:8],
+            "notifications": notifications[:6],
+        }
 
     @app.get("/capabilities")
     def list_capabilities(
@@ -6044,6 +6410,210 @@ def create_app() -> FastAPI:
         )
         background.add_task(_start_job, new_job.id)
         return {"job": research_mod.research_job_to_dict(new_job), "retried_from": job.id}
+
+    # -- Notes (Odysseus port) ------------------------------------------------
+
+    @app.get("/projects/{project_id}/notes")
+    def list_notes(
+        project_id: str,
+        q: str = "",
+        label: str = "",
+        archived: bool = False,
+        limit: int = 100,
+        offset: int = 0,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        notes, total = store.list_notes(
+            conn, project_id, q=q, label=label, archived=archived, limit=limit, offset=offset
+        )
+        return {"notes": [n.model_dump(mode="json") for n in notes], "total": total}
+
+    @app.post("/projects/{project_id}/notes")
+    def create_note(
+        project_id: str,
+        body: schemas.NoteCreate,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        fields = {k: v for k, v in body.model_dump(exclude_none=True).items() if k != "project_id"}
+        try:
+            note = store.create_note(conn, project_id, **fields)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"note": note.model_dump(mode="json")}
+
+    @app.get("/notes/{note_id}")
+    def get_note(
+        note_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        note = store.get_note(conn, note_id)
+        if note is None:
+            raise HTTPException(status_code=404, detail="note not found")
+        require_project_owner(conn, note.project_id, principal)
+        return note.model_dump(mode="json")
+
+    @app.patch("/notes/{note_id}")
+    def patch_note(
+        note_id: str,
+        body: schemas.NotePatch,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        note = store.get_note(conn, note_id)
+        if note is None:
+            raise HTTPException(status_code=404, detail="note not found")
+        require_project_owner(conn, note.project_id, principal)
+        try:
+            updated = store.update_note(conn, note_id, **body.model_dump(exclude_none=True))
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (ValueError, IndexError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return updated.model_dump(mode="json")
+
+    @app.delete("/notes/{note_id}")
+    def delete_note(
+        note_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        note = store.get_note(conn, note_id)
+        if note is None:
+            raise HTTPException(status_code=404, detail="note not found")
+        require_project_owner(conn, note.project_id, principal)
+        store.delete_note(conn, note_id)
+        return {"deleted": True, "id": note_id}
+
+    @app.post("/notes/{note_id}/pin")
+    def pin_note(
+        note_id: str,
+        pinned: bool | None = None,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        note = store.get_note(conn, note_id)
+        if note is None:
+            raise HTTPException(status_code=404, detail="note not found")
+        require_project_owner(conn, note.project_id, principal)
+        target = note.pinned if pinned is None else pinned
+        updated = store.update_note(conn, note_id, pinned=target)
+        return updated.model_dump(mode="json")
+
+    @app.post("/notes/{note_id}/archive")
+    def archive_note(
+        note_id: str,
+        archived: bool | None = None,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        note = store.get_note(conn, note_id)
+        if note is None:
+            raise HTTPException(status_code=404, detail="note not found")
+        require_project_owner(conn, note.project_id, principal)
+        target = note.archived if archived is None else archived
+        updated = store.update_note(conn, note_id, archived=target)
+        return updated.model_dump(mode="json")
+
+    @app.post("/notes/{note_id}/items/{index}/toggle")
+    def toggle_note_item(
+        note_id: str,
+        index: int,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        note = store.get_note(conn, note_id)
+        if note is None:
+            raise HTTPException(status_code=404, detail="note not found")
+        require_project_owner(conn, note.project_id, principal)
+        try:
+            updated = store.toggle_note_item(conn, note_id, index)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except IndexError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return updated.model_dump(mode="json")
+
+    # -- Calendar (Odysseus port: local calendar, CalDAV/recurrence deferred) --
+
+    @app.get("/projects/{project_id}/calendar/events")
+    def list_calendar_events(
+        project_id: str,
+        start: str | None = None,
+        end: str | None = None,
+        limit: int = 500,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        try:
+            events = store.list_events(conn, project_id, start=start, end=end, limit=limit)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"events": [e.model_dump(mode="json") for e in events]}
+
+    @app.post("/projects/{project_id}/calendar/events")
+    def create_calendar_event(
+        project_id: str,
+        body: schemas.EventCreate,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        require_project_owner(conn, project_id, principal)
+        fields = {k: v for k, v in body.model_dump(exclude_none=True).items() if k != "project_id"}
+        try:
+            event = store.create_event(conn, project_id, **fields)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"event": event.model_dump(mode="json")}
+
+    @app.get("/calendar/events/{event_id}")
+    def get_calendar_event(
+        event_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        event = store.get_event(conn, event_id)
+        if event is None:
+            raise HTTPException(status_code=404, detail="event not found")
+        require_project_owner(conn, event.project_id, principal)
+        return event.model_dump(mode="json")
+
+    @app.patch("/calendar/events/{event_id}")
+    def patch_calendar_event(
+        event_id: str,
+        body: schemas.EventPatch,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        event = store.get_event(conn, event_id)
+        if event is None:
+            raise HTTPException(status_code=404, detail="event not found")
+        require_project_owner(conn, event.project_id, principal)
+        try:
+            updated = store.update_event(conn, event_id, **body.model_dump(exclude_none=True))
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return updated.model_dump(mode="json")
+
+    @app.delete("/calendar/events/{event_id}")
+    def delete_calendar_event(
+        event_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        event = store.get_event(conn, event_id)
+        if event is None:
+            raise HTTPException(status_code=404, detail="event not found")
+        require_project_owner(conn, event.project_id, principal)
+        store.delete_event(conn, event_id)
+        return {"deleted": True, "id": event_id}
 
 
     return app

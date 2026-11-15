@@ -3,6 +3,11 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
+  // TypeScript source wins over any leftover JavaScript artifact. Vite's
+  // default order resolves "./app" to app.js first, which once meant the
+  // whole dashboard silently shipped a months-old build while tsc checked
+  // files nobody bundled. Keep the order explicit.
+  resolve: { extensions: [".tsx", ".ts", ".jsx", ".js", ".json"] },
   server: { port: 5173 },
   test: { environment: "node", include: ["src/**/*.test.ts"] },
 });

@@ -23,6 +23,7 @@ import type {
   MemoryEntry,
   MemoryProvenance,
   Notification,
+  OrgOverview,
   Permission,
   PRPackage,
   Project,
@@ -75,7 +76,28 @@ function readStoredSession(): Session | null {
       typeof (parsed as Session).token === "string" &&
       (parsed as Session).token.length > 0
     ) {
-      return parsed as Session;
+      const stored = parsed as Session;
+      /* A session saved when the dashboard talked to a loopback API
+       * directly breaks under a same-origin reverse proxy (and under the
+       * browser's local-network policy). Move it to the proxy path once;
+       * an explicit non-loopback base is always left alone. */
+      if (
+        typeof window !== "undefined" &&
+        !import.meta.env.DEV &&
+        window.location.protocol.startsWith("http") &&
+        /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(
+          stored.baseUrl.replace(/\/+$/, ""),
+        ) &&
+        stored.baseUrl.replace(/\/+$/, "") !== window.location.origin
+      ) {
+        const migrated: Session = {
+          ...stored,
+          baseUrl: `${window.location.origin}/api`,
+        };
+        localStorage.setItem(SESSION_KEY, JSON.stringify(migrated));
+        return migrated;
+      }
+      return stored;
     }
   } catch {
     // corrupt or sandboxed storage — treat as signed out
@@ -233,6 +255,9 @@ export const api = {
   // -- Workspace (projects = workspaces) -------------------------------------
   listProjects: () =>
     req<{ projects: Project[]; counts: Record<string, ProjectCounts> }>("/projects"),
+  /** One consistent snapshot of every owned workspace, agent, task and
+   *  deliverable. Used by the Home command center. */
+  organizationOverview: () => req<OrgOverview>("/organization/overview"),
   deleteProject: (projectId: string) =>
     req<{ deleted: boolean }>(`/projects/${projectId}`, { method: "DELETE" }),
   projectTasks: (projectId: string) =>

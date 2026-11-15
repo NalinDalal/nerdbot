@@ -169,7 +169,7 @@ def sweep(
     # Phase 2: fire due schedules and reminders (best-effort; never blocks task sweep).
     try:
         for f in orchestrator.fire_due_schedules(
-            conn, data_dir=data_dir, timeout_s=_run_timeout_s(timeout_s)
+            conn, data_dir=data_dir, timeout_s=_run_timeout_s()
         ):
             requeue_notes.append({"phase": "schedule", **f})
     except Exception as exc:
@@ -216,7 +216,7 @@ def sweep(
                 if len(attempted) >= store.MAX_TASK_RETRIES:
                     continue
                 try:
-                    orchestrator.retry_task(conn, task.id, data_dir=data_dir, timeout_s=timeout_s or 60.0)
+                    orchestrator.retry_task(conn, task.id, data_dir=data_dir, timeout_s=_run_timeout_s())
                 except Exception:
                     pass
 
@@ -266,7 +266,7 @@ def sweep(
         busy.add(bot.id)
         try:
             run, _result, artifact_id = orchestrator.schedule_run(
-                conn, task.id, data_dir=data_dir, timeout_s=_run_timeout_s(timeout_s)
+                conn, task.id, data_dir=data_dir, timeout_s=_run_timeout_s()
             )
             results.append(
                 {
@@ -300,7 +300,7 @@ def sweep(
         busy.add(task.owner_teammate_id)
         try:
             run, _result, artifact_id = orchestrator.schedule_run(
-                conn, task.id, data_dir=data_dir, timeout_s=_run_timeout_s(timeout_s)
+                conn, task.id, data_dir=data_dir, timeout_s=_run_timeout_s()
             )
             results.append(
                 {
@@ -357,7 +357,7 @@ def sweep_loop(
     while not stop_event.is_set():
         conn = store.connect(os.environ.get("NERDBOT_DB", "nerdbot.db"))
         try:
-            sweep(conn, data_dir=data_dir, timeout_s=_run_timeout_s(timeout_s), max_tasks=max_tasks)
+            sweep(conn, data_dir=data_dir, timeout_s=_run_timeout_s(), max_tasks=max_tasks)
         finally:
             conn.close()
         stop_event.wait(interval_s)

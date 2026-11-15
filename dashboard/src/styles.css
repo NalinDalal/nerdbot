@@ -43,29 +43,31 @@
   --surface-hover: #222a33;
   --border: #27303a;
   --border-dim: #1e2630;
-  --border-focus: #3b82f6;
+  --border-focus: #3563f4;
   --text: #e8edf3;
   --text-soft: #c3ccd6;
   --text-inverse: #0b0d10;
   --muted: #93a0ad;
   --faint: #748291;
-  --ring: rgba(59, 130, 246, 0.35);
+  --ring: rgba(53, 99, 244, 0.35);
 
   /* Bot faces (unchanged semantics) */
   --face-plate-light: #f2f3f2;
   --face-plate-dark: #0c1116;
 
   /* Semantic: one accent, restrained */
-  --accent: #2563eb;
-  --accent-dim: rgba(37, 99, 235, 0.14);
-  --accent-hover: #3b82f6;
+  --accent: #3563f4;
+  --accent-dim: rgba(53, 99, 244, 0.16);
+  --accent-hover: #4d74ff;
+  --accent-2: #7553e8;
+  --accent-2-dim: rgba(117, 83, 232, 0.16);
   --success: #22a06b;
   --danger: #dc5a5a;
   --danger-dim: rgba(220, 90, 90, 0.14);
   --warn: #d97706;
   --warn-dim: rgba(217, 119, 6, 0.14);
-  --info: #5b8def;
-  --info-dim: rgba(91, 141, 239, 0.14);
+  --info: #7553e8;
+  --info-dim: rgba(117, 83, 232, 0.16);
 
   --radius: 10px;
   --radius-sm: 8px;
@@ -106,24 +108,26 @@
   --surface-hover: #e2e7ee;
   --border: #d7dde6;
   --border-dim: #e3e7ee;
-  --border-focus: #2563eb;
+  --border-focus: #3563f4;
   --text: #121720;
   --text-soft: #3a4654;
   --text-inverse: #ffffff;
   --muted: #5b6878;
   --faint: #738294;
-  --ring: rgba(37, 99, 235, 0.22);
+  --ring: rgba(53, 99, 244, 0.22);
 
-  --accent: #2563eb;
-  --accent-dim: rgba(37, 99, 235, 0.1);
-  --accent-hover: #1d4ed8;
+  --accent: #3563f4;
+  --accent-dim: rgba(53, 99, 244, 0.1);
+  --accent-hover: #2a52d9;
+  --accent-2: #7553e8;
+  --accent-2-dim: rgba(117, 83, 232, 0.1);
   --success: #178a5a;
   --danger: #c64545;
   --danger-dim: rgba(198, 69, 69, 0.1);
   --warn: #b45309;
   --warn-dim: rgba(180, 83, 9, 0.1);
-  --info: #2563eb;
-  --info-dim: rgba(37, 99, 235, 0.1);
+  --info: #6947d8;
+  --info-dim: rgba(105, 71, 216, 0.1);
 
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
   --shadow-lg: 0 12px 28px rgba(16, 24, 40, 0.1);
@@ -149,7 +153,58 @@
   }
 }
 
-/* Tailwind directives */
+/* Dark mode (.dark class) — tinted backgrounds, lighter text, reduced saturation */
+.dark {
+  --bg: #12161b;
+  --bg-inverse: #f5f7fa;
+  --surface: #1d232b;
+  --surface-2: #171c22;
+  --surface-3: #222a33;
+  --border: #27303a;
+  --border-dim: #1e2630;
+  --border-focus: #3563f4;
+  --text: #e8edf3;
+  --text-soft: #c3ccd6;
+  --text-inverse: #0b0d10;
+  --muted: #93a0ad;
+  --faint: #748291;
+  --shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+  --shadow-lg: 0 12px 28px rgba(16, 24, 40, 0.1);
+}
+
+.dark {
+  --bg: #12161b;
+  --bg-inverse: #f5f7fa;
+  --surface: #1d232b;
+  --surface-2: #171c22;
+  --surface-3: #222a33;
+  --border: #27303a;
+  --border-dim: #1e2630;
+  --border-focus: #3563f4;
+  --text: #e8edf3;
+  --text-soft: #c3ccd6;
+  --text-inverse: #0b0d10;
+  --muted: #93a0ad;
+  --faint: #748291;
+  --ring: rgba(53, 99, 244, 0.22);
+
+  /* Dark-mode color adjustments: reduce saturation by ~20% on accents,
+     keep same hue, lighter text instead of darker backgrounds. */
+  --accent: #3563f4;   /* same hue as light, increased lightness in dark */
+  --accent-dim: rgba(53, 99, 244, 0.16);
+  --accent-hover: #4d74ff;
+  --accent-2: #7553e8;
+  --accent-2-dim: rgba(117, 83, 232, 0.16);
+  --success: #22a06b;   /* slightly lighter than light version */
+  --danger: #dc5a5a;   /* reduced saturation */
+  --danger-dim: rgba(220, 90, 90, 0.14);
+  --warn: #d97706;   /* reduced saturation */
+  --warn-dim: rgba(217, 119, 6, 0.14);
+  --info: #7553e8;   /* tinted near-black for neutral roles */
+  --info-dim: rgba(105, 71, 216, 0.1);
+}
+
+/* ===== Tailwind directives */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;

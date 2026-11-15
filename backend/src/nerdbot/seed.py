@@ -10,15 +10,33 @@ from pathlib import Path
 from . import store
 
 
+def _json_is_readable(path: Path) -> bool:
+    """A seed file that cannot be parsed is worse than no seed file.
+
+    It used to be picked first, fail to load, and leave a fresh install with
+    zero agents and one stderr line nobody sees. Check the file before
+    choosing it so a malformed copy falls through to the next candidate.
+    """
+    try:
+        json.loads(path.read_text())
+        return True
+    except Exception as exc:
+        print(f"seed: skipping unreadable {path}: {exc}", file=sys.stderr)
+        return False
+
+
 def _seed_path():
     for candidate in ("teammates.seed.json", "teammates.seed.yaml"):
         p = Path(candidate)
-        if p.is_file():
-            return p
+        if not p.is_file():
+            continue
+        if p.suffix == ".json" and not _json_is_readable(p):
+            continue
+        return p
     data_dir = os.environ.get("NERDBOT_DATA")
     if data_dir:
         p = Path(data_dir) / "teammates.seed.json"
-        if p.is_file():
+        if p.is_file() and _json_is_readable(p):
             return p
     return None
 

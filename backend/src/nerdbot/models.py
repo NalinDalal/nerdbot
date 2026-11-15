@@ -756,3 +756,39 @@ class Delegation(BaseModel):
     deadline_at: datetime | None = None  # after this, the delegation times out
     scope: str = ""  # the bounded scope the delegator stated
     attempts: int = 0  # how many times this objective was delegated
+
+
+class Note(BaseModel):
+    """A workspace note: plain text or a checklist of items (Odysseus port)."""
+
+    id: str
+    project_id: str
+    title: str = ""
+    content: str = ""
+    note_type: str = "note"  # note | checklist
+    items: list[dict[str, Any]] = Field(default_factory=list)  # [{"text": str, "done": bool}]
+    label: str = ""
+    color: str = ""
+    pinned: bool = False
+    archived: bool = False
+    due_at: datetime | None = None
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+
+class CalendarEvent(BaseModel):
+    """A calendar event scoped to a project. Single local calendar (v1);
+    CalDAV/recurrence are deferred seams, not modeled here."""
+
+    id: str
+    project_id: str
+    summary: str = ""
+    description: str = ""
+    location: str = ""
+    starts_at: datetime
+    ends_at: datetime
+    all_day: bool = False
+    color: str = ""
+    status: str = "confirmed"  # confirmed | cancelled
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)

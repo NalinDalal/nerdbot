@@ -182,7 +182,7 @@ export function LibraryView() {
   return (
     <Page>
       <PageHeader
-        eyebrow="Workspace"
+        eyebrow="Knowledge"
         title="Library"
         description="Living documents and artifacts (markdown, HTML, CSV, text) with version history, exports, and AI-assisted editing."
         actions={

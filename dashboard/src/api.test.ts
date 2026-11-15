@@ -484,9 +484,12 @@ describe("views", () => {
     expect(at("/chat")).toEqual({ name: "chat" });
     expect(at("/overview")).toEqual({ name: "overview" });
     expect(at("/home")).toEqual({ name: "overview" });
-    expect(at("/work")).toEqual({ name: "work" });
-    expect(at("/activity")).toEqual({ name: "work" });
+    expect(at("/work")).toEqual({ name: "activity" });
+    expect(at("/activity")).toEqual({ name: "activity" });
+    expect(at("/agents")).toEqual({ name: "bots" });
+    expect(at("/agents/tm_1")).toEqual({ name: "bot", teammateId: "tm_1" });
     expect(at("/projects")).toEqual({ name: "projects" });
+    expect(at("/settings")).toEqual({ name: "settings" });
     expect(at("/nope")).toEqual({ name: "overview" });
     vi.unstubAllGlobals();
   });

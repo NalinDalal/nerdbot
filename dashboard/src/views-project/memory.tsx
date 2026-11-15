@@ -28,7 +28,7 @@ export function MemoryTab({ projectId }: { projectId: string }) {
   const [showWrite, setShowWrite] = useState(false);
   const [edit, setEdit] = useState<MemoryEntry | null>(null);
 
-  useEffect(() => { setPage(0); }, [q, tier, pinnedOnly]);
+  useEffect(() => { setPage(0); }, [q, tier, pinnedOnly, page]);
 
   const act = async (fn: () => Promise<unknown>) => {
     try { await fn(); list.reload(); } catch (err) { notifyError(err); }

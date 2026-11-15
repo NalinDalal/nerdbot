@@ -1669,7 +1669,7 @@ export function BotsView() {
                 setStatusFilter(e.target.value as "all" | "active" | "disabled" | "archived")
               }
               aria-label="Filter teammates by status"
-              className={`${FORM_INPUT} w-auto`}
+              className={`${FORM_INPUT} sm:w-44`}
             >
               <option value="all">All statuses</option>
               <option value="active">Active</option>

@@ -42,7 +42,7 @@ DEFAULT_REQUEST_TIMEOUT_S = 30.0
 # Provider-level retries per HTTP call. Combined with task-level
 # MAX_TASK_RETRIES (store.py) the worst case is
 # MAX_TASK_RETRIES * (MAX_RETRIES + 1) HTTP attempts per task.
-MAX_RETRIES = 2
+MAX_RETRIES = 4
 CONSECUTIVE_TOOL_FAILURE_LIMIT = 3
 MAX_TOOL_CALL_CORRECTIONS = 2
 
@@ -459,6 +459,17 @@ class OpenAICompatibleAdapter:
                     text = str(message.get("content") or "").strip()
                     _emit_progress(context, "final", text[:800] or "finished with no final text")
                     return self._finish(text, transcript, turns)
+                # OpenAI-compatible tool protocol: the assistant message that
+                # carries tool_calls must come *before* the tool results it
+                # requested. Sending results first makes the model re-issue
+                # the same calls (or the provider reject the conversation).
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": message.get("content"),
+                        "tool_calls": message.get("tool_calls"),
+                    }
+                )
                 for call in calls:
                     if time.monotonic() >= deadline:
                         raise ProviderTimeoutError("agent loop wall-clock budget expired")
@@ -495,13 +506,33 @@ class OpenAICompatibleAdapter:
                             "content": agent_tools.frame_tool_result(result),
                         }
                     )
+            # The tool budget is spent, but the work may already be done (a
+            # file written, a search finished). Give the model exactly one
+            # tool-free turn to report instead of discarding useful work.
+            if time.monotonic() < deadline:
                 messages.append(
                     {
-                        "role": "assistant",
-                        "content": message.get("content"),
-                        "tool_calls": message.get("tool_calls"),
+                        "role": "user",
+                        "content": (
+                            "You have used all available tool turns. Do not call"
+                            " any tools. Reply now with the final result for the"
+                            " task, based on the work above. If the work is"
+                            " incomplete, say exactly what is done and what is"
+                            " missing."
+                        ),
                     }
                 )
+                try:
+                    data = self._authed_post(client, api_key, model, messages, tools=[])
+                except Exception:
+                    data = None
+                if data is not None:
+                    _account_usage(context, data)
+                    text = str(self._first_message(data).get("content") or "").strip()
+                    if text:
+                        transcript.append({"role": "assistant", "content": text})
+                        _emit_progress(context, "final", text[:800])
+                        return self._finish(text, transcript, turns)
             return self._failed(
                 f"max turns exceeded ({max_turns}); no final answer", transcript, turns
             )
@@ -565,22 +596,27 @@ class OpenAICompatibleAdapter:
         model: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
+        tool_choice: str = "auto",
     ) -> dict[str, Any]:
         # Key is attached to single request objects only, never client state.
         last_error: Exception | None = None
         import random as _random
         import time as _time
 
+        payload: dict[str, Any] = {"model": model, "messages": messages}
+        if tools is None:
+            payload["tools"] = agent_tools.tool_schemas()
+            payload["tool_choice"] = "auto"
+        elif tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = tool_choice
+        # tools == [] is the final-answer turn: no tool block at all, so the
+        # model has to reply in prose instead of asking for another search.
         for attempt in range(MAX_RETRIES + 1):
             request = client.build_request(
                 "POST",
                 "/chat/completions",
-                json={
-                    "model": model,
-                    "messages": messages,
-                    "tools": tools if tools is not None else agent_tools.tool_schemas(),
-                    "tool_choice": "auto",
-                },
+                json=payload,
                 headers={"Authorization": f"Bearer {api_key}"},
             )
             try:
@@ -864,4 +900,26 @@ def select_provider_for_teammate(conn, teammate, task_requirements=None):
             model = getattr(teammate, "fallback_model", "") or model
             fallback_used = True
             reason = "primary provider unavailable; using configured fallback"
+    # A teammate with no explicit routing is a normal case (the seeded fleet,
+    # and the agents created from a role template). Falling back to the
+    # workspace's own usable provider means those agents can actually execute
+    # instead of sitting idle while the workspace has a working model.
+    if provider is None or provider.status != ProviderStatus.ACTIVE:
+        project_id = getattr(teammate, "project_id", "") or ""
+        if project_id:
+            candidates = [
+                candidate
+                for candidate in store_mod.list_providers(conn, project_id)
+                if candidate.status == ProviderStatus.ACTIVE
+            ]
+            # Prefer a real model over a mock. A mock provider answers with
+            # canned text and must never win over a provider that can think.
+            candidates.sort(key=lambda candidate: candidate.kind == ProviderKind.MOCK)
+            if candidates:
+                provider = candidates[0]
+                if not model:
+                    configured = provider.config.get("model")
+                    model = str(configured) if isinstance(configured, str) else ""
+                fallback_used = provider.kind != ProviderKind.MOCK
+                reason = "no teammate provider configured; using workspace provider"
     return provider, model, fallback_used, reason

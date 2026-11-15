@@ -105,6 +105,16 @@ CAPABILITIES: list[dict[str, Any]] = [
         "description": "Deferred: no demand in this slice.",
     },
     {
+        "id": "notes.crud",
+        "status": "ready",
+        "description": "Workspace notes (Odysseus port): plain/checklist notes with labels, pin, archive, search, due dates, and item toggles.",
+    },
+    {
+        "id": "calendar.events",
+        "status": "ready",
+        "description": "Project calendar (Odysseus port): events with range queries, all-day events, colors, and statuses. CalDAV sync and RRULE recurrence are deferred seams.",
+    },
+    {
         "id": "browser.automation",
         "status": "stub",
         "description": "Rejected: hardest channel to secure; static needs suffice.",

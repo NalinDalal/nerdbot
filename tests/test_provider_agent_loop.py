@@ -123,6 +123,29 @@ def test_max_turns_exceeded_fails(tmp_path) -> None:
     assert adapter.last_turns == 3
 
 
+def test_final_turn_answers_without_tools_after_budget(tmp_path) -> None:
+    """Work done on the last tool turn is reported, not discarded.
+
+    The loop gets one tool-free turn to summarise. The request must omit the
+    tools block so the model cannot ask for another search.
+    """
+    bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        if len(bodies) <= 2:
+            return httpx.Response(200, json=_msg("", [_call("c1", "run_command", {"command": "echo x"})]))
+        return httpx.Response(200, json=_msg("summary of the work"))
+
+    adapter = OpenAICompatibleAdapter(
+        {**CONFIG, "max_turns": 2}, transport=httpx.MockTransport(handler)
+    )
+    result = adapter.start_run("work then report", tmp_path)
+    assert result.exit_code == 0 and result.output == "summary of the work"
+    assert "tools" not in bodies[-1]
+    assert bodies[-1]["messages"][-1]["role"] == "user"
+
+
 def test_tool_error_reported_safely(tmp_path) -> None:
     script = [
         _msg("", [_call("c1", "run_command", {"command": "exit 7"})]),
@@ -164,6 +187,30 @@ def test_blocklisted_command_stopped(tmp_path) -> None:
     assert result.exit_code == 0
     tool_texts = [t["content"] for t in adapter.last_transcript if t["role"] == "tool"]
     assert "blocked by policy" in tool_texts[0]
+
+
+def test_tool_results_follow_the_assistant_tool_calls(tmp_path) -> None:
+    """OpenAI-compatible wire order is assistant(tool_calls) then tool results.
+
+    Sending the tool result first is a protocol violation: providers either
+    reject the conversation or the model re-issues the same call because it
+    never sees the request it supposedly made.
+    """
+    bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        if len(bodies) == 1:
+            return httpx.Response(200, json=_msg("", [_call("c1", "run_command", {"command": "echo hi"})]))
+        return httpx.Response(200, json=_msg("done: hi"))
+
+    adapter = OpenAICompatibleAdapter(CONFIG, transport=httpx.MockTransport(handler))
+    result = adapter.start_run("say hi", tmp_path)
+    assert result.exit_code == 0 and result.output == "done: hi"
+    roles = [m["role"] for m in bodies[1]["messages"]]
+    assert roles == ["user", "assistant", "tool"]
+    assert bodies[1]["messages"][1]["tool_calls"][0]["id"] == "c1"
+    assert bodies[1]["messages"][2]["tool_call_id"] == "c1"
 
 
 def test_retry_counts_exact(tmp_path) -> None:

@@ -225,7 +225,8 @@ export function WorkView() {
   return (
     <Page>
       <PageHeader
-        title="Activity"
+        eyebrow="Execution"
+        title="Work"
         description="Track runs, research, schedules, reminders, and task work across your workspaces."
         actions={<><Button onClick={reload}>Refresh</Button><Button onClick={() => setShowReminder(true)}>New reminder</Button><Button variant="primary" onClick={() => setShowNew(true)}>New task</Button></>}
       />
@@ -319,7 +320,7 @@ export function WorkView() {
           </select>
           <select value={agent} onChange={(e) => setAgent(e.target.value)} aria-label="Filter by agent" className={`${FORM_SELECT} h-9`}>
             <option value="all">All agents</option>
-            {bots.map((b) => <option key={b.id} value={b.id}>{b.persona || b.id}</option>)}
+            {bots.map((b) => <option key={b.id} value={b.id}>{b.name || b.slug || b.id}</option>)}
           </select>
         </div>
       </div>

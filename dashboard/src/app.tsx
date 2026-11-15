@@ -59,14 +59,9 @@ export function parseRoute(): Route {
   // lands on what the org is doing, and conversations are one click away.
   if (parts.length === 0) return { name: "overview" };
   if (parts[0] === "overview" || parts[0] === "home") return { name: "overview" };
-  if (parts[0] === "work") {
-    // Compatibility redirect: /work -> /activity (Phase 1).
-    if (typeof window !== "undefined") {
-      window.history.replaceState(null, "", "/activity" + window.location.search + window.location.hash);
-    }
-    return { name: "activity" };
-  }
-  if (parts[0] === "activity") return { name: "activity" };
+  // Work is the execution center. /activity is the old name and keeps working
+  // so a bookmark or a notification link still lands on the same screen.
+  if (parts[0] === "work" || parts[0] === "activity") return { name: "activity" };
   if (parts[0] === "workbench") {
     return {
       name: "workbench",
@@ -85,6 +80,11 @@ export function parseRoute(): Route {
   if (parts[0] === "teams") return { name: "teams" };
   if (parts[0] === "team" && parts[1])
     return { name: "team", teamId: parts[1] };
+  // Agents are the canonical name for the AI workforce. /bots stays valid
+  // because every existing link and notification uses it.
+  if (parts[0] === "agents" && parts[1])
+    return { name: "bot", teammateId: parts[1] };
+  if (parts[0] === "agents") return { name: "bots" };
   if (parts[0] === "bot" && parts[1])
     return { name: "bot", teammateId: parts[1] };
   if (parts[0] === "boards") return { name: "boards" };
@@ -109,7 +109,9 @@ export function parseRoute(): Route {
   }
   if (parts[0] === "gallery") return { name: "gallery" };
   if (parts[0] === "approvals") return { name: "approvals" };
-  return { name: "chat" };
+  // An unknown path is not a conversation. Land on the command center so a
+  // stale bookmark shows the org's real state instead of an empty chat.
+  return { name: "overview" };
 }
 
 export { navigate } from "./router";
@@ -257,40 +259,28 @@ function Sidebar({
     href: string;
     badge?: number;
   }> = [
-    // Workspace-first: the operating overview leads, conversations follow.
-    { label: "Overview", icon: "home", routes: ["overview"], href: "/" },
+    // The operating system's eight destinations, in the order the owner uses
+    // them: state of the org, conversation, workforce, departments,
+    // initiatives, execution, knowledge, configuration.
+    { label: "Home", icon: "home", routes: ["overview"], href: "/" },
+    { label: "Chat", icon: "chat", routes: ["chat"], href: "/chat" },
+    { label: "Agents", icon: "teammates", routes: ["bots", "bot"], href: "/agents" },
+    { label: "Teams", icon: "teams", routes: ["teams", "team"], href: "/teams" },
     {
-      label: "Agents",
-      icon: "teammates",
-      routes: ["bots", "bot"],
-      href: "/bots",
-    },
-    {
-      label: "Tasks & Activity",
-      icon: "work",
-      routes: ["activity", "work", "task"],
-      href: "/activity",
-    },
-    {
-      label: "Approvals",
-      icon: "approvals",
-      routes: ["approvals"],
-      href: "/approvals",
-      badge: nav.pendingApprovals,
-    },
-    {
-      label: "Workspaces",
+      label: "Projects",
       icon: "projects",
       routes: ["projects", "project"],
       href: "/projects",
     },
     {
-      label: "Library",
-      icon: "library",
-      routes: ["library", "libraryDoc"],
-      href: "/library",
+      label: "Work",
+      icon: "work",
+      routes: ["activity", "work", "task"],
+      href: "/work",
+      badge: nav.pendingApprovals,
     },
-    { label: "Chat", icon: "chat", routes: ["chat"], href: "/chat" },
+    { label: "Library", icon: "library", routes: ["library", "libraryDoc"], href: "/library" },
+    { label: "Settings", icon: "settings", routes: ["settings"], href: "/settings" },
   ];
 
   return (
@@ -355,12 +345,11 @@ function Sidebar({
           </button>
           {advancedOpen ? (
             <div className="mt-0.5 flex flex-col gap-0.5">
-              <NavItem label="Teams & Groups" icon="teams" active={route.name === "teams" || route.name === "team"} onClick={() => onNavigate("/teams")} />
+              <NavItem label="Approvals" icon="approvals" active={route.name === "approvals"} badge={nav.pendingApprovals} onClick={() => onNavigate("/approvals")} />
               <NavItem label="Boards" icon="boards" active={route.name === "boards" || route.name === "board"} onClick={() => onNavigate("/boards")} />
               <NavItem label="Workbench" icon="workbench" active={route.name === "workbench"} onClick={() => onNavigate("/workbench")} />
               <NavItem label="Gallery" icon="gallery" active={route.name === "gallery"} onClick={() => onNavigate("/gallery")} />
               <NavItem label="Capabilities" icon="settings" active={route.name === "capabilities"} onClick={() => onNavigate("/capabilities")} />
-              <NavItem label="Settings" icon="settings" active={route.name === "settings"} onClick={() => onNavigate("/settings")} />
             </div>
           ) : null}
         </div>
@@ -628,11 +617,11 @@ export default function App() {
         className="fixed inset-x-0 bottom-0 z-40 flex items-stretch border-t border-[var(--border-dim)] bg-[var(--bg)]/95 backdrop-blur md:hidden"
       >
         {[
-          { label: "Overview", icon: "home", href: "/", routes: ["overview"] },
-          { label: "Agents", icon: "teammates", href: "/bots", routes: ["bots", "bot"] },
-          { label: "Activity", icon: "work", href: "/activity", routes: ["activity", "work", "task"] },
-          { label: "Workspaces", icon: "projects", href: "/projects", routes: ["projects", "project"] },
+          { label: "Home", icon: "home", href: "/", routes: ["overview"] },
           { label: "Chat", icon: "chat", href: "/chat", routes: ["chat"] },
+          { label: "Agents", icon: "teammates", href: "/agents", routes: ["bots", "bot"] },
+          { label: "Work", icon: "work", href: "/work", routes: ["activity", "work", "task"] },
+          { label: "Projects", icon: "projects", href: "/projects", routes: ["projects", "project"] },
         ].map((item) => {
           const active = item.routes.includes(route.name);
           return (
@@ -658,18 +647,21 @@ export default function App() {
   );
 }
 
-/** The dashboard is normally served by the API itself (e.g. localhost:8080,
- *  documented in external handoff/backup artifacts). Defaulting the API base to the current origin
- *  keeps that flow same-origin (no CORS involved); only when the page is
- *  served elsewhere (the vite dev server) does the local default remain. */
+/** The dashboard normally talks to the API through a same-origin proxy path.
+ *
+ *  The compose deployment serves the built dashboard from nginx and proxies
+ *  ``/api`` to the backend, so the browser never makes a cross-origin
+ *  request (which Chrome's local-network policy can block outright). The
+ *  vite dev server has no such proxy, so it keeps the local default. When
+ *  this process serves the built dashboard itself, the same ``/api`` path is
+ *  accepted by the API, so one default covers both shapes. */
 export function defaultApiBase(): string {
   const loc = typeof window !== "undefined" ? window.location : null;
-  if (
-    loc &&
-    (loc.protocol === "http:" || loc.protocol === "https:") &&
-    loc.port !== "5173"
-  ) {
-    return loc.origin;
+  if (import.meta.env.DEV && (!loc || loc.port === "5173")) {
+    return "http://127.0.0.1:8080";
+  }
+  if (loc && (loc.protocol === "http:" || loc.protocol === "https:")) {
+    return `${loc.origin}/api`;
   }
   return "http://127.0.0.1:8080";
 }

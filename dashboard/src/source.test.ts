@@ -2,7 +2,7 @@
  * nodes — no HTML-injection sinks anywhere in the source. Enforced by the
  * suite so a future slice can not silently reintroduce one without a
  * conscious, reviewed change to this test. */
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -24,6 +24,29 @@ function sourceFiles(dir: string): string[] {
   }
   return found;
 }
+
+describe("the bundle is built from TypeScript sources", () => {
+  it("has no compiled .js artifact sitting beside a .ts/.tsx file", () => {
+    // A committed app.js shadowed app.tsx for Vite, so every UI change since
+    // the artifact was written shipped nothing. tsc reported success because
+    // it checked the .tsx files the bundler never read.
+    const orphans: string[] = [];
+    const walk = (dir: string): string[] => {
+      const found: string[] = [];
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) found.push(...walk(path));
+        else if (entry.name.endsWith(".js")) found.push(path);
+      }
+      return found;
+    };
+    for (const file of walk("src")) {
+      const base = file.slice(0, -3);
+      if (existsSync(`${base}.ts`) || existsSync(`${base}.tsx`)) orphans.push(file);
+    }
+    expect(orphans).toEqual([]);
+  });
+});
 
 describe("no HTML-injection sinks (N2 guard)", () => {
   it("dashboard source contains no innerHTML / dangerouslySetInnerHTML", () => {

@@ -43,6 +43,7 @@ const STATUS_LABELS: Record<string, string> = {
   ready: "Ready",
   running: "Running",
   done: "Completed",
+  succeeded: "Completed",
   failed: "Failed",
   blocked: "Blocked",
   stopped: "Stopped",
@@ -95,7 +96,7 @@ export function useTheme() {
     } catch {
       // ignore
     }
-    return "system";
+    return "dark";
   })();
   const [theme, setTheme] = useState<Theme>(stored);
   const resolved = resolveTheme(theme);

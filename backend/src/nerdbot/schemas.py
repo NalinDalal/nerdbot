@@ -253,3 +253,49 @@ class ReminderCreate(_Body):
     timezone: str | None = None
     source: str | None = None
     notify_channel: str | None = None
+
+
+class NoteCreate(_Body):
+    project_id: str | None = None
+    title: str | None = None
+    content: str | None = None
+    note_type: str | None = None
+    items: list[dict[str, Any]] | None = None
+    label: str | None = None
+    color: str | None = None
+    pinned: bool | None = None
+    due_at: str | None = None
+
+
+class NotePatch(_Body):
+    title: str | None = None
+    content: str | None = None
+    note_type: str | None = None
+    items: list[dict[str, Any]] | None = None
+    label: str | None = None
+    color: str | None = None
+    pinned: bool | None = None
+    archived: bool | None = None
+    due_at: str | None = None
+
+
+class EventCreate(_Body):
+    project_id: str | None = None
+    summary: str | None = None
+    description: str | None = None
+    location: str | None = None
+    starts_at: str | None = None
+    ends_at: str | None = None
+    all_day: bool | None = None
+    color: str | None = None
+
+
+class EventPatch(_Body):
+    summary: str | None = None
+    description: str | None = None
+    location: str | None = None
+    starts_at: str | None = None
+    ends_at: str | None = None
+    all_day: bool | None = None
+    color: str | None = None
+    status: str | None = None

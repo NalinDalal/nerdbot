@@ -14,6 +14,10 @@ export interface ProjectCounts {
   blocked: number;
   done: number;
   objectives: number;
+  cancelled?: number;
+  failed?: number;
+  ready?: number;
+  awaiting_approval?: number;
   boards: number;
   runs: number;
   approvals: number;
@@ -723,4 +727,122 @@ export interface RunEventPage {
   events: RunEvent[];
   run: Run;
   next: number;
+}
+
+/* --- Organisation overview (Home command center) -------------------------
+ * One server-computed snapshot of every workspace the principal owns. The
+ * dashboard renders these numbers directly; it never re-derives totals in
+ * the browser, so the page cannot disagree with itself. */
+
+export interface OrgProjectRow {
+  id: string;
+  name: string;
+  counts: ProjectCounts;
+  provider_ready: boolean;
+  provider_name: string;
+}
+
+export interface OrgAgent {
+  id: string;
+  name: string;
+  role: string;
+  status: string;
+  working: boolean;
+  project_id: string;
+  project_name: string;
+  current_task: string;
+  href: string;
+}
+
+export interface OrgTaskRow {
+  id: string;
+  title: string;
+  description: string;
+  status: string;
+  project_id: string;
+  project_name: string;
+  owner_id: string | null;
+  owner_name: string;
+  objective_id: string;
+  blocked_reason: string;
+  href: string;
+  at: string;
+}
+
+export interface OrgAttentionItem {
+  id: string;
+  kind: "task" | "approval" | "provider" | string;
+  severity: "danger" | "warn" | string;
+  title: string;
+  detail: string;
+  project_id: string;
+  project_name: string;
+  href: string;
+  at: string;
+}
+
+export interface OrgDeliverable {
+  id: string;
+  kind: "document" | "report" | string;
+  title: string;
+  project_id: string;
+  project_name: string;
+  href: string;
+  at: string;
+}
+
+export interface OrgActivity {
+  id: string;
+  kind: string;
+  status: string;
+  title: string;
+  project_id: string;
+  project_name: string;
+  task_id: string | null;
+  href: string;
+  at: string;
+  detail: string;
+}
+
+export interface OrgNotification {
+  id: string;
+  kind: string;
+  project_id: string;
+  project_name: string;
+  status: string;
+  title: string;
+  at: string;
+}
+
+export interface OrgOverview {
+  generated_at: string;
+  projects: OrgProjectRow[];
+  project_count: number;
+  active_projects: number;
+  provider_ready_projects: number;
+  agents: {
+    total: number;
+    active: number;
+    working: number;
+    idle: number;
+    inactive: number;
+  };
+  agents_list: OrgAgent[];
+  tasks: {
+    total: number;
+    active: number;
+    queued: number;
+    running: number;
+    completed: number;
+    failed: number;
+    blocked: number;
+    awaiting_approval: number;
+    cancelled: number;
+  };
+  recent_tasks: OrgTaskRow[];
+  approvals: { pending: number };
+  attention: OrgAttentionItem[];
+  deliverables: { total: number; recent: OrgDeliverable[] };
+  activity: OrgActivity[];
+  notifications: OrgNotification[];
 }

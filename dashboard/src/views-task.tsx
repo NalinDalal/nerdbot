@@ -439,6 +439,7 @@ export function TaskDetailView({
   const [pollTick, setPollTick] = useState(0);
   const watchTicks = useRef(0);
   const [boardDraft, setBoardDraft] = useState<string | null>(null);
+  const [savedDoc, setSavedDoc] = useState<string | null>(null);
   const teammates = useAsync(() => api.listTeammates(projectId), [projectId]);
   const delegations = useAsync(() => api.listTaskDelegations(taskId), [taskId]);
   const projects = useAsync(() => api.listProjects(), [projectId]);
@@ -796,8 +797,37 @@ export function TaskDetailView({
             <div className="text-step--1 font-medium text-[var(--text)]">Results & deliverables</div>
             <div className="text-step--2 text-[var(--muted)]">{hasResults ? (task.status === "done" ? "Produced work and outputs for this task." : "Outputs so far. Work may still be in progress.") : "No results yet."}</div>
           </div>
-          {task.status !== "done" && hasResults ? <Badge variant="neutral">In progress</Badge> : null}
-          {task.status === "done" && hasResults ? <Badge variant="ok">Ready for review</Badge> : null}
+          <div className="flex flex-wrap items-center gap-2">
+            {task.status !== "done" && hasResults ? <Badge variant="neutral">In progress</Badge> : null}
+            {task.status === "done" && hasResults ? <Badge variant="ok">Ready for review</Badge> : null}
+            {latestOutput && task.status === "done" ? (
+              savedDoc ? (
+                <a href={`/library/${savedDoc}`} className="text-step--1 font-medium text-[var(--accent)]">Open in Library</a>
+              ) : (
+                <Button
+                  variant="primary"
+                  disabled={!!busy}
+                  onClick={() => {
+                    void act("library", async () => {
+                      const doc = await api.createLibraryDoc(task.project_id, {
+                        title: heading,
+                        content: latestOutput,
+                        kind: "note",
+                        format: "md",
+                        source: "task",
+                        task_id: task.id,
+                      });
+                      setSavedDoc(doc.id);
+                      toast.success("Saved to Library");
+                      return null;
+                    });
+                  }}
+                >
+                  Save to Library
+                </Button>
+              )
+            ) : null}
+          </div>
         </div>
 
         {latestOutput ? (

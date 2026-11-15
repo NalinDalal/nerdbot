@@ -12,6 +12,12 @@ services:
     environment:
       NERDBOT_DB: ${NERDBOT_DB:-/app/.nerdbot-data/nerdbot.db}
       NERDBOT_DATA: ${NERDBOT_DATA:-/app/.nerdbot-data}
+      # Run the background executor in the API process so queued work advances
+      # without a manual sweep. Interval and per-run timeout are tuned for
+      # hosted providers, which can take longer than a local model.
+      NERDBOT_EXECUTOR: ${NERDBOT_EXECUTOR:-1}
+      NERDBOT_EXECUTOR_INTERVAL_S: ${NERDBOT_EXECUTOR_INTERVAL_S:-15}
+      NERDBOT_RUN_TIMEOUT_S: ${NERDBOT_RUN_TIMEOUT_S:-300}
     volumes:
       - nerdbot-data:/app/.nerdbot-data
     restart: unless-stopped

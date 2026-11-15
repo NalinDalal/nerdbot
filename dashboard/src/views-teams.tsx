@@ -62,7 +62,7 @@ export function TeamsView() {
   return (
     <Page width="data">
       <PageHeader
-        eyebrow="Advanced"
+        eyebrow="Workforce"
         title="Teams"
         description="Group workspaces for a shared roll-up. Membership grants no permissions."
         actions={

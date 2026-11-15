@@ -14,7 +14,7 @@ import re
 import sqlite3
 import uuid
 from collections.abc import Iterator
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +35,7 @@ from .models import (
     BoardMessage,
     BoardStatus,
     BotFace,
+    CalendarEvent,
     ChatMessage,
     ChatThread,
     Decision,
@@ -50,6 +51,7 @@ from .models import (
     MemoryEntry,
     MemoryTier,
     Notification,
+    Note,
     Project,
     Provider,
     ProviderKind,
@@ -374,6 +376,24 @@ CREATE TABLE IF NOT EXISTS teammate_memberships (
 );
 CREATE INDEX IF NOT EXISTS idx_teammate_memberships_teammate ON teammate_memberships(teammate_id);
 CREATE INDEX IF NOT EXISTS idx_teammate_memberships_project ON teammate_memberships(project_id);
+CREATE TABLE IF NOT EXISTS notes (
+  id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+  title TEXT NOT NULL DEFAULT '', content TEXT NOT NULL DEFAULT '',
+  note_type TEXT NOT NULL DEFAULT 'note', items TEXT NOT NULL DEFAULT '[]',
+  label TEXT NOT NULL DEFAULT '', color TEXT NOT NULL DEFAULT '',
+  pinned INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0,
+  due_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_notes_project ON notes(project_id, archived, pinned);
+CREATE TABLE IF NOT EXISTS calendar_events (
+  id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+  summary TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',
+  location TEXT NOT NULL DEFAULT '', starts_at TEXT NOT NULL,
+  ends_at TEXT NOT NULL, all_day INTEGER NOT NULL DEFAULT 0,
+  color TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'confirmed',
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_calendar_events_range ON calendar_events(project_id, starts_at);
 """
 
 
@@ -7247,3 +7267,318 @@ def list_research_job_events(
             )
         )
     return events
+
+
+# -- Notes (Odysseus port) ---------------------------------------------------
+
+NOTE_TYPES = frozenset({"note", "checklist"})
+
+_NOTE_UPDATABLE = frozenset(
+    {"title", "content", "note_type", "items", "label", "color", "pinned", "archived", "due_at"}
+)
+
+
+def _parse_iso(value: str) -> datetime:
+    """ISO-8601 (Z suffix tolerated, naive treated as UTC) -> aware datetime."""
+    v = str(value).strip()
+    if v.endswith(("Z", "z")):
+        v = v[:-1] + "+00:00"
+    dt = datetime.fromisoformat(v)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt
+
+
+def _norm_dt_utc(value: str) -> str:
+    """Normalize an ISO timestamp to UTC for lexicographic range queries."""
+    return _parse_iso(value).astimezone(UTC).isoformat()
+
+
+def _norm_items(items: Any) -> list[dict[str, Any]]:
+    if items is None:
+        return []
+    if not isinstance(items, list):
+        raise ValueError("items must be a list")
+    out: list[dict[str, Any]] = []
+    for raw in items:
+        if not isinstance(raw, dict):
+            raise ValueError("each item must be an object")
+        out.append({"text": str(raw.get("text", "")), "done": bool(raw.get("done", False))})
+    return out
+
+
+def _note_from_row(r: sqlite3.Row) -> Note:
+    keys = r.keys()
+    try:
+        items = json.loads(r["items"]) if "items" in keys and r["items"] else []
+    except Exception:
+        items = []
+    return Note(
+        id=r["id"],
+        project_id=r["project_id"],
+        title=r["title"] if "title" in keys else "",
+        content=r["content"] if "content" in keys else "",
+        note_type=r["note_type"] if "note_type" in keys else "note",
+        items=items if isinstance(items, list) else [],
+        label=r["label"] if "label" in keys else "",
+        color=r["color"] if "color" in keys else "",
+        pinned=bool(r["pinned"]) if "pinned" in keys else False,
+        archived=bool(r["archived"]) if "archived" in keys else False,
+        due_at=r["due_at"] if "due_at" in keys and r["due_at"] else None,
+        created_at=r["created_at"],
+        updated_at=r["updated_at"],
+    )
+
+
+def create_note(conn: sqlite3.Connection, project_id: str, **fields: Any) -> Note:
+    note_type = fields.get("note_type") or "note"
+    if note_type not in NOTE_TYPES:
+        raise ValueError(f"unknown note_type: {note_type}")
+    due_at = fields.get("due_at")
+    if due_at:
+        due_at = _parse_iso(str(due_at)).isoformat()
+    note = Note(
+        id=new_id("note"),
+        project_id=project_id,
+        title=str(fields.get("title") or ""),
+        content=str(fields.get("content") or ""),
+        note_type=note_type,
+        items=_norm_items(fields.get("items")),
+        label=str(fields.get("label") or ""),
+        color=str(fields.get("color") or ""),
+        pinned=bool(fields.get("pinned", False)),
+        archived=False,
+        due_at=due_at,
+    )
+    conn.execute(
+        "INSERT INTO notes (id, project_id, title, content, note_type, items, label,"
+        " color, pinned, archived, due_at, created_at, updated_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            note.id, note.project_id, note.title, note.content, note.note_type,
+            json.dumps(note.items, ensure_ascii=False), note.label, note.color,
+            int(note.pinned), int(note.archived), note.due_at,
+            note.created_at.isoformat(), note.updated_at.isoformat(),
+        ),
+    )
+    conn.commit()
+    return note
+
+
+def get_note(conn: sqlite3.Connection, note_id: str) -> Note | None:
+    row = conn.execute("SELECT * FROM notes WHERE id = ?", (note_id,)).fetchone()
+    return _note_from_row(row) if row else None
+
+
+def list_notes(
+    conn: sqlite3.Connection,
+    project_id: str,
+    q: str = "",
+    label: str = "",
+    archived: bool = False,
+    limit: int = 100,
+    offset: int = 0,
+) -> tuple[list[Note], int]:
+    where = ["project_id = ?", "archived = ?"]
+    args: list[Any] = [project_id, int(archived)]
+    if label:
+        where.append("label = ?")
+        args.append(label)
+    if q:
+        needle = f"%{q.strip().replace(chr(92), chr(92) * 2).replace('%', chr(92) + '%').replace('_', chr(92) + '_')}%"
+        where.append("(title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\')")
+        args.extend([needle, needle])
+    clause = " WHERE " + " AND ".join(where)
+    total = int(conn.execute(f"SELECT COUNT(*) FROM notes{clause}", args).fetchone()[0])
+    rows = conn.execute(
+        f"SELECT * FROM notes{clause} ORDER BY pinned DESC, updated_at DESC LIMIT ? OFFSET ?",
+        [*args, int(limit), int(offset)],
+    ).fetchall()
+    return [_note_from_row(r) for r in rows], total
+
+
+def update_note(conn: sqlite3.Connection, note_id: str, **fields: Any) -> Note:
+    note = get_note(conn, note_id)
+    if note is None:
+        raise KeyError(f"unknown note {note_id}")
+    updates = {k: v for k, v in fields.items() if k in _NOTE_UPDATABLE}
+    if not updates:
+        return note
+    if "note_type" in updates and updates["note_type"] not in NOTE_TYPES:
+        raise ValueError(f"unknown note_type: {updates['note_type']}")
+    sets: list[str] = []
+    args: list[Any] = []
+    for key, value in updates.items():
+        if key == "items":
+            value = json.dumps(_norm_items(value), ensure_ascii=False)
+        elif key in {"pinned", "archived"}:
+            value = int(bool(value))
+        elif key == "due_at":
+            value = _parse_iso(str(value)).isoformat() if value else None
+        elif value is not None:
+            value = str(value)
+        sets.append(f"{key} = ?")
+        args.append(value)
+    ts = _now_iso()
+    sets.append("updated_at = ?")
+    args.append(ts)
+    conn.execute(f"UPDATE notes SET {', '.join(sets)} WHERE id = ?", [*args, note_id])
+    conn.commit()
+    updated = get_note(conn, note_id)
+    if updated is None:  # pragma: no cover - row vanished mid-update
+        raise KeyError(f"unknown note {note_id}")
+    return updated
+
+
+def delete_note(conn: sqlite3.Connection, note_id: str) -> bool:
+    cur = conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def toggle_note_item(conn: sqlite3.Connection, note_id: str, index: int) -> Note:
+    note = get_note(conn, note_id)
+    if note is None:
+        raise KeyError(f"unknown note {note_id}")
+    if index < 0 or index >= len(note.items):
+        raise IndexError(f"item {index} out of range")
+    items = list(note.items)
+    items[index] = {**items[index], "done": not bool(items[index].get("done", False))}
+    return update_note(conn, note_id, items=items)
+
+
+# -- Calendar (Odysseus port: local calendar, no CalDAV/recurrence in v1) -----
+
+_EVENT_UPDATABLE = frozenset(
+    {"summary", "description", "location", "starts_at", "ends_at", "all_day", "color", "status"}
+)
+_EVENT_STATUSES = frozenset({"confirmed", "cancelled"})
+
+
+def _event_from_row(r: sqlite3.Row) -> CalendarEvent:
+    keys = r.keys()
+    return CalendarEvent(
+        id=r["id"],
+        project_id=r["project_id"],
+        summary=r["summary"] if "summary" in keys else "",
+        description=r["description"] if "description" in keys else "",
+        location=r["location"] if "location" in keys else "",
+        starts_at=r["starts_at"],
+        ends_at=r["ends_at"],
+        all_day=bool(r["all_day"]) if "all_day" in keys else False,
+        color=r["color"] if "color" in keys else "",
+        status=r["status"] if "status" in keys else "confirmed",
+        created_at=r["created_at"],
+        updated_at=r["updated_at"],
+    )
+
+
+def _validate_range(starts_at: Any, ends_at: Any) -> tuple[str, str]:
+    if not starts_at or not ends_at:
+        raise ValueError("starts_at and ends_at are required")
+    start = _norm_dt_utc(str(starts_at))
+    end = _norm_dt_utc(str(ends_at))
+    if end < start:
+        raise ValueError("ends_at must not precede starts_at")
+    return start, end
+
+
+def create_event(conn: sqlite3.Connection, project_id: str, **fields: Any) -> CalendarEvent:
+    start, end = _validate_range(fields.get("starts_at"), fields.get("ends_at"))
+    status = str(fields.get("status") or "confirmed")
+    if status not in _EVENT_STATUSES:
+        raise ValueError(f"unknown status: {status}")
+    event = CalendarEvent(
+        id=new_id("evt"),
+        project_id=project_id,
+        summary=str(fields.get("summary") or ""),
+        description=str(fields.get("description") or ""),
+        location=str(fields.get("location") or ""),
+        starts_at=start,
+        ends_at=end,
+        all_day=bool(fields.get("all_day", False)),
+        color=str(fields.get("color") or ""),
+        status=status,
+    )
+    conn.execute(
+        "INSERT INTO calendar_events (id, project_id, summary, description, location,"
+        " starts_at, ends_at, all_day, color, status, created_at, updated_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            event.id, event.project_id, event.summary, event.description, event.location,
+            event.starts_at.isoformat(), event.ends_at.isoformat(), int(event.all_day),
+            event.color, event.status,
+            event.created_at.isoformat(), event.updated_at.isoformat(),
+        ),
+    )
+    conn.commit()
+    return event
+
+
+def get_event(conn: sqlite3.Connection, event_id: str) -> CalendarEvent | None:
+    row = conn.execute("SELECT * FROM calendar_events WHERE id = ?", (event_id,)).fetchone()
+    return _event_from_row(row) if row else None
+
+
+def list_events(
+    conn: sqlite3.Connection,
+    project_id: str,
+    start: str | None = None,
+    end: str | None = None,
+    limit: int = 500,
+) -> list[CalendarEvent]:
+    """Events overlapping [start, end); either bound optional, UTC-normalized."""
+    where = ["project_id = ?"]
+    args: list[Any] = [project_id]
+    if start:
+        where.append("ends_at > ?")
+        args.append(_norm_dt_utc(start))
+    if end:
+        where.append("starts_at < ?")
+        args.append(_norm_dt_utc(end))
+    rows = conn.execute(
+        f"SELECT * FROM calendar_events WHERE {' AND '.join(where)}"
+        " ORDER BY starts_at LIMIT ?",
+        [*args, int(limit)],
+    ).fetchall()
+    return [_event_from_row(r) for r in rows]
+
+
+def update_event(conn: sqlite3.Connection, event_id: str, **fields: Any) -> CalendarEvent:
+    event = get_event(conn, event_id)
+    if event is None:
+        raise KeyError(f"unknown event {event_id}")
+    updates = {k: v for k, v in fields.items() if k in _EVENT_UPDATABLE and v is not None}
+    if not updates:
+        return event
+    if "status" in updates and updates["status"] not in _EVENT_STATUSES:
+        raise ValueError(f"unknown status: {updates['status']}")
+    starts_at = str(updates.get("starts_at", event.starts_at.isoformat()))
+    ends_at = str(updates.get("ends_at", event.ends_at.isoformat()))
+    starts_at, ends_at = _validate_range(starts_at, ends_at)
+    sets: list[str] = []
+    args: list[Any] = []
+    for key, value in updates.items():
+        if key in {"starts_at", "ends_at"}:
+            value = starts_at if key == "starts_at" else ends_at
+        elif key == "all_day":
+            value = int(bool(value))
+        elif key in {"summary", "description", "location", "color", "status"}:
+            value = str(value)
+        sets.append(f"{key} = ?")
+        args.append(value)
+    ts = _now_iso()
+    sets.append("updated_at = ?")
+    args.append(ts)
+    conn.execute(f"UPDATE calendar_events SET {', '.join(sets)} WHERE id = ?", [*args, event_id])
+    conn.commit()
+    updated = get_event(conn, event_id)
+    if updated is None:  # pragma: no cover - row vanished mid-update
+        raise KeyError(f"unknown event {event_id}")
+    return updated
+
+
+def delete_event(conn: sqlite3.Connection, event_id: str) -> bool:
+    cur = conn.execute("DELETE FROM calendar_events WHERE id = ?", (event_id,))
+    conn.commit()
+    return cur.rowcount > 0
