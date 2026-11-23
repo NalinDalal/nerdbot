@@ -95,20 +95,20 @@ function ActivityRailContent({
             {pendingApprovals.slice(0, 5).map(({ approval, projectName }) => (
               <li
                 key={approval.id}
-                className="rounded-md border border-[var(--warn)] bg-[var(--warn-dim)] px-2.5 py-2 text-step--1"
+                className="rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step--1"
               >
                 <div className="truncate font-medium text-[var(--text)]">
                   {approval.action || "approval requested"}
                 </div>
-                <div className="truncate text-step--2 text-[var(--muted)]">{projectName}</div>
-                <div className="mt-1.5 flex flex-wrap gap-2">
-                  <button type="button" className="text-step--2 font-medium text-[var(--accent)] hover:underline" onClick={() => navigate("/approvals")}>Open approvals</button>
+                <div className="text-step--2 text-[var(--muted)] truncate">
+                  {projectName || "Unnamed project"}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button type="button" className="text-step--1 text-[var(--accent)] hover:text-[var(--text)] hover:underline" onClick={() => navigate("/approvals")}>
+                    Open approvals
+                  </button>
                   {approval.task_id && approval.project_id ? (
-                    <button
-                      type="button"
-                      onClick={() => onOpenTask(approval.project_id!, approval.task_id!)}
-                      className="text-step--2 text-[var(--muted)] hover:underline"
-                    >
+                    <button type="button" className="text-step--1 text-[var(--muted)] hover:text-[var(--text)] hover:underline" onClick={() => onOpenTask(approval.project_id, approval.task_id)}>
                       Open task
                     </button>
                   ) : null}

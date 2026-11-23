@@ -1,0 +1,283 @@
+/* ==========================================
+   NERDBOT design tokens — enhanced polish
+   ==========================================
+   Builds on the existing styles.css token system.
+   Do not duplicate — extend the existing --surface, --accent, etc.
+   ========================================== */
+
+@font-face {
+  font-family: "Geist";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/geist-sans-variable.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/geist-mono-variable.woff2") format("woff2");
+}
+
+/* ==========================================
+   Enhanced polish additions to existing tokens
+   ========================================== */
+
+:root {
+  /* Slight surface warmth adjustment for light mode — off-white not stark white */
+  --surface-2-light: #f8fafc;
+
+  /* Accent emphasis: slight hover press adjustment */
+  --accent-press-light: rgba(47, 92, 224, 0.18);
+
+  /* Focus ring: slightly more pronounced on dark */
+  --focus-ring-dim: rgba(79, 125, 252, 0.48);
+}
+
+/* ==========================================
+   Base — already covered by styles.css, keep html/body clean
+   ========================================== */
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  text-rendering: optimizeLegibility;
+}
+
+/* ==========================================
+   Focus treatment — already in styles.css, enhance slightly
+   ========================================== */
+
+:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+/* ==========================================
+   Selection & links
+   ========================================== */
+
+::selection {
+  background: var(--accent-dim);
+  color: var(--text);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* ==========================================
+   Mono & typography basics
+   ========================================== */
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+p {
+  margin: 0;
+}
+
+/* ==========================================
+   Quiet scrollbars
+   ========================================== */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border: 3px solid var(--bg);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
+}
+
+/* ==========================================
+   Inputs, textareas, buttons — enhance existing
+   ========================================== */
+
+input,
+textarea,
+select,
+button {
+  font-family: inherit;
+  font: inherit;
+  line-height: normal;
+}
+
+/* ==========================================
+   Focus-visible — already in styles.css: :focus-visible uses var(--border-focus)
+   ========================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ==========================================
+   Shared easing helpers (already in styles.css)
+   ========================================== */
+
+@keyframes nerdbot-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@keyframes nerdbot-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: nerdbot-fade-in var(--duration-in) var(--ease-out) both;
+}
+
+@keyframes nerdbot-scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.animate-scale-in {
+  animation: nerdbot-scale-in var(--duration-in) var(--ease-out) both;
+}
+
+@keyframes nerdbot-card-lift {
+  0% {
+    transform: translateY(0);
+    box-shadow: var(--shadow-sm);
+  }
+  100% {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+  }
+}
+
+.animate-card-lift {
+  animation: nerdbot-card-lift var(--transition-fast) var(--ease-out) both;
+}
+
+@keyframes nerdbot-button-press {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(0.98);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.animate-button-press {
+  animation: nerdbot-button-press var(--transition-fast) var(--ease-out) both;
+}
+
+/* ==========================================
+   Reduced motion — respects user preferences
+   ========================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in,
+  .animate-scale-in,
+  .animate-card-lift,
+  .animate-button-press {
+    animation: none;
+  }
+
+  .skeleton {
+    animation: none;
+    background: var(--surface-2);
+  }
+}
+
+/* ==========================================
+   Skeleton shimmer (already in styles.css)
+   ========================================== */
+
+.skeleton {
+  background-image: linear-gradient(
+    90deg,
+    var(--surface-2) 0%,
+    var(--surface-3) 45%,
+    var(--surface-2) 90%
+  );
+  background-size: 220% 100%;
+  animation: nerdbot-shimmer 1.4s linear infinite;
+}
+
+/* ==========================================
+   Premium micro-interactions via GSAP
+   ========================================== */
+
+@layer utilities {
+  /* Subtle focus-visible enhancement */
+  .focus-ring-enhanced {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[var(--focus-ring-dim)];
+  }
+
+  /* Hover press effect - slight scale on press */
+  .press-enhanced {
+    @apply transition-transform duration-100;
+  }
+
+  /* Card lift on hover */
+  .lift-enhanced {
+    @apply transition-all duration-200 hover:translate-y-1 hover:shadow-md;
+  }
+
+  /* Subtle shimmer on active CTA */
+  .shimmer-enhanced {
+    @apply relative overflow-hidden;
+  }
+}

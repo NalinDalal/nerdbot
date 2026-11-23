@@ -408,6 +408,22 @@ export function BotDetailView({
               <span aria-hidden>·</span>
               <span>{modelName || (mate.provider_id ? "Model connected" : "No model connected")}</span>
             </div>
+            {runList.length > 0 && (
+              <div className="mt-2 text-step--1 text-[var(--muted)]">
+                <span className="font-medium text-[var(--text)]">Working on:</span>
+                {runList.slice(0, 3).map((run, i) => (
+                  <span key={i} className="mr-1 text-step--2 tooltip">
+                    <span className="truncate max-w-[120px]">{run.task?.description?.trim() || run.id.substring(0, 20)}</span>
+                    <span className="text-[var(--faint)] text-xs">•</span>
+                  </span>
+                ))}
+                {runList.length > 3 && (
+                  <span className="text-[var(--faint)] text-xs">
+                    +{runList.length - 3} more
+                  </span>
+                )}
+              </div>
+            )}
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-2">
             <Button variant="primary" onClick={() => setShowCreateTask(true)}>
