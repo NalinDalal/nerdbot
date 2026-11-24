@@ -260,24 +260,18 @@ button {
    Premium micro-interactions via GSAP
    ========================================== */
 
-@layer utilities {
-  /* Subtle focus-visible enhancement */
-  .focus-ring-enhanced {
-    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[var(--focus-ring-dim)];
-  }
+.focus-ring-enhanced {
+  @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[var(--focus-ring-dim)];
+}
 
-  /* Hover press effect - slight scale on press */
-  .press-enhanced {
-    @apply transition-transform duration-100;
-  }
+.press-enhanced {
+  @apply transition-transform duration-100;
+}
 
-  /* Card lift on hover */
-  .lift-enhanced {
-    @apply transition-all duration-200 hover:translate-y-1 hover:shadow-md;
-  }
+.lift-enhanced {
+  @apply transition-all duration-200 hover:translate-y-1 hover:shadow-md;
+}
 
-  /* Subtle shimmer on active CTA */
-  .shimmer-enhanced {
-    @apply relative overflow-hidden;
-  }
+.shimmer-enhanced {
+  @apply relative overflow-hidden;
 }

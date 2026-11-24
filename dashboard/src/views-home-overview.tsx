@@ -562,7 +562,7 @@ export function HomeOverviewView() {
           </section>
         )}
 
-        <div className="grid grid-cols-2 divide-y divide-[var(--border-dim)] overflow-hidden rounded-xl border border-[var(--border-dim)] bg-[var(--surface)] sm:grid-cols-3 sm:divide-y-0 lg:grid-cols-5 lg:divide-x">
+        <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-5 gap-y-6">
           <Kpi
             label="Workspaces"
             value={data.project_count}
@@ -698,42 +698,10 @@ export function HomeOverviewView() {
               <EmptyState
                 title="No agents"
                 hint="Create an agent to execute planned work."
-                action={<Button onClick={() => navigate("/agents")}>Create agent</Button>}
+                action={<Button onClick={() => composerRef.current?.focus()}>Write an objective</Button>}
               />
             ) : (
-              <div className="overflow-hidden rounded-lg border border-[var(--border-dim)] bg-[var(--surface)]">
-                {data.agents_list.map((agent) => (
-                  <button
-                    key={agent.id}
-                    onClick={() => navigate(agent.href)}
-                    className="flex w-full items-center gap-3 border-b border-[var(--border-dim)] px-4 py-2.5 text-left transition-colors last:border-b-0 hover:bg-[var(--surface-2)]"
-                  >
-                    <span className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--surface-3)] text-step--2 font-semibold text-[var(--text-soft)]">
-                      {initials(agent.name)}
-                      <span
-                        className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-[var(--surface)] ${
-                          agent.working
-                            ? "bg-[var(--accent)]"
-                            : agent.status === "active"
-                              ? "bg-[var(--success)]"
-                              : "bg-[var(--faint)]"
-                        }`}
-                      />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center gap-2">
-                        <span className="truncate text-step--1 font-medium text-[var(--text)]">
-                          {agent.name}
-                        </span>
-                        {agent.working ? <Badge variant="ok">working</Badge> : null}
-                      </span>
-                      <span className="mt-0.5 block truncate text-step--2 text-[var(--muted)]">
-                        {agent.current_task || agent.role || agent.project_name}
-                      </span>
-                    </span>
-                  </button>
-                ))}
-              </div>
+              <ExecutionRollup overview={overview} onOpenTeam={(id) => navigate(`/agents/${id}`)} />
             )}
           </PageSection>
         </div>

@@ -429,8 +429,11 @@ export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const { setTheme } = useTheme();
 
+  // Always try to establish the session on mount, overriding any stale
+  // session data from localStorage. This is critical because the backend
+  // has been restarted 30+ times (restarts: 30), meaning the dev token
+  // may have changed and old session data will prevent re-connection.
   useEffect(() => {
-    if (!probing) return;
     let alive = true;
     autoConnectDev(defaultApiBase()).then((ok) => {
       if (!alive) return;
@@ -440,7 +443,7 @@ export default function App() {
     return () => {
       alive = false;
     };
-  }, [probing]);
+  }, []);
 
   useEffect(() => {
     const remove = onRouteChange(() => setRoute(parseRoute()));
