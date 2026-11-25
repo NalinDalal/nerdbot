@@ -42,6 +42,16 @@ def create_teammate_service(
     fallback_provider_id: str | None = None,
     fallback_model: str | None = None,
     face: dict[str, str] | None = None,
+    tagline: str = "",
+    voice_style: str = "",
+    boundaries: str = "",
+    starter_prompts: list[str] | None = None,
+    greeting: str = "",
+    behavior_tuning: dict[str, Any] | None = None,
+    presence_mode: str = "active",
+    autonomy_policy: dict[str, Any] | None = None,
+    autonomy_level: str = "ask_first",
+    paused: bool = False,
     acting: Teammate | None = None,
 ) -> Teammate:
     if acting is not None:
@@ -89,6 +99,16 @@ def create_teammate_service(
             memory_scope=memory_scope,
             permissions=permissions,
             face=face,
+            tagline=tagline,
+            voice_style=voice_style,
+            boundaries=boundaries,
+            starter_prompts=starter_prompts,
+            greeting=greeting,
+            behavior_tuning=behavior_tuning,
+            presence_mode=presence_mode,
+            autonomy_policy=autonomy_policy,
+            autonomy_level=autonomy_level,
+            paused=paused,
         )
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

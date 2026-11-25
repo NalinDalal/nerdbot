@@ -233,10 +233,19 @@ export function BotDetailView({
   const [editGreeting, setEditGreeting] = useState("");
   const [editPresenceMode, setEditPresenceMode] = useState("active");
   const [editAutonomyPolicy, setEditAutonomyPolicy] = useState("{}");
+  const [editWorkspaceAccess, setEditWorkspaceAccess] = useState<"none" | "read" | "write" | "exec">("none");
+  const [editAutonomyLevel, setEditAutonomyLevel] = useState<"ask_first" | "act_and_report" | "act_silently">("ask_first");
+  const [editPaused, setEditPaused] = useState(false);
   const [editBusy, setEditBusy] = useState(false);
   const [confirmStatus, setConfirmStatus] = useState<"disable" | "archive" | null>(null);
   const [statusBusy, setStatusBusy] = useState(false);
-  const [section, setSection] = useState<"overview" | "configuration" | "capabilities" | "memory" | "skills" | "work" | "activity">("overview");
+  const [section, setSection] = useState<"overview" | "configuration" | "capabilities" | "memory" | "skills" | "work" | "activity" | "test">("overview");
+  const [testThreadId, setTestThreadId] = useState<string | null>(null);
+  const [testMessages, setTestMessages] = useState<Array<{ role: string; content: string }>>([]);
+  const [testDraft, setTestDraft] = useState("");
+  const [testBusy, setTestBusy] = useState(false);
+  const [testWorkspace, setTestWorkspace] = useState<string>("");
+  useEffect(() => { if (section === "test" && mate) api.getProjectWorkspace(mate.project_id).then((ws: any) => setTestWorkspace(ws.root || "")).catch(() => {}); }, [section, mate?.project_id]);
 
   const openEditor = () => {
     if (!mate) return;
@@ -253,6 +262,10 @@ export function BotDetailView({
     setEditGreeting(mate.greeting ?? "");
     setEditPresenceMode(mate.presence_mode || "active");
     setEditAutonomyPolicy(JSON.stringify(mate.autonomy_policy ?? {}, null, 2));
+    const perms = new Set(mate.permissions ?? []);
+    setEditWorkspaceAccess(perms.has("workspace.exec") ? "exec" : perms.has("workspace.write") ? "write" : perms.has("workspace.read") ? "read" : "none");
+    setEditAutonomyLevel((mate.autonomy_level as any) || "ask_first");
+    setEditPaused(Boolean(mate.paused));
     setShowEdit(true);
   };
 
@@ -262,13 +275,15 @@ export function BotDetailView({
     try {
       let autonomyPolicy: Record<string, unknown> = {};
       try { autonomyPolicy = JSON.parse(editAutonomyPolicy || "{}"); } catch { throw new Error("Autonomy policy must be valid JSON"); }
+      const wsPerms = editWorkspaceAccess === "exec" ? ["workspace.read","workspace.write","workspace.exec"] : editWorkspaceAccess === "write" ? ["workspace.read","workspace.write"] : editWorkspaceAccess === "read" ? ["workspace.read"] : [];
+      const mergedPerms = Array.from(new Set([...editPerms.filter((p) => !p.startsWith("workspace.")), ...wsPerms]));
       await api.patchTeammate(teammateId, {
         persona: editPersona.trim(),
         name: editName.trim(),
         instructions: editInstructions,
         provider_id: editProviderId || null,
         memory_scope: editMemoryScope,
-        permissions: editPerms,
+        permissions: mergedPerms,
         tagline: editTagline.trim(),
         voice_style: editVoiceStyle.trim(),
         boundaries: editBoundaries.trim(),
@@ -276,6 +291,8 @@ export function BotDetailView({
         greeting: editGreeting.trim(),
         presence_mode: editPresenceMode,
         autonomy_policy: autonomyPolicy,
+        autonomy_level: editAutonomyLevel,
+        paused: editPaused,
       });
       setShowEdit(false);
       all.reload();
@@ -527,6 +544,7 @@ export function BotDetailView({
             ["skills", "Skills"],
             ["work", "Work"],
             ["activity", "Activity"],
+            ["test", "Test bot"],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -863,6 +881,62 @@ export function BotDetailView({
       </section>
       )}
 
+      {(section === "test") && mate ? (
+        <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="text-step-0 font-semibold text-[var(--text)]">Test bot</div>
+              <div className="text-step--2 text-[var(--muted)]">Runs the real chat loop with real permission gate. Workspace access: <span className="font-medium text-[var(--text-soft)]">{editWorkspaceAccess || (mate.permissions?.includes("workspace.exec") ? "exec" : mate.permissions?.includes("workspace.write") ? "write" : mate.permissions?.includes("workspace.read") ? "read" : "none")}</span> · {mate.paused ? "paused" : (mate.presence_mode || "active")} · workspace: <span className="mono">{testWorkspace || "unbound"}</span></div>
+            </div>
+            <Button onClick={async () => {
+              try {
+                const t = await api.createThread(mate.project_id, { title: `Test: ${mate.name || mate.persona}` });
+                setTestThreadId(t.id);
+                const greeting = mate.greeting?.trim() || `Hi, I'm ${mate.name || mate.persona}.`;
+                setTestMessages([{ role: "assistant", content: greeting }]);
+              } catch (err) { notifyError(err); }
+            }}>New test thread</Button>
+          </div>
+          {(mate.starter_prompts?.length ? mate.starter_prompts : []).length > 0 ? (
+            <div className="mb-3 flex flex-wrap gap-2">
+              {(mate.starter_prompts || []).map((p, i) => (
+                <button key={i} type="button" className="rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-3 py-1 text-step--2 text-[var(--text-soft)] hover:bg-[var(--surface-3)]" onClick={() => setTestDraft(p)}>{p}</button>
+              ))}
+            </div>
+          ) : null}
+          <div className="mb-3 max-h-80 overflow-auto rounded-xl border border-[var(--border-dim)] bg-[var(--bg)] p-3">
+            {testMessages.length === 0 ? <div className="text-step--2 text-[var(--faint)]">Start a test thread to chat with this bot.</div> : testMessages.map((m, i) => (
+              <div key={i} className={`mb-2 text-step--1 ${m.role === "user" ? "text-[var(--text)]" : "text-[var(--text-soft)]"}`}><span className="font-medium">{m.role === "user" ? "You" : (mate.name || "Bot")}:</span> {m.content}</div>
+            ))}
+          </div>
+          <form onSubmit={async (e) => {
+            e.preventDefault();
+            const text = testDraft.trim();
+            if (!text) return;
+            setTestBusy(true);
+            try {
+              let tid = testThreadId;
+              if (!tid) {
+                const t = await api.createThread(mate.project_id, { title: `Test: ${mate.name || mate.persona}` });
+                tid = t.id;
+                setTestThreadId(tid);
+                const greeting = mate.greeting?.trim();
+                if (greeting) setTestMessages((ms) => ms.length ? ms : [{ role: "assistant", content: greeting }]);
+              }
+              setTestMessages((ms) => [...ms, { role: "user", content: text }]);
+              setTestDraft("");
+              const res = await api.sendChat(tid, text, "chat");
+              const reply = res?.message?.content || "(no reply)";
+              setTestMessages((ms) => [...ms, { role: "assistant", content: reply }]);
+            } catch (err) { notifyError(err); }
+            finally { setTestBusy(false); }
+          }} className="flex gap-2">
+            <input value={testDraft} onChange={(e) => setTestDraft(e.target.value)} className={`${FORM_INPUT} flex-1`} placeholder="Test this bot..." />
+            <Button type="submit" variant="primary" disabled={testBusy || !testDraft.trim()}>{testBusy ? "…" : "Send"}</Button>
+          </form>
+        </section>
+      ) : null}
+
       {showFace ? (
         <Modal title="Change face" onClose={() => setShowFace(false)}>
           <FacePicker value={faceDraft} onChange={setFaceDraft} compact />
@@ -927,6 +1001,30 @@ export function BotDetailView({
                 <option value="passive">Passive (responds when addressed)</option>
                 <option value="away">Away</option>
               </select>
+            </Field>
+            <Field label="Workspace access">
+              <select value={editWorkspaceAccess} onChange={(e) => setEditWorkspaceAccess(e.target.value as any)} className={FORM_INPUT}>
+                <option value="none">None — cannot access project workspace files</option>
+                <option value="read">Read — can list and read workspace files</option>
+                <option value="write">Write — can read and modify workspace files</option>
+                <option value="exec">Exec — can read, write, and run commands in workspace</option>
+              </select>
+              <div className="mt-1 text-step--2 text-[var(--faint)]">
+                {editWorkspaceAccess === "none" ? "Deny by default. The bot cannot touch workspace files." : null}
+                {editWorkspaceAccess === "read" ? "Bot can inspect files but cannot change them or run commands." : null}
+                {editWorkspaceAccess === "write" ? "Warning: bot can modify files in the project workspace. Use with care." : null}
+                {editWorkspaceAccess === "exec" ? "Warning: bot can modify files and run shell commands in the project workspace. Exec always requires owner approval until a sandbox exists." : null}
+              </div>
+            </Field>
+            <Field label="Autonomy">
+              <select value={editAutonomyLevel} onChange={(e) => setEditAutonomyLevel(e.target.value as any)} className={FORM_INPUT}>
+                <option value="ask_first">Ask first — every write/exec requires approval</option>
+                <option value="act_and_report">Act and report — acts within scope, posts summary; exec still requires approval</option>
+                <option value="act_silently">Act silently — acts within scope, logged only; exec still requires approval</option>
+              </select>
+              <div className="mt-1 text-step--2 text-[var(--faint)]">Exec always requires approval, regardless of autonomy level, until a sandbox exists.</div>
+              {editAutonomyLevel === "act_silently" ? <div className="mt-1 text-step--2 text-[var(--warn)]">Warning: silent autonomy can make changes without visible chat summaries.</div> : null}
+              <label className="mt-2 flex items-center gap-2 text-step--2 text-[var(--muted)]"><input type="checkbox" checked={editPaused} onChange={(e) => setEditPaused(e.target.checked)} /> Paused (stops autonomous activity)</label>
             </Field>
             <Field label="Autonomy policy (JSON)">
               <textarea value={editAutonomyPolicy} onChange={(e) => setEditAutonomyPolicy(e.target.value)} rows={4} className={`${FORM_INPUT} resize-y font-mono text-step--2`} placeholder='{"can_watch": true, "triggers": []}' />

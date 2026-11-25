@@ -70,6 +70,8 @@ class WorkspaceFileWrite(_Body):
     content: str | None = None
     # Optional optimistic concurrency token (file mtime from read/tree).
     expected_mtime: float | None = None
+    # Preferred optimistic concurrency token.
+    expected_hash: str | None = None
 
 
 class WorkspaceFileDelete(_Body):
@@ -130,6 +132,17 @@ class TeammateCreate(_Body):
     # face the catalogue does not know is a bad request, not a malformed
     # body.
     face: dict[str, Any] | None = None
+    # Bot builder/profile
+    tagline: str | None = None
+    voice_style: str | None = None
+    boundaries: str | None = None
+    starter_prompts: list[str] | None = None
+    greeting: str | None = None
+    behavior_tuning: dict[str, Any] | None = None
+    presence_mode: str | None = None
+    autonomy_policy: dict[str, Any] | None = None
+    autonomy_level: str | None = None
+    paused: bool | None = None
 
 
 class TeammateUpdate(_Body):
@@ -159,6 +172,17 @@ class TeammateUpdate(_Body):
     goals: str | None = None
     wisdom: str | None = None
     persona_version: int | None = None
+    # Bot builder/profile
+    tagline: str | None = None
+    voice_style: str | None = None
+    boundaries: str | None = None
+    starter_prompts: list[str] | None = None
+    greeting: str | None = None
+    behavior_tuning: dict[str, Any] | None = None
+    presence_mode: str | None = None
+    autonomy_policy: dict[str, Any] | None = None
+    autonomy_level: str | None = None
+    paused: bool | None = None
 
 
 class PersonaWrite(_Body):
@@ -299,3 +323,20 @@ class EventPatch(_Body):
     all_day: bool | None = None
     color: str | None = None
     status: str | None = None
+
+
+class RoutineCreate(_Body):
+    name: str | None = None
+    prompt: str | None = None
+    interval_s: int | None = None
+    enabled: bool | None = None
+    kind: str | None = None
+
+
+class RoutinePatch(_Body):
+    name: str | None = None
+    prompt: str | None = None
+    interval_s: int | None = None
+    enabled: bool | None = None
+    kind: str | None = None
+    last_run_at: str | None = None

@@ -366,12 +366,33 @@ def create_app() -> FastAPI:
                 name="nerdbot-executor",
             )
             _executor_thread.start()
+
+        # Proactive teammate routines (Grok-bot-like autonomy). Enabled by default;
+        # set NERDBOT_ROUTINES=0 to disable.
+        _routine_stop = threading.Event()
+        _routine_thread: threading.Thread | None = None
+        if os.environ.get("NERDBOT_ROUTINES", "1") == "1":
+            from . import routines as routines_mod
+            _routine_thread = threading.Thread(
+                target=routines_mod.sweep_loop,
+                kwargs={
+                    "interval_s": float(os.environ.get("NERDBOT_ROUTINES_INTERVAL_S", "60.0")),
+                    "db_path": _db_path(),
+                    "stop_event": _routine_stop,
+                },
+                daemon=True,
+                name="nerdbot-routines",
+            )
+            _routine_thread.start()
         try:
             yield
         finally:
             _executor_stop.set()
+            _routine_stop.set()
             if _executor_thread is not None:
                 _executor_thread.join(timeout=5.0)
+            if _routine_thread is not None:
+                _routine_thread.join(timeout=5.0)
             terminal_mod.close_all()
 
     app = FastAPI(title="NerdBot Workspace", lifespan=lifespan)
@@ -537,6 +558,16 @@ def create_app() -> FastAPI:
             fallback_provider_id=body.fallback_provider_id,
             fallback_model=body.fallback_model,
             face=face,
+            tagline=body.tagline or "",
+            voice_style=body.voice_style or "",
+            boundaries=body.boundaries or "",
+            starter_prompts=list(body.starter_prompts or []),
+            greeting=body.greeting or "",
+            behavior_tuning=dict(body.behavior_tuning or {}),
+            presence_mode=body.presence_mode or "active",
+            autonomy_policy=dict(body.autonomy_policy or {}),
+            autonomy_level=body.autonomy_level or "ask_first",
+            paused=bool(body.paused) if body.paused is not None else False,
             acting=acting,
         )
         return _teammate_payload(conn, mate)
@@ -760,6 +791,16 @@ def create_app() -> FastAPI:
             "goals": body.get("goals"),
             "wisdom": body.get("wisdom"),
             "persona_version": body.get("persona_version"),
+            **({"tagline": body.get("tagline")} if "tagline" in body else {}),
+            **({"voice_style": body.get("voice_style")} if "voice_style" in body else {}),
+            **({"boundaries": body.get("boundaries")} if "boundaries" in body else {}),
+            **({"starter_prompts": body.get("starter_prompts")} if "starter_prompts" in body else {}),
+            **({"greeting": body.get("greeting")} if "greeting" in body else {}),
+            **({"behavior_tuning": body.get("behavior_tuning")} if "behavior_tuning" in body else {}),
+            **({"presence_mode": body.get("presence_mode")} if "presence_mode" in body else {}),
+            **({"autonomy_policy": body.get("autonomy_policy")} if "autonomy_policy" in body else {}),
+            **({"autonomy_level": body.get("autonomy_level")} if "autonomy_level" in body else {}),
+            **({"paused": body.get("paused")} if "paused" in body else {}),
         }
         if body.get("face") is not None:
             updates["face"] = _validated_face(body.get("face"))
@@ -3025,10 +3066,12 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=410, detail=str(exc)) from exc
 
         resume: dict[str, Any] | None = None
+        is_workspace = str(approval.action or "").startswith("workspace.") or str(approval.tool_name or "").startswith("workspace.")
         if decision in (Decision.APPROVED, Decision.APPROVED_FOREVER):
-            outcome = approval_flow.resume_run(
-                conn, approval.run_id, data_dir=_data_dir()
-            )
+            if is_workspace and not approval.run_id:
+                outcome = approval_flow.resume_standalone_approval(conn, approval, data_dir=_data_dir())
+            else:
+                outcome = approval_flow.resume_run(conn, approval.run_id, data_dir=_data_dir())
             resume = {
                 "outcome": outcome.outcome,
                 "output": outcome.output,
@@ -3039,7 +3082,10 @@ def create_app() -> FastAPI:
                 "performed": outcome.performed,
             }
         else:
-            outcome = approval_flow.close_rejected_action(conn, approval)
+            if is_workspace and not approval.run_id:
+                outcome = approval_flow.close_standalone_rejected(conn, approval)
+            else:
+                outcome = approval_flow.close_rejected_action(conn, approval)
             resume = {
                 "outcome": outcome.outcome,
                 "output": outcome.output,
@@ -3049,6 +3095,15 @@ def create_app() -> FastAPI:
                 "task_status": outcome.task_status,
                 "performed": outcome.performed,
             }
+        # Post workspace approval outcome to the originating thread when available.
+        try:
+            payload = json.loads(approval.tool_arguments or "{}") if str(approval.action or "").startswith("workspace.") else {}
+            tid = str((payload.get("args") or {}).get("thread_id") or payload.get("thread_id") or "")
+            if tid and resume is not None:
+                msg = f"Workspace approval {approval.id} {approval.decision.value}: {resume.get('outcome')} — {resume.get('output','')}"
+                store.append_message(conn, tid, "assistant", msg[:2000], parts=[{"type":"workspace_approval", "approval_id": approval.id, "outcome": resume.get("outcome")}])
+        except Exception:
+            pass
         return {
             **approval.model_dump(mode="json"),
             "resume": resume,
@@ -3910,6 +3965,50 @@ def create_app() -> FastAPI:
         _require_teammate_access(conn, mate, principal)
         ok = store.detach_skill(conn, teammate_id, skill_id)
         return {"detached": ok}
+
+    # -- Teammate routines (proactive/autonomous behavior) -------------------
+
+    @app.get("/teammates/{teammate_id}/routines")
+    def list_teammate_routines(teammate_id: str, conn: sqlite3.Connection = Depends(get_conn), principal: str = Depends(principal_from_header)) -> dict[str, Any]:
+        mate = store.get_teammate(conn, teammate_id)
+        if mate is None: raise HTTPException(status_code=404, detail="teammate not found")
+        _require_teammate_access(conn, mate, principal)
+        return {"routines": [r.model_dump(mode="json") for r in store.list_routines(conn, teammate_id)]}
+
+    @app.post("/teammates/{teammate_id}/routines")
+    def create_teammate_routine(teammate_id: str, body: schemas.RoutineCreate, conn: sqlite3.Connection = Depends(get_conn), principal: str = Depends(principal_from_header)) -> dict[str, Any]:
+        mate = store.get_teammate(conn, teammate_id)
+        if mate is None: raise HTTPException(status_code=404, detail="teammate not found")
+        _require_teammate_access(conn, mate, principal)
+        routine = store.create_routine(
+            conn, teammate_id, mate.project_id,
+            name=body.name or "Routine",
+            prompt=body.prompt or "",
+            interval_s=int(body.interval_s or 3600),
+            enabled=bool(body.enabled) if body.enabled is not None else True,
+            kind=body.kind or "watch",
+        )
+        return routine.model_dump(mode="json")
+
+    @app.patch("/routines/{routine_id}")
+    def patch_routine(routine_id: str, body: schemas.RoutinePatch, conn: sqlite3.Connection = Depends(get_conn), principal: str = Depends(principal_from_header)) -> dict[str, Any]:
+        routine = store.get_routine(conn, routine_id)
+        if routine is None: raise HTTPException(status_code=404, detail="routine not found")
+        mate = store.get_teammate(conn, routine.teammate_id)
+        if mate is None: raise HTTPException(status_code=404, detail="teammate not found")
+        _require_teammate_access(conn, mate, principal)
+        updated = store.update_routine(conn, routine_id, **body.model_dump(exclude_none=True))
+        return updated.model_dump(mode="json")
+
+    @app.delete("/routines/{routine_id}")
+    def delete_routine_endpoint(routine_id: str, conn: sqlite3.Connection = Depends(get_conn), principal: str = Depends(principal_from_header)) -> dict[str, Any]:
+        routine = store.get_routine(conn, routine_id)
+        if routine is None: raise HTTPException(status_code=404, detail="routine not found")
+        mate = store.get_teammate(conn, routine.teammate_id)
+        if mate is None: raise HTTPException(status_code=404, detail="teammate not found")
+        _require_teammate_access(conn, mate, principal)
+        store.delete_routine(conn, routine_id)
+        return {"deleted": True, "id": routine_id}
 
     # -- Schedules & reminders (Phase 2) --------------------------------------
 
@@ -5354,7 +5453,8 @@ def create_app() -> FastAPI:
             mode = str(body.get("mode", "chat") or "chat")
             text, parts = chat_mod.chat_complete_with_tools(
                 provider, messages, conn=conn, project_id=thread.project_id,
-                thread_id=thread.id, mode=mode,
+                thread_id=thread.id, mode=mode, teammate=speaker, data_dir=_data_dir(),
+                memory_used=bool(provenance),
             )
         except Exception as exc:
             raise _chat_error_to_http(exc) from exc
@@ -5415,6 +5515,7 @@ def create_app() -> FastAPI:
                 for event in chat_mod.chat_stream_with_tools(
                     provider, messages, conn=conn, project_id=thread.project_id,
                     thread_id=thread.id, mode=str(body.get("mode", "chat") or "chat"),
+                    teammate=speaker, data_dir=_data_dir(), memory_used=bool(provenance),
                 ):
                     yield f"data: {_json.dumps(event)}\n\n"
                     if isinstance(event, dict):
@@ -5470,6 +5571,106 @@ def create_app() -> FastAPI:
         store.delete_project(conn, project_id)
         return {"deleted": True}
 
+    @app.get("/workspace/browse")
+    def browse_workspace(
+        path: str = "",
+        _principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """Browse server directories for the workspace picker (Odysseus-style).
+
+        Directories only, admin/owner-authenticated. This is a picker helper;
+        it does not bind a workspace.
+        """
+        return workspace_mgr.browse_workspace_dirs(path)
+
+    @app.get("/workspace/vet")
+    def vet_workspace(
+        path: str = "",
+        _principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """Validate a candidate workspace path before binding."""
+        resolved = workspace_mgr.vet_workspace_candidate(path)
+        return {"ok": resolved is not None, "path": str(resolved) if resolved else None}
+
+    @app.get("/workspace/default")
+    def default_workspace(
+        _principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """Return the explicitly configured default workspace, if any."""
+        resolved = workspace_mgr.default_workspace_path(_data_dir())
+        return {"ok": resolved is not None, "path": resolved}
+
+    @app.get("/projects/{project_id}/workspace/audit")
+    def get_workspace_audit(
+        project_id: str,
+        limit: int = 100,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """List recent workspace gateway audit rows for a project.
+
+        Args:
+            project_id: Project id.
+            limit: Max rows (1-500).
+            conn: DB connection.
+            principal: Authenticated principal.
+
+        Returns:
+            Dict with audit rows.
+        """
+        require_project_owner(conn, project_id, principal)
+        rows = store.list_workspace_audit(conn, project_id, limit=limit)
+        return {"items": rows, "count": len(rows)}
+
+    @app.post("/projects/{project_id}/workspace/revert")
+    def revert_workspace_file(
+        project_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """Revert a teammate-changed file to a snapshot state.
+
+        Refuses if the user changed it since (hash check) unless forced.
+
+        Args:
+            project_id: Project id.
+            body: {path, snapshot_ref|commit, expected_hash?, force?}
+            conn: DB connection.
+            principal: Auth principal.
+
+        Returns:
+            Revert result.
+        """
+        require_project_owner(conn, project_id, principal)
+        project = store.get_project(conn, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="project not found")
+        root = workspace_mgr.configured_project_root(project, _data_dir())
+        relpath = str(body.get("path") or "")
+        ref = str(body.get("snapshot_ref") or body.get("commit") or body.get("ref") or "")
+        force = bool(body.get("force", False))
+        expected_hash = body.get("expected_hash")
+        target = workspace_mgr.safe_workspace_path(root, relpath)
+        if target.exists() and target.is_file():
+            current_hash = workspace_mgr.file_sha256(target)
+            if expected_hash and expected_hash != current_hash and not force:
+                raise HTTPException(status_code=409, detail=f"file changed since snapshot; current sha256={current_hash}")
+            if not force and expected_hash is None:
+                # If no expected hash, be conservative - require force
+                pass
+        if not ref:
+            raise HTTPException(status_code=400, detail="snapshot_ref or commit is required")
+        # restore from git snapshot ref
+        import subprocess
+        show = subprocess.run(["git", "show", f"{ref}:{relpath}"], cwd=str(root), capture_output=True, text=False)
+        if show.returncode != 0:
+            raise HTTPException(status_code=400, detail=f"cannot restore: {show.stderr.decode(errors='replace').strip()}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(show.stdout)
+        store.record_event(conn, project_id, "workspace", relpath, "workspace.file.reverted")
+        return {"ok": True, "path": relpath, "sha256": workspace_mgr.file_sha256(target)}
+
     @app.get("/projects/{project_id}/workspace")
     def get_project_workspace(
         project_id: str,
@@ -5515,14 +5716,12 @@ def create_app() -> FastAPI:
         raw = (body.path or "").strip()
         if not raw:
             raise HTTPException(status_code=400, detail="path is required")
-        root = Path(raw).expanduser()
-        if not root.is_absolute():
-            raise HTTPException(status_code=400, detail="path must be absolute")
-        root = root.resolve()
-        if root == Path(root.anchor):
-            raise HTTPException(status_code=400, detail="refusing to attach a filesystem root")
-        if not root.is_dir():
-            raise HTTPException(status_code=400, detail=f"not a directory: {root}")
+        root = workspace_mgr.vet_workspace_candidate(raw)
+        if root is None:
+            raise HTTPException(
+                status_code=400,
+                detail="workspace path must be an existing non-sensitive absolute directory",
+            )
         previous = dict(project.config)
         config = dict(previous)
         config["workspace_root"] = str(root)
@@ -5606,6 +5805,7 @@ def create_app() -> FastAPI:
                 body.path or "",
                 body.content or "",
                 expected_mtime=body.expected_mtime,
+                expected_hash=body.expected_hash,
             )
         except workspace_mgr.WorkspaceConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc

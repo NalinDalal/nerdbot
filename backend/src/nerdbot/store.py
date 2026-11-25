@@ -63,6 +63,7 @@ from .models import (
     ResearchJobStatus,
     Review,
     ReviewVerdict,
+    Routine,
     Run,
     RunStatus,
     Reminder,
@@ -92,7 +93,21 @@ CREATE TABLE IF NOT EXISTS teammates (
   capabilities TEXT NOT NULL DEFAULT '[]', memory_scope TEXT NOT NULL DEFAULT 'teammate',
   permissions TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'active',
   tool_policy TEXT NOT NULL DEFAULT '{}', provider_id TEXT, created_at TEXT NOT NULL DEFAULT '',
-  face TEXT NOT NULL DEFAULT ''
+  face TEXT NOT NULL DEFAULT '',
+  soul TEXT NOT NULL DEFAULT '',
+  goals TEXT NOT NULL DEFAULT '',
+  wisdom TEXT NOT NULL DEFAULT '',
+  persona_version INTEGER NOT NULL DEFAULT 0,
+  tagline TEXT NOT NULL DEFAULT '',
+  voice_style TEXT NOT NULL DEFAULT '',
+  boundaries TEXT NOT NULL DEFAULT '',
+  starter_prompts TEXT NOT NULL DEFAULT '[]',
+  greeting TEXT NOT NULL DEFAULT '',
+  behavior_tuning TEXT NOT NULL DEFAULT '{}',
+  presence_mode TEXT NOT NULL DEFAULT 'active',
+  autonomy_policy TEXT NOT NULL DEFAULT '{}',
+  autonomy_level TEXT NOT NULL DEFAULT 'ask_first',
+  paused INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
@@ -141,6 +156,13 @@ CREATE TABLE IF NOT EXISTS teammate_skills (
   UNIQUE(teammate_id, skill_id)
 );
 CREATE INDEX IF NOT EXISTS idx_teammate_skills ON teammate_skills(teammate_id);
+CREATE TABLE IF NOT EXISTS teammate_routines (
+  id TEXT PRIMARY KEY, teammate_id TEXT NOT NULL, project_id TEXT NOT NULL,
+  name TEXT NOT NULL, prompt TEXT NOT NULL DEFAULT '', interval_s INTEGER NOT NULL DEFAULT 3600,
+  enabled INTEGER NOT NULL DEFAULT 1, kind TEXT NOT NULL DEFAULT 'watch',
+  last_run_at TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_teammate_routines ON teammate_routines(teammate_id, enabled);
 CREATE TABLE IF NOT EXISTS artifacts (
   id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), run_id TEXT NOT NULL,
   type TEXT NOT NULL DEFAULT 'patch', location TEXT NOT NULL DEFAULT '',
@@ -177,6 +199,13 @@ CREATE TABLE IF NOT EXISTS events (
   id TEXT PRIMARY KEY, project_id TEXT NOT NULL, entity TEXT NOT NULL, entity_id TEXT NOT NULL,
   event_type TEXT NOT NULL, timestamp TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS workspace_audit (
+  id TEXT PRIMARY KEY, project_id TEXT NOT NULL DEFAULT '', actor_kind TEXT NOT NULL DEFAULT '',
+  actor_id TEXT NOT NULL DEFAULT '', action TEXT NOT NULL DEFAULT '', path TEXT NOT NULL DEFAULT '',
+  ok INTEGER NOT NULL DEFAULT 0, denied INTEGER NOT NULL DEFAULT 0, reason TEXT NOT NULL DEFAULT '',
+  args_summary TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_workspace_audit_project ON workspace_audit(project_id, created_at DESC);
 CREATE TABLE IF NOT EXISTS providers (
   id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
   kind TEXT NOT NULL DEFAULT 'local', name TEXT NOT NULL DEFAULT '',
@@ -812,6 +841,33 @@ _PHASE33_COLUMNS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
+_PHASE34_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    # Grok-bot-like teammate profile: builder UX, presence, and autonomy.
+    "teammates": [
+        ("tagline", "TEXT NOT NULL DEFAULT ''"),
+        ("voice_style", "TEXT NOT NULL DEFAULT ''"),
+        ("boundaries", "TEXT NOT NULL DEFAULT ''"),
+        ("starter_prompts", "TEXT NOT NULL DEFAULT '[]'"),
+        ("greeting", "TEXT NOT NULL DEFAULT ''"),
+        ("behavior_tuning", "TEXT NOT NULL DEFAULT '{}'"),
+        ("presence_mode", "TEXT NOT NULL DEFAULT 'active'"),
+        ("autonomy_policy", "TEXT NOT NULL DEFAULT '{}'"),
+    ],
+}
+
+_PHASE35_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    # Simple proactive routines for always-on/autonomous teammates.
+    "teammate_routines": [],
+}
+
+_PHASE36_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    # Autonomy level and pause control for Grok-bot-like teammates.
+    "teammates": [
+        ("autonomy_level", "TEXT NOT NULL DEFAULT 'ask_first'"),
+        ("paused", "INTEGER NOT NULL DEFAULT 0"),
+    ],
+}
+
 
 _PHASE20_COLUMNS: dict[str, list[tuple[str, str]]] = {
     # Bot persona files (ai-teammates model): a bot's identity, its active
@@ -846,7 +902,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
                   _PHASE21_COLUMNS, _PHASE22_COLUMNS, _PHASE23_COLUMNS, _PHASE24_COLUMNS,
                   _PHASE25_COLUMNS, _PHASE26_COLUMNS, _PHASE27_COLUMNS, _PHASE28_COLUMNS,
                   _PHASE29_COLUMNS, _PHASE30_COLUMNS, _PHASE31_COLUMNS, _PHASE32_COLUMNS,
-                  _PHASE33_COLUMNS):
+                  _PHASE33_COLUMNS, _PHASE34_COLUMNS, _PHASE35_COLUMNS, _PHASE36_COLUMNS):
         for table, columns in phase.items():
             phases.setdefault(table, []).extend(columns)
     for table, columns in phases.items():
@@ -1279,6 +1335,16 @@ def create_teammate(
     memory_scope: str = "project",
     permissions: list[str] | None = None,
     face: dict[str, str] | None = None,
+    tagline: str = "",
+    voice_style: str = "",
+    boundaries: str = "",
+    starter_prompts: list[str] | None = None,
+    greeting: str = "",
+    behavior_tuning: dict[str, Any] | None = None,
+    presence_mode: str = "active",
+    autonomy_policy: dict[str, Any] | None = None,
+    autonomy_level: str = "ask_first",
+    paused: bool = False,
 ) -> Teammate:
     if get_project(conn, project_id) is None:
         raise KeyError(f"unknown project {project_id}")
@@ -1298,11 +1364,23 @@ def create_teammate(
         memory_scope=memory_scope,
         permissions=permissions or [],
         face=BotFace(**faces_mod.merge_face(face or {})),
+        tagline=tagline or "",
+        voice_style=voice_style or "",
+        boundaries=boundaries or "",
+        starter_prompts=list(starter_prompts or []),
+        greeting=greeting or "",
+        behavior_tuning=dict(behavior_tuning or {}),
+        presence_mode=presence_mode or "active",
+        autonomy_policy=dict(autonomy_policy or {}),
+        autonomy_level=autonomy_level or "ask_first",
+        paused=bool(paused),
     )
     conn.execute(
         "INSERT INTO teammates (id, project_id, slug, name, persona, instructions, capabilities,"
-        " memory_scope, permissions, face, soul, goals, wisdom, persona_version)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " memory_scope, permissions, face, soul, goals, wisdom, persona_version,"
+        " tagline, voice_style, boundaries, starter_prompts, greeting, behavior_tuning,"
+        " presence_mode, autonomy_policy, autonomy_level, paused)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             mate.id,
             mate.project_id,
@@ -1318,6 +1396,16 @@ def create_teammate(
             mate.goals,
             mate.wisdom,
             mate.persona_version,
+            mate.tagline,
+            mate.voice_style,
+            mate.boundaries,
+            json.dumps(mate.starter_prompts),
+            mate.greeting,
+            json.dumps(mate.behavior_tuning),
+            mate.presence_mode,
+            json.dumps(mate.autonomy_policy),
+            mate.autonomy_level,
+            int(mate.paused),
         ),
     )
     conn.commit()
@@ -1357,6 +1445,16 @@ def _teammate_from_row(row: sqlite3.Row) -> Teammate:
         goals=row["goals"] if "goals" in keys else "",
         wisdom=row["wisdom"] if "wisdom" in keys else "",
         persona_version=int(row["persona_version"]) if "persona_version" in keys and row["persona_version"] else 0,
+        tagline=row["tagline"] if "tagline" in keys and row["tagline"] else "",
+        voice_style=row["voice_style"] if "voice_style" in keys and row["voice_style"] else "",
+        boundaries=row["boundaries"] if "boundaries" in keys and row["boundaries"] else "",
+        starter_prompts=json.loads(row["starter_prompts"]) if "starter_prompts" in keys and row["starter_prompts"] else [],
+        greeting=row["greeting"] if "greeting" in keys and row["greeting"] else "",
+        behavior_tuning=json.loads(row["behavior_tuning"]) if "behavior_tuning" in keys and row["behavior_tuning"] else {},
+        presence_mode=row["presence_mode"] if "presence_mode" in keys and row["presence_mode"] else "active",
+        autonomy_policy=json.loads(row["autonomy_policy"]) if "autonomy_policy" in keys and row["autonomy_policy"] else {},
+        autonomy_level=row["autonomy_level"] if "autonomy_level" in keys and row["autonomy_level"] else "ask_first",
+        paused=bool(row["paused"]) if "paused" in keys and row["paused"] is not None else False,
     )
 
 
@@ -1443,6 +1541,16 @@ def update_teammate(
     goals: str | None = None,
     wisdom: str | None = None,
     persona_version: int | None = None,
+    tagline: str | None = None,
+    voice_style: str | None = None,
+    boundaries: str | None = None,
+    starter_prompts: list[str] | None = None,
+    greeting: str | None = None,
+    behavior_tuning: dict[str, Any] | None = None,
+    presence_mode: str | None = None,
+    autonomy_policy: dict[str, Any] | None = None,
+    autonomy_level: str | None = None,
+    paused: bool | None = None,
 ) -> Teammate:
     """``clear_provider=True`` explicitly detaches the model (PATCH with
     ``provider_id: null``); a param of None alone means "no change"."""
@@ -1483,6 +1591,28 @@ def update_teammate(
         mate.wisdom = wisdom
     if persona_version is not None:
         mate.persona_version = persona_version
+    if tagline is not None:
+        mate.tagline = tagline
+    if voice_style is not None:
+        mate.voice_style = voice_style
+    if boundaries is not None:
+        mate.boundaries = boundaries
+    if starter_prompts is not None:
+        mate.starter_prompts = list(starter_prompts)
+    if greeting is not None:
+        mate.greeting = greeting
+    if behavior_tuning is not None:
+        mate.behavior_tuning = dict(behavior_tuning)
+    if presence_mode is not None:
+        mate.presence_mode = presence_mode
+    if autonomy_policy is not None:
+        mate.autonomy_policy = dict(autonomy_policy)
+    if autonomy_level is not None:
+        if autonomy_level not in {"ask_first", "act_and_report", "act_silently"}:
+            raise ValueError("autonomy_level must be ask_first, act_and_report, or act_silently")
+        mate.autonomy_level = autonomy_level
+    if paused is not None:
+        mate.paused = bool(paused)
     if clear_provider:
         mate.provider_id = None
     if model is not _UNSET:
@@ -1515,7 +1645,9 @@ def update_teammate(
         " capabilities = ?,"
         " memory_scope = ?, permissions = ?, tool_policy = ?, provider_id = ?, model = ?,"
         " temperature = ?, max_tokens = ?, context_limit = ?, fallback_provider_id = ?,"
-        " fallback_model = ?, face = ?, soul = ?, goals = ?, wisdom = ?, persona_version = ?"
+        " fallback_model = ?, face = ?, soul = ?, goals = ?, wisdom = ?, persona_version = ?,"
+        " tagline = ?, voice_style = ?, boundaries = ?, starter_prompts = ?, greeting = ?,"
+        " behavior_tuning = ?, presence_mode = ?, autonomy_policy = ?, autonomy_level = ?, paused = ?"
         " WHERE id = ?",
         (
             mate.persona,
@@ -1538,6 +1670,16 @@ def update_teammate(
             mate.goals,
             mate.wisdom,
             mate.persona_version,
+            mate.tagline,
+            mate.voice_style,
+            mate.boundaries,
+            json.dumps(mate.starter_prompts),
+            mate.greeting,
+            json.dumps(mate.behavior_tuning),
+            mate.presence_mode,
+            json.dumps(mate.autonomy_policy),
+            mate.autonomy_level,
+            int(mate.paused),
             mate.id,
         ),
     )
@@ -7582,3 +7724,164 @@ def delete_event(conn: sqlite3.Connection, event_id: str) -> bool:
     cur = conn.execute("DELETE FROM calendar_events WHERE id = ?", (event_id,))
     conn.commit()
     return cur.rowcount > 0
+
+
+# -- Teammate routines (proactive/autonomous behavior)
+
+def create_routine(
+    conn: sqlite3.Connection,
+    teammate_id: str,
+    project_id: str,
+    name: str,
+    prompt: str,
+    interval_s: int = 3600,
+    enabled: bool = True,
+    kind: str = "watch",
+) -> Routine:
+    mate = get_teammate(conn, teammate_id)
+    if mate is None:
+        raise KeyError(f"unknown teammate {teammate_id}")
+    now = _now_iso()
+    routine = Routine(
+        id=new_id("rtn"),
+        teammate_id=teammate_id,
+        project_id=project_id,
+        name=name or "Routine",
+        prompt=prompt or "",
+        interval_s=max(60, int(interval_s or 3600)),
+        enabled=bool(enabled),
+        kind=kind or "watch",
+        last_run_at="",
+        created_at=datetime.fromisoformat(now.replace("Z", "+00:00")) if now.endswith("Z") else datetime.fromisoformat(now),
+    )
+    conn.execute(
+        "INSERT INTO teammate_routines (id,teammate_id,project_id,name,prompt,interval_s,enabled,kind,last_run_at,created_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (routine.id, routine.teammate_id, routine.project_id, routine.name, routine.prompt, routine.interval_s,
+         int(routine.enabled), routine.kind, routine.last_run_at, routine.created_at.isoformat()),
+    )
+    conn.commit()
+    return routine
+
+
+def _routine_from_row(row: sqlite3.Row) -> Routine:
+    keys = row.keys()
+    return Routine(
+        id=row["id"],
+        teammate_id=row["teammate_id"],
+        project_id=row["project_id"],
+        name=row["name"],
+        prompt=row["prompt"] or "",
+        interval_s=int(row["interval_s"] or 3600),
+        enabled=bool(row["enabled"]),
+        kind=row["kind"] or "watch",
+        last_run_at=row["last_run_at"] or "",
+        created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else _utcnow(),
+    )
+
+
+def list_routines(conn: sqlite3.Connection, teammate_id: str) -> list[Routine]:
+    rows = conn.execute("SELECT * FROM teammate_routines WHERE teammate_id=? ORDER BY rowid DESC", (teammate_id,)).fetchall()
+    return [_routine_from_row(r) for r in rows]
+
+
+def get_routine(conn: sqlite3.Connection, routine_id: str) -> Routine | None:
+    row = conn.execute("SELECT * FROM teammate_routines WHERE id=?", (routine_id,)).fetchone()
+    return _routine_from_row(row) if row else None
+
+
+def update_routine(conn: sqlite3.Connection, routine_id: str, **fields: Any) -> Routine:
+    routine = get_routine(conn, routine_id)
+    if routine is None:
+        raise KeyError(f"unknown routine {routine_id}")
+    updates = {}
+    for k in ("name","prompt","interval_s","enabled","kind","last_run_at"):
+        if k in fields and fields[k] is not None:
+            updates[k] = fields[k]
+    if not updates:
+        return routine
+    if "interval_s" in updates:
+        updates["interval_s"] = max(60, int(updates["interval_s"]))
+    if "enabled" in updates:
+        updates["enabled"] = int(bool(updates["enabled"]))
+    sets = [f"{k}=?" for k in updates]
+    args = list(updates.values()) + [routine_id]
+    conn.execute(f"UPDATE teammate_routines SET {', '.join(sets)} WHERE id=?", args)
+    conn.commit()
+    return get_routine(conn, routine_id)  # type: ignore[return-value]
+
+
+def delete_routine(conn: sqlite3.Connection, routine_id: str) -> bool:
+    cur = conn.execute("DELETE FROM teammate_routines WHERE id=?", (routine_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def record_workspace_audit(
+    conn: sqlite3.Connection,
+    *,
+    project_id: str,
+    actor_kind: str,
+    actor_id: str,
+    action: str,
+    path: str,
+    ok: bool,
+    denied: bool,
+    reason: str,
+    args_summary: str = "",
+) -> str:
+    """Record a workspace gateway audit row.
+
+    Args:
+        conn: SQLite connection.
+        project_id: Project scope.
+        actor_kind: "user" or "teammate".
+        actor_id: Actor id.
+        action: Workspace action.
+        path: Relative path.
+        ok: Whether action succeeded.
+        denied: Whether action was denied.
+        reason: Human-readable reason.
+        args_summary: Bounded summary of arguments.
+
+    Returns:
+        Audit row id.
+    """
+    audit_id = new_id("waud")
+    conn.execute(
+        "INSERT INTO workspace_audit (id, project_id, actor_kind, actor_id, action, path, ok, denied, reason, args_summary, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            audit_id,
+            project_id,
+            actor_kind,
+            actor_id,
+            action,
+            path,
+            int(ok),
+            int(denied),
+            (reason or "")[:500],
+            (args_summary or "")[:500],
+            _now_iso(),
+        ),
+    )
+    conn.commit()
+    return audit_id
+
+
+def list_workspace_audit(conn: sqlite3.Connection, project_id: str, limit: int = 100) -> list[dict[str, Any]]:
+    """List recent workspace audit rows for a project.
+
+    Args:
+        conn: SQLite connection.
+        project_id: Project id.
+        limit: Max rows.
+
+    Returns:
+        List of audit dicts, newest first.
+    """
+    rows = conn.execute(
+        "SELECT * FROM workspace_audit WHERE project_id = ? ORDER BY created_at DESC LIMIT ?",
+        (project_id, max(1, min(int(limit), 500))),
+    ).fetchall()
+    return [dict(row) for row in rows]
