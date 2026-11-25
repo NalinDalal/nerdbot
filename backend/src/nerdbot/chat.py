@@ -166,17 +166,34 @@ def resolve_chat_provider(
         if provider is None or provider.project_id != project_id:
             raise ValueError("thread provider must belong to the same project")
         return provider
-    capable: Provider | None = None
-    mock: Provider | None = None
-    for provider in store.list_providers(conn, project_id):
-        if provider.status != ProviderStatus.ACTIVE:
+    def _pick(providers: list[Provider]) -> Provider | None:
+        cap: Provider | None = None
+        m: Provider | None = None
+        for provider in providers:
+            if provider.status != ProviderStatus.ACTIVE:
+                continue
+            if provider.kind == ProviderKind.OPENAI_COMPATIBLE and cap is None:
+                if _has_credentials(provider):
+                    cap = provider
+            elif provider.kind == ProviderKind.MOCK and m is None:
+                m = provider
+        return cap or m
+
+    picked = _pick(store.list_providers(conn, project_id))
+    if picked is not None:
+        return picked
+    # New projects do not inherit providers; fall back to any active provider
+    # configured by the same owner so chat works without per-project duplication.
+    project = store.get_project(conn, project_id)
+    if project is None:
+        return None
+    for other in store.list_projects(conn, project.owner):
+        if other.id == project_id:
             continue
-        if provider.kind == ProviderKind.OPENAI_COMPATIBLE and capable is None:
-            if _has_credentials(provider):
-                capable = provider
-        elif provider.kind == ProviderKind.MOCK and mock is None:
-            mock = provider
-    return capable or mock
+        picked = _pick(store.list_providers(conn, other.id))
+        if picked is not None:
+            return picked
+    return None
 
 
 def _has_credentials(provider: Provider) -> bool:

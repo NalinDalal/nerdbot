@@ -18,10 +18,11 @@ services:
       NERDBOT_EXECUTOR: ${NERDBOT_EXECUTOR:-1}
       NERDBOT_EXECUTOR_INTERVAL_S: ${NERDBOT_EXECUTOR_INTERVAL_S:-15}
       NERDBOT_RUN_TIMEOUT_S: ${NERDBOT_RUN_TIMEOUT_S:-300}
-      NERDBOT_WORKSPACE_MOUNTS: ${NERDBOT_WORKSPACE_MOUNTS:-/private/var/folders/5b/0nh55b5n09qgjmbqg130rzhh0000gn/T/opencode/nerdbot-mount-host=/mnt/nerdbot-mount-host}
+      # Optional: opt-in host mount mapping. Default unset keeps workspaces inside
+      # the container's named data volume. See README "Workspace mounts (opt-in)".
+      # NERDBOT_WORKSPACE_MOUNTS: /host/path=/container/path
     volumes:
       - nerdbot-data:/app/.nerdbot-data
-      - ${NERDBOT_MOUNT_HOST:-/private/var/folders/5b/0nh55b5n09qgjmbqg130rzhh0000gn/T/opencode/nerdbot-mount-host}:${NERDBOT_MOUNT_CONTAINER:-/mnt/nerdbot-mount-host}
     restart: unless-stopped
 
   dashboard:

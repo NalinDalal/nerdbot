@@ -395,7 +395,14 @@ def create_app() -> FastAPI:
                 _routine_thread.join(timeout=5.0)
             terminal_mod.close_all()
 
-    app = FastAPI(title="NerdBot Workspace", lifespan=lifespan)
+    enable_docs = os.environ.get("NERDBOT_ENABLE_DOCS", "").strip() == "1"
+    app = FastAPI(
+        title="NerdBot Workspace",
+        lifespan=lifespan,
+        docs_url="/docs" if enable_docs else None,
+        redoc_url="/redoc" if enable_docs else None,
+        openapi_url="/openapi.json" if enable_docs else None,
+    )
 
     app.add_middleware(
         CORSMiddleware,
@@ -5953,6 +5960,75 @@ def create_app() -> FastAPI:
             return {"ok": False, "status": "failed", "exit_code": int((res.data or {}).get("exit_code", -1)), "output": res.output, "stdout": (res.data or {}).get("stdout",""), "stderr": (res.data or {}).get("stderr", detail)}
         d = res.data or {}
         return {"ok": True, "status": "completed", "exit_code": int(d.get("exit_code", 0)), "output": res.output, "stdout": d.get("stdout",""), "stderr": d.get("stderr","")}
+
+    @app.get("/projects/{project_id}/workspace/export")
+    def export_project_workspace(
+        project_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> Any:
+        """Download the project workspace as a zip archive.
+
+        Owner-only and audited. Files leave the container only through this
+        explicit export path; default deployments do not bind-mount workspaces.
+        """
+        import io
+        import zipfile
+        from fastapi.responses import StreamingResponse
+
+        require_project_owner(conn, project_id, principal)
+        project = store.get_project(conn, project_id)
+        if project is None:  # pragma: no cover
+            raise HTTPException(status_code=404, detail="project not found")
+        root = workspace_mgr.ensure_project_workspace(project, _data_dir())
+        actor = workspace_mgr.WorkspaceActor(kind="user", id=principal, project_id=project_id)
+        allowed, reason = workspace_mgr._check_workspace_permission(actor, "read")
+        if not allowed:
+            store.record_workspace_audit(
+                conn,
+                project_id=project_id,
+                actor_kind="user",
+                actor_id=principal,
+                action="export",
+                path="",
+                ok=False,
+                denied=True,
+                reason=reason,
+            )
+            raise HTTPException(status_code=403, detail=reason)
+
+        buf = io.BytesIO()
+        file_count = 0
+        with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for dirpath, dirnames, filenames in os.walk(root):
+                dirnames[:] = [d for d in dirnames if d not in workspace_mgr.SKIP_DIRS and not d.startswith(".git")]
+                for name in filenames:
+                    full = Path(dirpath) / name
+                    try:
+                        rel = full.relative_to(root).as_posix()
+                    except ValueError:
+                        continue
+                    try:
+                        zf.write(full, rel)
+                        file_count += 1
+                    except OSError:
+                        continue
+        buf.seek(0)
+        store.record_workspace_audit(
+            conn,
+            project_id=project_id,
+            actor_kind="user",
+            actor_id=principal,
+            action="export",
+            path="",
+            ok=True,
+            denied=False,
+            reason="ok",
+            args_summary=f"files={file_count}",
+        )
+        filename = f"{project_id}-workspace.zip"
+        headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+        return StreamingResponse(buf, media_type="application/zip", headers=headers)
 
     @app.get("/projects/{project_id}/workspace/diff")
     def get_project_workspace_diff(

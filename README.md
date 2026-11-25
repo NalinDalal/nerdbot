@@ -72,3 +72,18 @@ Show outcomes and next actions (completed/reviewable results, in-progress work, 
 ## Development notes
 - Backend: `backend/src/nerdbot` (FastAPI, SQLite). Frontend: `dashboard/` (Vite/React/TypeScript).
 - Historical/maintained product knowledge may also exist in external handoff/backup artifacts from prior documentation cleanup.
+
+## Workspace mounts (opt-in)
+
+Nerdbot is a contained application. By default, project workspaces live inside the container's named Docker data volume (`nerdbot-data`, mounted at `/app/.nerdbot-data`), not in host bind mounts and not in the image layer.
+
+Optional host reach-out is available for advanced deployments:
+
+- `NERDBOT_WORKSPACE_MOUNTS="host=/container/path,host2=/container/path2"` maps host-facing paths to container-visible paths.
+- `NERDBOT_WORKSPACE_HOST_ROOT` / `NERDBOT_WORKSPACE_CONTAINER_ROOT` configure a single pair.
+
+These settings widen the container's reach to host paths and should be used only when explicitly needed. They are unset by default in `docker-compose.yml`.
+
+## API docs
+
+FastAPI docs are disabled by default. Set `NERDBOT_ENABLE_DOCS=1` to expose `/docs`, `/redoc`, and `/openapi.json`. Keep disabled in normal contained deployments.
