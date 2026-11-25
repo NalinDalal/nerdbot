@@ -962,6 +962,7 @@ def git_discard_uncommitted(root: Path) -> dict[str, Any]:
 WORKSPACE_ACTIONS = {
     "list", "read", "write", "mkdir", "delete", "rename", "run",
     "git_status", "git_log", "git_diff", "git_commit", "git_rollback", "revert",
+    "checkout_create", "checkout_delete",
 }
 
 
@@ -1008,7 +1009,7 @@ def _required_workspace_permission(action: str) -> str | None:
     """
     if action in {"list", "read", "git_status", "git_log", "git_diff"}:
         return "workspace.read"
-    if action in {"write", "mkdir", "delete", "rename", "git_commit", "git_rollback", "revert"}:
+    if action in {"write", "mkdir", "delete", "rename", "git_commit", "git_rollback", "revert", "checkout_create", "checkout_delete"}:
         return "workspace.write"
     if action == "run":
         return "workspace.exec"
@@ -1065,10 +1066,10 @@ def _needs_approval(actor: WorkspaceActor, action: str, *, untrusted: bool = Fal
     if action == "run":
         # Exec always needs approval, regardless of autonomy level, until sandbox exists.
         return True
-    if untrusted and action in {"write", "mkdir", "delete", "rename", "git_commit", "git_rollback", "revert"}:
+    if untrusted and action in {"write", "mkdir", "delete", "rename", "git_commit", "git_rollback", "revert", "checkout_create", "checkout_delete"}:
         return True
     level = getattr(actor.teammate, "autonomy_level", "ask_first") if actor.teammate else "ask_first"
-    if action in {"write", "mkdir", "delete", "rename", "git_commit", "git_rollback", "revert"}:
+    if action in {"write", "mkdir", "delete", "rename", "git_commit", "git_rollback", "revert", "checkout_create", "checkout_delete"}:
         return level == "ask_first"
     return False
 
@@ -1083,7 +1084,7 @@ def _snapshot_before_write(root: Path, action: str) -> dict[str, Any]:
     Returns:
         Snapshot metadata dict.
     """
-    if action not in {"write", "mkdir", "delete", "rename", "run", "git_commit", "git_rollback", "revert"}:
+    if action not in {"write", "mkdir", "delete", "rename", "run", "git_commit", "git_rollback", "revert", "checkout_create", "checkout_delete"}:
         return {}
     if not is_git_repo(root):
         return {"git": False}
@@ -1252,6 +1253,22 @@ def _execute_workspace_action(root: Path, action: str, relpath: str, args: dict[
             output=f"reverted {rel}",
             data={"path": rel, "sha256": file_sha256(target), "snapshot_ref": ref},
         )
+    if action == "checkout_create":
+        from . import orchestrator as _orchestrator
+        conn = args.get("conn")
+        task_id = str(args.get("task_id") or "")
+        path, branch = _orchestrator.ensure_task_workspace(
+            conn,
+            task_id,
+            data_dir=str(args.get("data_dir") or ".nerdbot-data"),
+            seed_from=args.get("seed_from"),
+            base_branch=args.get("base_branch"),
+        )
+        return WorkspaceResult(ok=True, action=action, path=relpath, output=f"checkout {task_id}", data={"path": str(path), "branch": branch})
+    if action == "checkout_delete":
+        task_id = str(args.get("task_id") or "")
+        removed = cleanup_workspace(str(args.get("data_dir") or ".nerdbot-data"), task_id)
+        return WorkspaceResult(ok=True, action=action, path=relpath, output=f"cleaned {task_id}", data={"removed": bool(removed)})
     raise ValueError(f"unknown workspace action: {action}")
 
 
@@ -1300,7 +1317,7 @@ def do(actor: WorkspaceActor, action: str, path: str = "", **args: Any) -> Works
         else:
             root = _resolve_workspace_root(project, data_dir)
         # confine (for path-based actions; some git actions don't need relpath)
-        if action not in {"git_status", "git_log", "git_diff", "git_commit", "git_rollback"} and relpath:
+        if action not in {"git_status", "git_log", "git_diff", "git_commit", "git_rollback", "checkout_create", "checkout_delete"} and relpath:
             _confine_workspace_path(root, relpath)
 
         allowed, reason = _check_workspace_permission(actor, action)

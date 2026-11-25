@@ -2425,9 +2425,15 @@ def create_app() -> FastAPI:
                 status_code=400,
                 detail="a live workspace belongs to the project, not this task",
             )
-        removed = workspace_mgr.cleanup_workspace(_data_dir(), task_id)
-        store.record_event(conn, task.project_id, "workspace", task_id, "workspace.cleaned")
-        return {"removed": removed}
+        actor = workspace_mgr.WorkspaceActor(
+            kind="user", id=principal, project_id=task.project_id
+        )
+        res = workspace_mgr.do(
+            actor, "checkout_delete", task_id, conn=conn, data_dir=_data_dir()
+        )
+        if not res.ok:
+            raise HTTPException(status_code=400, detail=res.error)
+        return {"removed": bool((res.data or {}).get("removed", False))}
 
     @app.post("/tasks/{task_id}/workspace")
     def ensure_task_workspace(
@@ -2445,17 +2451,21 @@ def create_app() -> FastAPI:
                 status_code=400,
                 detail="this task runs in the live workspace; there is no checkout to seed",
             )
-        try:
-            path, branch = orchestrator.ensure_task_workspace(
-                conn,
-                task_id,
-                data_dir=_data_dir(),
-                seed_from=body.get("seed_from"),
-                base_branch=body.get("base_branch"),
-            )
-        except (KeyError, ValueError, RuntimeError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"path": path, "branch": branch}
+        actor = workspace_mgr.WorkspaceActor(
+            kind="user", id=principal, project_id=task.project_id
+        )
+        res = workspace_mgr.do(
+            actor,
+            "checkout_create",
+            task_id,
+            conn=conn,
+            data_dir=_data_dir(),
+            seed_from=body.get("seed_from"),
+            base_branch=body.get("base_branch"),
+        )
+        if not res.ok:
+            raise HTTPException(status_code=400, detail=res.error)
+        return {"path": (res.data or {}).get("path", ""), "branch": (res.data or {}).get("branch", "")}
 
     @app.post("/tasks/{task_id}/reviews")
     def submit_task_review(

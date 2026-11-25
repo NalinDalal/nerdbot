@@ -55,6 +55,8 @@ def test_teammate_principal_cannot_call_workspace_endpoints(tmp_path, monkeypatc
         ("get", f"/tasks/{tid}/workspace/files", None),
         ("get", f"/tasks/{tid}/workspace/file", {"path": "x.txt"}),
         ("get", f"/tasks/{tid}/workspace/diff", None),
+        ("delete", f"/tasks/{tid}/workspace", None),
+        ("post", f"/tasks/{tid}/workspace", {}),
         ("post", f"/projects/{pid}/terminal", {"cols": 80, "rows": 24}),
         ("get", f"/projects/{pid}/terminal/s1/stream", None),
         ("post", f"/projects/{pid}/terminal/s1/input", {"data": "x"}),
