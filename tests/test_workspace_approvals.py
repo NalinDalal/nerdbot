@@ -117,11 +117,137 @@ def test_snapshot_created_for_teammate_write(conn, data_dir):
 
 
 def test_memory_used_taints_turn(conn, data_dir):
-    # memory_used flag should make saw_untrusted true; verify by checking that
-    # create_task is blocked in untrusted turns via chat logic unit behavior.
+    """Recalled memory taints the turn: write requires approval at act_silently."""
+    import json, os
+    import httpx
+    from cryptography.fernet import Fernet
+    os.environ.setdefault("NERDBOT_SECRET_KEY", Fernet.generate_key().decode())
     from nerdbot import chat as chat_mod
-    # Directly test the flag effect by simulating: saw_untrusted starts True when memory_used
-    # We can't fully run chat without provider; instead assert function accepts param.
-    import inspect
-    sig = inspect.signature(chat_mod.chat_complete_with_tools)
-    assert "memory_used" in sig.parameters
+    from nerdbot.models import ProviderKind
+    project, root, mate, actor = _mk(conn, data_dir)
+    store.update_teammate(conn, mate.id, autonomy_level="act_silently")
+    mate = store.get_teammate(conn, mate.id)
+    thread = store.create_thread(conn, project.id, "t")
+    provider = store.create_provider(conn, project.id, kind=ProviderKind.OPENAI_COMPATIBLE, name="mock", config={"base_url":"https://mock.local/v1","api_key":"x","model":"gpt-mock"})
+    class T(httpx.BaseTransport):
+        def __init__(self):
+            self.r=[{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"c1","type":"function","function":{"name":"write_file","arguments":json.dumps({"path":"mem.txt","content":"x"})}}]}}]},{"choices":[{"message":{"role":"assistant","content":"ok"}}]}]
+        def handle_request(self, request):
+            return httpx.Response(200, json=self.r.pop(0))
+    chat_mod.chat_complete_with_tools(provider, [{"role":"user","content":"write"}], conn=conn, project_id=project.id, thread_id=thread.id, teammate=mate, data_dir=str(data_dir), memory_used=True, transport=T())
+    assert not (root/"mem.txt").exists()
+    approvals = conn.execute("SELECT * FROM approvals WHERE project_id=?", (project.id,)).fetchall()
+    assert len(approvals) >= 1
+
+
+def test_revert_ref_validation(conn, data_dir):
+    project, root, mate, actor = _mk(conn, data_dir)
+    (root / "r.txt").write_text("x", encoding="utf-8")
+    for bad in ["--output=x", "HEAD", "../x", "refs/heads/main", "refs/nerdbot/snapshots/../../x"]:
+        res = ws.do(ws.WorkspaceActor(kind="user", id="u1", project_id=project.id), "revert", "r.txt", conn=conn, data_dir=str(data_dir), project=project, snapshot_ref=bad)
+        assert not res.ok
+
+
+def test_revert_path_outside_rejected(conn, data_dir):
+    project, root, mate, actor = _mk(conn, data_dir)
+    res = ws.do(ws.WorkspaceActor(kind="user", id="u1", project_id=project.id), "revert", "../etc/passwd", conn=conn, data_dir=str(data_dir), project=project, snapshot_ref="refs/nerdbot/snapshots/snap_abc123")
+    assert not res.ok
+
+
+def test_revert_refuses_when_hash_changed(conn, data_dir):
+    import subprocess
+    project, root, mate, actor = _mk(conn, data_dir)
+    subprocess.run(["git", "init", str(root)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.email", "t@t"], check=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.name", "t"], check=True)
+    (root / "g.txt").write_text("base", encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(root), "commit", "-m", "init"], check=True, capture_output=True)
+    store.update_teammate(conn, mate.id, autonomy_level="act_and_report")
+    mate = store.get_teammate(conn, mate.id)
+    actor = ws.WorkspaceActor(kind="teammate", id=mate.id, project_id=project.id, teammate=mate)
+    res = ws.do(actor, "write", "g.txt", conn=conn, data_dir=str(data_dir), project=project, content="teammate")
+    assert res.ok
+    ref = res.data["snapshot"]["ref"]
+    # user changes file after teammate
+    (root / "g.txt").write_text("user-change", encoding="utf-8")
+    rev = ws.do(ws.WorkspaceActor(kind="user", id="u1", project_id=project.id), "revert", "g.txt", conn=conn, data_dir=str(data_dir), project=project, snapshot_ref=ref)
+    assert not rev.ok
+    rev2 = ws.do(ws.WorkspaceActor(kind="user", id="u1", project_id=project.id), "revert", "g.txt", conn=conn, data_dir=str(data_dir), project=project, snapshot_ref=ref, force=True)
+    assert rev2.ok
+    assert (root / "g.txt").read_text() == "base"
+
+
+def test_pause_kill_switch(conn, data_dir):
+    """Pause cancels queued routine tasks, requests in-flight cancel, denies gateway, cancels pending approvals."""
+    from nerdbot import fleet
+    project, root, mate, actor = _mk(conn, data_dir)
+    # queued routine task
+    task = store.create_task(conn, project.id, "routine task", owner_teammate_id=mate.id, title="[Routine] r")
+    # pending approval requested by teammate
+    res = ws.do(actor, "write", "p.txt", conn=conn, data_dir=str(data_dir), project=project, content="x")
+    apr_id = res.data.get("approval_id")
+    assert apr_id
+    # in-flight run
+    run = store.create_run(conn, task.id)
+    conn.execute("UPDATE runs SET status='running' WHERE id=?", (run.id,))
+    conn.commit()
+    # pause
+    fleet.update_teammate_service(conn, mate.id, {"paused": True})
+    mate2 = store.get_teammate(conn, mate.id)
+    assert mate2.paused is True
+    # queued routine task cancelled
+    t2 = store.get_task(conn, task.id)
+    assert str(getattr(t2.status, "value", t2.status)) == "cancelled"
+    # in-flight run cancellation requested
+    run2 = store.get_run(conn, run.id)
+    assert bool(getattr(run2, "cancel_requested", False)) is True
+    # pending approval cancelled/denied
+    apr = store.get_approval(conn, apr_id)
+    assert str(getattr(apr.decision, "value", apr.decision)) == "denied"
+    # gateway denies further calls
+    res2 = ws.do(ws.WorkspaceActor(kind="teammate", id=mate2.id, project_id=project.id, teammate=mate2), "read", "p.txt", conn=conn, data_dir=str(data_dir), project=project)
+    assert res2.denied
+    assert "paused" in (res2.error or "").lower()
+
+
+def test_autonomy_ask_first_creates_approval_for_mutations(conn, data_dir):
+    project, root, mate, actor = _mk(conn, data_dir)
+    for action, kwargs in [("write", {"content":"x"}), ("delete", {}), ("rename", {"to":"b.txt"})]:
+        if action == "delete":
+            (root / "del.txt").write_text("d", encoding="utf-8")
+            path = "del.txt"
+        elif action == "rename":
+            (root / "a.txt").write_text("a", encoding="utf-8")
+            path = "a.txt"
+        else:
+            path = "w.txt"
+        res = ws.do(actor, action, path, conn=conn, data_dir=str(data_dir), project=project, **kwargs)
+        assert res.denied and res.data.get("approval_required")
+
+
+def test_autonomy_act_and_report_posts_summary(conn, data_dir):
+    project, root, mate, actor = _mk(conn, data_dir)
+    store.update_teammate(conn, mate.id, autonomy_level="act_and_report")
+    mate = store.get_teammate(conn, mate.id)
+    actor = ws.WorkspaceActor(kind="teammate", id=mate.id, project_id=project.id, teammate=mate)
+    # create thread
+    thread = store.create_thread(conn, project.id, "t")
+    res = ws.do(actor, "write", "ar.txt", conn=conn, data_dir=str(data_dir), project=project, content="ok", thread_id=thread.id)
+    assert res.ok
+    msgs = store.list_messages(conn, thread.id)
+    assert any("[workspace]" in (m.content or "") for m in msgs)
+
+
+def test_autonomy_act_silently_logs_only(conn, data_dir):
+    project, root, mate, actor = _mk(conn, data_dir)
+    store.update_teammate(conn, mate.id, autonomy_level="act_silently")
+    mate = store.get_teammate(conn, mate.id)
+    actor = ws.WorkspaceActor(kind="teammate", id=mate.id, project_id=project.id, teammate=mate)
+    thread = store.create_thread(conn, project.id, "t")
+    res = ws.do(actor, "write", "as.txt", conn=conn, data_dir=str(data_dir), project=project, content="ok", thread_id=thread.id)
+    assert res.ok
+    msgs = store.list_messages(conn, thread.id)
+    assert not any("[workspace]" in (m.content or "") for m in msgs)
+    audit = store.list_workspace_audit(conn, project.id)
+    assert any(r["action"] == "write" and r["ok"] == 1 for r in audit)

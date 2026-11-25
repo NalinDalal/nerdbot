@@ -961,7 +961,7 @@ def git_discard_uncommitted(root: Path) -> dict[str, Any]:
 
 WORKSPACE_ACTIONS = {
     "list", "read", "write", "mkdir", "delete", "rename", "run",
-    "git_status", "git_log", "git_diff", "git_commit", "git_rollback",
+    "git_status", "git_log", "git_diff", "git_commit", "git_rollback", "revert",
 }
 
 
@@ -1008,7 +1008,7 @@ def _required_workspace_permission(action: str) -> str | None:
     """
     if action in {"list", "read", "git_status", "git_log", "git_diff"}:
         return "workspace.read"
-    if action in {"write", "mkdir", "delete", "rename", "git_commit", "git_rollback"}:
+    if action in {"write", "mkdir", "delete", "rename", "git_commit", "git_rollback", "revert"}:
         return "workspace.write"
     if action == "run":
         return "workspace.exec"
@@ -1065,10 +1065,10 @@ def _needs_approval(actor: WorkspaceActor, action: str, *, untrusted: bool = Fal
     if action == "run":
         # Exec always needs approval, regardless of autonomy level, until sandbox exists.
         return True
-    if untrusted and action in {"write", "mkdir", "delete", "rename", "git_commit", "git_rollback"}:
+    if untrusted and action in {"write", "mkdir", "delete", "rename", "git_commit", "git_rollback", "revert"}:
         return True
     level = getattr(actor.teammate, "autonomy_level", "ask_first") if actor.teammate else "ask_first"
-    if action in {"write", "mkdir", "delete", "rename", "git_commit", "git_rollback"}:
+    if action in {"write", "mkdir", "delete", "rename", "git_commit", "git_rollback", "revert"}:
         return level == "ask_first"
     return False
 
@@ -1083,7 +1083,7 @@ def _snapshot_before_write(root: Path, action: str) -> dict[str, Any]:
     Returns:
         Snapshot metadata dict.
     """
-    if action not in {"write", "mkdir", "delete", "rename", "run", "git_commit", "git_rollback"}:
+    if action not in {"write", "mkdir", "delete", "rename", "run", "git_commit", "git_rollback", "revert"}:
         return {}
     if not is_git_repo(root):
         return {"git": False}
@@ -1206,6 +1206,52 @@ def _execute_workspace_action(root: Path, action: str, relpath: str, args: dict[
     if action == "git_rollback":
         data = git_discard_uncommitted(root)
         return WorkspaceResult(ok=True, action=action, path=relpath, output="rolled back", data=data)
+    if action == "revert":
+        import re as _re
+
+        ref = str(args.get("snapshot_ref") or args.get("commit") or args.get("ref") or "")
+        if not _re.fullmatch(r"refs/nerdbot/snapshots/[A-Za-z0-9._-]+", ref):
+            raise ValueError("invalid snapshot ref")
+        # safe_workspace_path rejects absolute paths and any ../ traversal.
+        target = safe_workspace_path(root, relpath)
+        rel = target.relative_to(root).as_posix()
+        force = bool(args.get("force", False))
+        expected_hash = args.get("expected_hash")
+        current_hash = file_sha256(target) if target.is_file() else ""
+        if expected_hash and str(expected_hash) != current_hash and not force:
+            raise WorkspaceConflictError(f"file changed since snapshot; current sha256={current_hash}")
+        # Read snapshot bytes with list args (never a shell); -- terminates options.
+        show = subprocess.run(
+            ["git", "show", f"{ref}:{rel}", "--"],
+            cwd=str(root),
+            capture_output=True,
+        )
+        if show.returncode != 0:
+            if not force and current_hash:
+                raise WorkspaceConflictError(f"file changed since snapshot; current sha256={current_hash}")
+            if target.exists() and target.is_file():
+                target.unlink()
+                return WorkspaceResult(
+                    ok=True,
+                    action=action,
+                    path=rel,
+                    output=f"reverted {rel} (removed)",
+                    data={"path": rel, "removed": True, "snapshot_ref": ref},
+                )
+            raise ValueError(show.stderr.decode(errors="replace").strip() or "cannot restore snapshot")
+        snap_bytes = show.stdout
+        snap_hash = hashlib.sha256(snap_bytes).hexdigest()
+        if current_hash != snap_hash and not force:
+            raise WorkspaceConflictError(f"file changed since snapshot; current sha256={current_hash}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(snap_bytes)
+        return WorkspaceResult(
+            ok=True,
+            action=action,
+            path=rel,
+            output=f"reverted {rel}",
+            data={"path": rel, "sha256": file_sha256(target), "snapshot_ref": ref},
+        )
     raise ValueError(f"unknown workspace action: {action}")
 
 
@@ -1219,7 +1265,8 @@ def do(actor: WorkspaceActor, action: str, path: str = "", **args: Any) -> Works
         actor: User or teammate actor.
         action: One of list/read/write/mkdir/delete/rename/run/git_*.
         path: Relative path within workspace.
-        **args: action args; may include conn, data_dir, project, untrusted.
+        **args: action args; may include conn, data_dir, project, untrusted,
+            and workspace_root for a task checkout inside the data directory.
 
     Returns:
         WorkspaceResult.
@@ -1242,7 +1289,16 @@ def do(actor: WorkspaceActor, action: str, path: str = "", **args: Any) -> Works
         if project is None:
             return WorkspaceResult(ok=False, action=action, path=relpath, error="project not found", denied=True)
 
-        root = _resolve_workspace_root(project, data_dir)
+        # Optional override for task checkouts: still confined to the data dir
+        # and audited through this same gateway.
+        root_override = args.get("workspace_root")
+        if root_override is not None:
+            root = Path(root_override).resolve()
+            data_root = Path(data_dir).resolve()
+            if not root.is_dir() or (root != data_root and data_root not in root.parents):
+                raise ValueError("workspace_root is outside the data directory")
+        else:
+            root = _resolve_workspace_root(project, data_dir)
         # confine (for path-based actions; some git actions don't need relpath)
         if action not in {"git_status", "git_log", "git_diff", "git_commit", "git_rollback"} and relpath:
             _confine_workspace_path(root, relpath)
@@ -1315,6 +1371,18 @@ def do(actor: WorkspaceActor, action: str, path: str = "", **args: Any) -> Works
         except Exception:
             summary = str(audit_args)[:500]
         result.audit_id = _emit_workspace_audit(conn, actor=actor, action=action, path=relpath, ok=result.ok, denied=False, reason="ok" if result.ok else result.error, args_summary=summary) if conn is not None else ""
+        # Autonomy reporting: act_and_report posts summary to thread/task; act_silently logs only.
+        if result.ok and actor.kind == "teammate" and conn is not None:
+            level = getattr(actor.teammate, "autonomy_level", "ask_first")
+            if level == "act_and_report" and action in {"write", "mkdir", "delete", "rename", "git_commit", "git_rollback", "revert"}:
+                msg = f"[workspace] {action} {relpath or ''} by {getattr(actor.teammate,'name',actor.id)}: {result.output[:200]}"
+                try:
+                    from . import store as _store
+                    tid = str(args.get("thread_id") or "")
+                    if tid:
+                        _store.append_message(conn, tid, "assistant", msg[:2000], parts=[{"type":"workspace_action","action":action,"path":relpath}])
+                except Exception:
+                    pass
         return result
     except Exception as exc:
         audit_id = _emit_workspace_audit(conn, actor=actor, action=action, path=relpath, ok=False, denied=False, reason=str(exc), args_summary=str({k:v for k,v in args.items() if k not in {'conn','project'}})[:500]) if conn is not None else ""
