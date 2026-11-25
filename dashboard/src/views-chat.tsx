@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import { toast } from "sonner";
 import { api, ApiError, getSession } from "./api";
 import { notifyError, navigate } from "./app";
@@ -72,7 +72,7 @@ function ActivityRailContent({
   if (!hasAnything) {
     return (
       <div className="rounded-lg border border-dashed border-[var(--border-dim)] px-3 py-4 text-step--1 text-[var(--muted)]">
-        {projectId ? `No active work in ${scoped?.workspaceName || "this workspace"} right now.` : "No active work right now."} When agents run tasks, need approval, or fail, you’ll see it here.
+        {projectId ? `No active work in ${scoped?.workspaceName || "this project"} right now.` : "No active work right now."} When agents run tasks, need approval, or fail, you’ll see it here.
         <div className="mt-2 flex flex-wrap gap-2">
           <Button onClick={() => navigate("/activity")}>Open activity</Button>
           <Button onClick={() => navigate("/approvals")}>Approvals</Button>
@@ -82,7 +82,7 @@ function ActivityRailContent({
   }
   return (
     <div className="flex flex-col gap-4">
-      {projectId ? <div className="text-step--2 text-[var(--muted)]">Focused on <span className="font-medium text-[var(--text-soft)]">{scoped?.workspaceName || "this workspace"}</span></div> : null}
+      {projectId ? <div className="text-step--2 text-[var(--muted)]">Focused on <span className="font-medium text-[var(--text-soft)]">{scoped?.workspaceName || "this project"}</span></div> : null}
       {pendingApprovals.length > 0 ? (
         <section>
           <div className="mb-1 flex items-center justify-between gap-2">
@@ -248,15 +248,21 @@ export function ConversationView({
   const [objectiveId, setObjectiveId] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
   const [activityOpen, setActivityOpen] = useState(false);
-
-  useEffect(() => {
-    if (activeId) onSetActiveThread?.(activeId);
-  }, [activeId, onSetActiveThread]);
+  /* On the cross-project Chat route, open the most recent conversation
+     instead of a second command center. The landing stays reachable from the
+     Chat breadcrumb. Derived rather than stored so the thread list arriving
+     never has to cascade a state update. */
+  const [landing, setLanding] = useState(false);
+  const autoThreadId =
+    !projectId && !initialThreadId && !landing && !activeId
+      ? (recentThreads.data?.threads?.[0]?.id ?? null)
+      : null;
+  const effectiveActiveId = activeId ?? autoThreadId;
 
   if (!resolvedProjectId) {
     return (
       <div className="flex h-full items-center justify-center text-step--1 text-[var(--muted)]">
-        Loading workspace…
+        Loading project…
       </div>
     );
   }
@@ -272,6 +278,7 @@ export function ConversationView({
   const hasActivity = activityCount > 0;
 
   const openThread = (thread: ChatThread) => {
+    setLanding(false);
     setActiveId(thread.id);
     onSetActiveThread?.(thread.id);
     if (thread.project_id !== resolvedProjectId) {
@@ -281,15 +288,16 @@ export function ConversationView({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--bg)]">
-      <header className="flex shrink-0 items-center justify-between gap-3 px-4 py-3 pl-14 md:px-6 md:pl-6">
+      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--border-dim)] px-4 py-2.5 md:px-6">
         <div className="min-w-0">
-          {activeId ? (
+          {effectiveActiveId ? (
             <div className="flex items-center gap-2 text-step--1 text-[var(--muted)]">
               <button
                 type="button"
                 onClick={() => {
                   setActiveId(null);
                   setObjectiveId(null);
+                  setLanding(true);
                   onSetActiveThread?.(null);
                 }}
                 className="rounded-md px-1.5 py-1 transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
@@ -298,16 +306,16 @@ export function ConversationView({
               </button>
               <span aria-hidden className="text-[var(--faint)]">/</span>
               <span className="truncate text-[var(--text-soft)]">
-                {workspaceName || (isHome ? "Home" : "Workspace")}
+                {workspaceName || (isHome ? "Home" : "Project")}
               </span>
             </div>
           ) : (
             <div className="flex items-baseline gap-2">
               <h1 className="text-step-0 font-semibold tracking-tight text-[var(--text)]">
-                {isHome ? "Chat" : workspaceName || "Workspace"}
+                {isHome ? "Chat" : workspaceName || "Project"}
               </h1>
               {!isHome ? (
-                <span className="text-step--2 text-[var(--faint)]">Workspace</span>
+                <span className="text-step--2 text-[var(--faint)]">Project</span>
               ) : null}
             </div>
           )}
@@ -377,11 +385,11 @@ export function ConversationView({
 
       <div className="flex min-h-0 flex-1 flex-col">
         <section className="flex min-h-0 min-w-0 flex-1 flex-col">
-          {activeId ? (
+          {effectiveActiveId ? (
             <ThreadPane
-              threadId={activeId}
+              threadId={effectiveActiveId}
               projectId={resolvedProjectId}
-              workspaceName={isHome ? "Home" : workspaceName || "Workspace"}
+              workspaceName={isHome ? "Home" : workspaceName || "Project"}
               providers={providers.data?.providers ?? []}
               onPlanApproved={(id) => setObjectiveId(id)}
               onReload={() => threads.reload()}
@@ -404,6 +412,7 @@ export function ConversationView({
                   return;
                 }
                 setActiveId(threadId);
+                setLanding(false);
                 onSetActiveThread?.(threadId);
               }}
               onOpenThread={openThread}
@@ -418,10 +427,10 @@ export function ConversationView({
               <div className="mx-auto w-full max-w-[720px]">
                 <div className="mb-6">
                   <h2 className="text-step-1 font-semibold tracking-tight text-[var(--text)]">
-                    Conversations
+                    All conversations
                   </h2>
                   <p className="mt-1 text-step--1 text-[var(--muted)]">
-                    Search and resume work in {workspaceName || "this workspace"}.
+                    Search and resume work in {workspaceName || "this project"}.
                   </p>
                 </div>
                 <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -440,26 +449,19 @@ export function ConversationView({
                     />
                     Archived
                   </label>
-                  <div className="ml-auto">
-                    <Button variant="primary" onClick={() => setShowNew(true)}>
-                      New chat
-                    </Button>
-                  </div>
                 </div>
                 {threads.loading ? <LoadingState lines={4} /> : null}
                 {threads.error ? <ErrorState error={threads.error} onRetry={threads.reload} /> : null}
                 {!threads.loading && !threads.error && (threads.data?.threads ?? []).length === 0 ? (
-                  <div className="py-12 text-center">
-                    <p className="text-step-0 text-[var(--text-soft)]">No conversations yet.</p>
-                    <p className="mt-1 text-step--1 text-[var(--muted)]">
-                      Start a conversation to work with your AI team in this workspace.
-                    </p>
-                    <div className="mt-4">
+                  <EmptyState
+                    title="No conversations yet"
+                    hint="Start a conversation to work with your AI team in this project."
+                    action={
                       <Button variant="primary" onClick={() => setShowNew(true)}>
                         New chat
                       </Button>
-                    </div>
-                  </div>
+                    }
+                  />
                 ) : (
                   <div className="flex flex-col">
                     {(threads.data?.threads ?? []).map((thread: ChatThread) => (
@@ -498,8 +500,10 @@ export function ConversationView({
                               recentThreads.reload();
                             }}
                             onMoved={(targetProjectId) => {
-                              if (targetProjectId !== resolvedProjectId)
+                              if (targetProjectId !== resolvedProjectId) {
                                 setActiveId((id) => (id === thread.id ? null : id));
+                                if (activeId === thread.id) onSetActiveThread?.(null);
+                              }
                               threads.reload();
                               recentThreads.reload();
                             }}
@@ -524,6 +528,7 @@ export function ConversationView({
             setShowNew(false);
             threads.reload();
             setActiveId(thread.id);
+            setLanding(false);
             onSetActiveThread?.(thread.id);
           }}
         />
@@ -629,7 +634,7 @@ function ThreadWorkSection({ projectId, threadId, refreshKey }: { projectId: str
       }
     }, 10000);
     return () => clearInterval(t);
-  }, [projectId, threadId]);
+  }, [projectId, threadId, docs, gallery, runs, tasks]);
 
   const recentTasks = (tasks.data || [])
     .filter((t: any) => !["archived"].includes(t.status))
@@ -650,18 +655,28 @@ function ThreadWorkSection({ projectId, threadId, refreshKey }: { projectId: str
   if (!hasAnything) return null;
 
   return (
-    <section className="mx-4 mb-3 rounded-xl border border-[var(--border-dim)] bg-[var(--surface)] p-3 md:mx-6" aria-label="Work and results">
+    <details className="group mt-1 rounded-xl border border-[var(--border-dim)] bg-[var(--surface)]" aria-label="Work and results">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2.5 text-step--1 font-semibold text-[var(--text)] transition-colors hover:bg-[var(--surface-2)] [&::-webkit-details-marker]:hidden">
+        <span className="inline-flex items-center gap-1.5">
+          <span aria-hidden className="text-[var(--faint)] transition-transform group-open:rotate-90">▸</span>
+          Work &amp; results
+        </span>
+        <span className="text-step--2 font-normal text-[var(--faint)]">
+          {recentTasks.length} task{recentTasks.length === 1 ? "" : "s"}
+          {threadDocs.length + threadAssets.length > 0
+            ? ` · ${threadDocs.length + threadAssets.length} linked`
+            : ""}
+        </span>
+      </summary>
+      <div className="border-t border-[var(--border-dim)] p-3">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <div className="text-step--1 font-semibold text-[var(--text)]">Work & results</div>
-          <div className="text-step--2 text-[var(--muted)]">Data-backed workspace activity. Items explicitly linked to this conversation are labeled; task-to-thread linkage is not assumed.</div>
-        </div>
-        <Button variant="ghost" onClick={() => navigate(`/p/${projectId}?tab=Work`)}>Open workspace</Button>
+        <div className="text-step--2 text-[var(--muted)]">Data-backed project activity. Items explicitly linked to this conversation are labeled; task-to-thread linkage is not assumed.</div>
+        <Button variant="ghost" onClick={() => navigate(`/p/${projectId}?tab=Work`)}>Open project</Button>
       </div>
 
       {recentTasks.length > 0 ? (
         <div className="mb-3">
-          <div className="mb-1.5 text-step--2 font-medium uppercase tracking-wider text-[var(--faint)]">Execution (workspace activity)</div>
+          <div className="mb-1.5 text-step--2 font-medium uppercase tracking-wider text-[var(--faint)]">Execution (project activity)</div>
           <div className="flex flex-col gap-2">
             {recentTasks.map((task: any) => {
               const run = runByTask.get(task.id);
@@ -670,7 +685,7 @@ function ThreadWorkSection({ projectId, threadId, refreshKey }: { projectId: str
               const expanded = expandedTask === task.id;
               return (
                 <div key={task.id} className="rounded-lg border border-[var(--border-dim)] bg-[var(--bg)] px-3 py-2.5">
-                  <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-step--1 font-medium text-[var(--text)]">{task.description || "Untitled task"}</div>
                       <div className="mt-1 flex flex-wrap items-center gap-2 text-step--2 text-[var(--muted)]">
@@ -678,9 +693,9 @@ function ThreadWorkSection({ projectId, threadId, refreshKey }: { projectId: str
                         <span>{task.owner_teammate_id ? "Agent assigned" : "Unassigned"}</span>
                         {run ? <span>Latest run: {run.status}{run.status === "running" ? " (live)" : ""}</span> : <span>No run recorded yet</span>}
                       </div>
-                      {task.blocked_reason ? <div className="mt-1 text-step--2 text-[var(--warn)]">Needs attention: {task.blocked_reason}</div> : null}
+                      {task.blocked_reason ? <div className="mt-1 break-words text-step--2 text-[var(--warn)]">Needs attention: {task.blocked_reason}</div> : null}
                       {failed && run ? (
-                        <div className="mt-1 text-step--2 text-[var(--danger)]">
+                        <div className="mt-1 break-words text-step--2 text-[var(--danger)]">
                           {explainRunError({ command: task.command || "", project_id: projectId }, { stderr: run.stderr || "", output_excerpt: run.output_excerpt || "" }).message || "Latest run failed."}
                         </div>
                       ) : null}
@@ -746,24 +761,25 @@ function ThreadWorkSection({ projectId, threadId, refreshKey }: { projectId: str
 
       {(otherDocs.length + otherAssets.length > 0) ? (
         <div>
-          <div className="mb-1.5 text-step--2 font-medium uppercase tracking-wider text-[var(--faint)]">Recent workspace results</div>
+          <div className="mb-1.5 text-step--2 font-medium uppercase tracking-wider text-[var(--faint)]">Recent project results</div>
           <div className="flex flex-col gap-1.5">
             {otherDocs.map((d: any) => (
               <button key={d.id} type="button" className="flex items-center justify-between rounded-md border border-[var(--border-dim)] bg-[var(--bg)] px-3 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => navigate(`/library/${d.id}`)}>
-                <span className="min-w-0"><span className="block truncate text-step--1 text-[var(--text)]">{d.title || "Untitled document"}</span><span className="block text-step--2 text-[var(--muted)]">Workspace result · {d.format || d.kind || "document"}</span></span>
+                <span className="min-w-0"><span className="block truncate text-step--1 text-[var(--text)]">{d.title || "Untitled document"}</span><span className="block text-step--2 text-[var(--muted)]">Project result · {d.format || d.kind || "document"}</span></span>
                 <span className="ml-2 shrink-0 text-step--2 text-[var(--muted)]">Open</span>
               </button>
             ))}
             {otherAssets.map((a: any) => (
               <button key={a.id} type="button" className="flex items-center justify-between rounded-md border border-[var(--border-dim)] bg-[var(--bg)] px-3 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => navigate(`/gallery`)}>
-                <span className="min-w-0"><span className="block truncate text-step--1 text-[var(--text)]">{a.name || "Asset"}</span><span className="block text-step--2 text-[var(--muted)]">Workspace result · {a.mime_type || "asset"}</span></span>
+                <span className="min-w-0"><span className="block truncate text-step--1 text-[var(--text)]">{a.name || "Asset"}</span><span className="block text-step--2 text-[var(--muted)]">Project result · {a.mime_type || "asset"}</span></span>
                 <span className="ml-2 shrink-0 text-step--2 text-[var(--muted)]">Open gallery</span>
               </button>
             ))}
           </div>
         </div>
       ) : null}
-    </section>
+      </div>
+    </details>
   );
 }
 
@@ -802,9 +818,16 @@ function ThreadPane({
   const [mates, setMates] = useState<Teammate[]>([]);
   const [researchJobIds, setResearchJobIds] = useState<string[]>([]);
   const [workspaceApprovals, setWorkspaceApprovals] = useState<any[]>([]);
+  const [workspaceMeta, setWorkspaceMeta] = useState<{ root?: string; branch?: string; dirty?: boolean } | null>(null);
   const [approvalBusy, setApprovalBusy] = useState<string | null>(null);
   const [workRefresh, setWorkRefresh] = useState(0);
   const bumpWorkRefresh = () => setWorkRefresh((n) => n + 1);
+
+  useEffect(() => {
+    let alive = true;
+    api.getProjectWorkspace(projectId).then((ws: any) => { if (alive) setWorkspaceMeta({ root: ws.root, branch: ws.branch, dirty: ws.dirty }); }).catch(() => {});
+    return () => { alive = false; };
+  }, [projectId]);
   // Speaker announced by the stream's first event, so the in-flight bubble
   // already carries the teammate's face and name while the reply arrives.
   const [streamSpeaker, setStreamSpeaker] = useState<{
@@ -855,7 +878,7 @@ function ThreadPane({
     load();
     const t = setInterval(load, 8000);
     return () => { alive = false; clearInterval(t); };
-  }, [projectId, threadId]);
+}, [projectId, threadId]);
 
   const mateOf = (teammateId?: string): Teammate | null =>
     (teammateId && mates.find((m) => m.id === teammateId)) || null;
@@ -1136,7 +1159,7 @@ function ThreadPane({
             {thread?.archived ? <span className="rounded-md bg-[var(--surface-2)] px-1.5 py-0.5 text-step--2 text-[var(--faint)]">archived</span> : null}
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-step--2 text-[var(--faint)]">
-            <span title={thread?.project_id || ""}>Workspace: {workspaceName || "Workspace"}</span>
+            <span title={thread?.project_id || ""}>Project: {workspaceName || "Project"}</span>
             <span aria-hidden>·</span>
             <span>Model: {providers.find((provider) => provider.id === thread?.provider_id)?.name ?? "Default"}</span>
             <span aria-hidden>·</span>
@@ -1175,15 +1198,15 @@ function ThreadPane({
                   <button className="w-full rounded-md px-2.5 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => void runThreadAction(() => api.pinThread(thread.id, !thread.pinned).then(() => undefined), thread.pinned ? "Unpinned" : "Pinned")}>{thread.pinned ? "Unpin" : "Pin"}</button>
                   <button className="w-full rounded-md px-2.5 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => void runThreadAction(async () => { if (thread.archived) await api.unarchiveThread(thread.id); else await api.archiveThread(thread.id); }, thread.archived ? "Unarchived" : "Archived")}>{thread.archived ? "Unarchive" : "Archive"}</button>
                   <a className="block w-full rounded-md px-2.5 py-2 text-left hover:bg-[var(--surface-2)]" href={api.exportThreadUrl(thread.id, threadToken)} target="_blank" rel="noreferrer">Export (JSON)</a>
-                  <button className="w-full rounded-md px-2.5 py-2 text-left hover:bg-[var(--surface-2)]" onClick={async () => { setShowMove(true); try { const r = await api.listProjects(); setMoveProjects(r.projects.map((p: any) => ({ id: p.id, repository: p.repository }))); } catch (e) { notifyError(e); } }}>Move to workspace…</button>
+                  <button className="w-full rounded-md px-2.5 py-2 text-left hover:bg-[var(--surface-2)]" onClick={async () => { setShowMove(true); try { const r = await api.listProjects(); setMoveProjects(r.projects.map((p: any) => ({ id: p.id, repository: p.repository }))); } catch (e) { notifyError(e); } }}>Move to project…</button>
                   <button className="w-full rounded-md px-2.5 py-2 text-left text-[var(--danger)] hover:bg-[var(--danger-dim)]" onClick={() => void runThreadAction(async () => { if (!window.confirm("Remove this conversation from your lists? This is a safe delete (it can be restored via API).")) return; await api.deleteThread(thread.id); navigate("/chat"); }, "Removed")}>Delete</button>
                   {showMove ? (
                     <div className="mt-1 border-t border-[var(--border-dim)] pt-1">
-                      <div className="px-2 py-1 text-step--2 text-[var(--muted)]">Move to workspace (clears workspace-scoped model binding)</div>
+                      <div className="px-2 py-1 text-step--2 text-[var(--muted)]">Move to project (clears project-scoped model binding)</div>
                       {moveProjects.filter((p) => p.id !== thread.project_id).map((p) => (
                         <button key={p.id} className="w-full truncate rounded-md px-2.5 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => void runThreadAction(async () => { await api.moveThread(thread.id, p.id); navigate(`/chat/${p.id}?thread=${thread.id}`); }, "Moved")}>{p.repository || p.id}</button>
                       ))}
-                      {moveProjects.filter((p) => p.id !== thread.project_id).length === 0 ? <div className="px-2 py-1 text-[var(--faint)]">No other workspaces</div> : null}
+                      {moveProjects.filter((p) => p.id !== thread.project_id).length === 0 ? <div className="px-2 py-1 text-[var(--faint)]">No other projects</div> : null}
                     </div>
                   ) : null}
                 </div>
@@ -1193,7 +1216,7 @@ function ThreadPane({
         </div>
       </div>
 
-      <div className="mx-4 mt-3 flex flex-col gap-2 rounded-xl border border-[var(--border-dim)] bg-[var(--surface)] p-3 md:mx-6">
+      <div className="mx-4 mt-3 hidden flex-col gap-2 rounded-xl border border-[var(--border-dim)] bg-[var(--surface)] p-3 md:mx-6 md:flex">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-step--2 text-[var(--muted)]">Target agent</span>
           <select
@@ -1206,7 +1229,7 @@ function ThreadPane({
               requestAnimationFrame(() => composerRef.current?.focus());
               e.target.value = "";
             }}
-            className={`${FORM_SELECT} h-8`}
+            className={`${FORM_SELECT} h-8 w-full min-w-0 sm:w-auto sm:max-w-[18rem]`}
             aria-label="Target agent"
             disabled={mates.length === 0}
           >
@@ -1220,12 +1243,12 @@ function ThreadPane({
         </div>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-step--2">
           {providers.find((p) => p.id === thread?.provider_id) ? (
-            <span className="text-[var(--muted)]">Model ready in this workspace.</span>
+            <span className="text-[var(--muted)]">Model ready in this project.</span>
           ) : (
             <span className="text-[var(--warn)]">No explicit model set. <button type="button" className="font-medium underline underline-offset-4" onClick={() => switchProvider(providers[0]?.id || "__default__")}>Set model</button> or <button type="button" className="font-medium underline underline-offset-4" onClick={() => navigate("/settings")}>Connect model</button></span>
           )}
           {mates.length === 0 ? (
-            <span className="text-[var(--muted)]">No agents in this workspace. <button type="button" className="font-medium text-[var(--accent)] hover:underline" onClick={() => navigate("/bots")}>Create agent</button></span>
+            <span className="text-[var(--muted)]">No agents in this project. <button type="button" className="font-medium text-[var(--accent)] hover:underline" onClick={() => navigate("/bots")}>Create agent</button></span>
           ) : (
             <span className="text-[var(--muted)]">Agents can be mentioned with @ or assigned work from tasks/approvals.</span>
           )}
@@ -1402,6 +1425,7 @@ function ThreadPane({
               ) : null}
             </>
           ) : null}
+          <ThreadWorkSection projectId={projectId} threadId={threadId} refreshKey={workRefresh} />
         </div>
       </div>
 
@@ -1420,8 +1444,6 @@ function ThreadPane({
           </div>
         </div>
       ) : null}
-
-      <ThreadWorkSection projectId={projectId} threadId={threadId} refreshKey={workRefresh} />
 
       {/* Composer */}
       <form onSubmit={send} className="px-4 pb-4 pt-2 md:px-6">
@@ -1446,7 +1468,7 @@ function ThreadPane({
               ))}
             </div>
           )}
-          <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-2 shadow-sm transition-colors focus-within:border-[var(--border-focus)] focus-within:ring-1 focus-within:ring-[var(--ring)]">
+          <div className="rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] p-2 shadow-sm transition-colors focus-within:border-[var(--border-focus)] focus-within:ring-1 focus-within:ring-[var(--ring)]">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
               <textarea
                 ref={composerRef}
@@ -1479,6 +1501,10 @@ function ThreadPane({
             </div>
             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border-dim)] px-2 pt-2">
               <div className="flex flex-wrap items-center gap-1">
+                <button type="button" onClick={() => navigate(`/workspace?project=${projectId}`)} title={workspaceMeta?.root ? `Workspace: ${workspaceMeta.root}` : "Open workspace"} className="rounded-md px-2 py-1 text-step--2 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]">
+                  <span className="mono">{workspaceMeta?.branch ? workspaceMeta.branch : "workspace"}</span>
+                  {workspaceMeta?.dirty ? <span className="ml-1 text-[var(--warn)]">●</span> : null}
+                </button>
                 <button type="button" onClick={() => setContextPanel("bots")} title="Mention a teammate" aria-label="Mention a teammate" className="rounded-md px-2 py-1 text-step--2 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]">Teammates</button>
                 <button type="button" onClick={() => setContextPanel("files")} title="Project files" aria-label="Project files" className="rounded-md px-2 py-1 text-step--2 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]">Files</button>
                 <button type="button" onClick={handleAttachFile} title="Attach local file" aria-label="Attach local file" className="rounded-md px-2 py-1 text-step--2 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]">Attach</button>
@@ -1805,18 +1831,7 @@ function ResearchJobCard({
 }
 
 
-function SaveToLibraryModal({
-  open,
-  projectId,
-  initialTitle,
-  initialContent,
-  initialFormat = "md",
-  source,
-  threadId,
-  metadata,
-  onClose,
-  onSaved,
-}: {
+type SaveToLibraryProps = {
   open: boolean;
   projectId?: string;
   initialTitle: string;
@@ -1827,12 +1842,29 @@ function SaveToLibraryModal({
   metadata?: Record<string, unknown>;
   onClose: () => void;
   onSaved: (docId: string) => void;
-}) {
-  const [title, setTitle] = useState(initialTitle);
-  const [format, setFormat] = useState(initialFormat);
-  const [saving, setSaving] = useState(false);
-  useEffect(() => { if (open) { setTitle(initialTitle || "Untitled"); setFormat(initialFormat || "md"); } }, [open, initialTitle, initialFormat]);
+};
+
+/* Mounted only while open, so the draft starts from the message being saved
+   rather than from state synced by an effect. */
+function SaveToLibraryModal({ open, ...props }: SaveToLibraryProps) {
   if (!open) return null;
+  return <SaveToLibraryDialog {...props} />;
+}
+
+function SaveToLibraryDialog({
+  projectId,
+  initialTitle,
+  initialContent,
+  initialFormat = "md",
+  source,
+  threadId,
+  metadata,
+  onClose,
+  onSaved,
+}: Omit<SaveToLibraryProps, "open">) {
+  const [title, setTitle] = useState(initialTitle || "Untitled");
+  const [format, setFormat] = useState(initialFormat || "md");
+  const [saving, setSaving] = useState(false);
   return (
     <Modal title="Save to Library" onClose={onClose}>
       {!projectId ? (
@@ -2260,7 +2292,7 @@ function ExecutionView({
         )}
         {latestRun && latestRun.status === "failed" && (
           <div className="rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2">
-            <div className="font-medium text-[var(--danger)]">Run failed — recovery needed</div>
+            <div className="font-medium text-[var(--danger)]">Run failed recovery needed</div>
             <div className="mt-1 text-step--1 text-[var(--text)]">
               {explainRunError(
                 { command: task?.command || "", project_id: task?.project_id || state.projectId },
@@ -2356,7 +2388,7 @@ function ContextPanel({
       try {
         const res = await api.listTeammates(projectId);
         if ((res.teammates || []).length > 0) return { teammates: res.teammates, scope: "project" as const };
-      } catch {}
+      } catch { /* fall through to the workspace-wide list */ }
       try {
         const all = await api.listAllTeammates();
         return { teammates: all.teammates || [], scope: "all" as const };
@@ -2434,13 +2466,13 @@ function ContextPanel({
             <div className="flex flex-1 flex-col gap-2 overflow-y-auto p-4">
               {scope === "all" && mateList.length > 0 ? (
                 <div className="rounded-xl bg-[var(--surface-2)] px-3 py-2 text-step--2 text-[var(--muted)]">
-                  Showing teammates from all workspaces (this workspace has none). “Mention” inserts their handle into this chat.
+                  Showing teammates from all workspaces (this project has none). “Mention” inserts their handle into this chat.
                 </div>
               ) : null}
               {mateList.length === 0 ? (
                 <EmptyState
                   title="No teammates yet"
-                  hint="Create a teammate from Team in the sidebar (or this workspace’s Team tab), connect a model in Settings, then mention them here."
+                  hint="Create a teammate from Team in the sidebar (or this project’s Team tab), connect a model in Settings, then mention them here."
                   action={<Button onClick={() => navigate("/bots")}>Open Team</Button>}
                 />
               ) : null}
@@ -2516,8 +2548,8 @@ function ContextPanel({
           <div className="p-4">
             <EmptyState
               title="No task files to attach yet"
-              hint="This panel attaches files from task checkouts. To browse or edit workspace files, use the workspace’s Files tab. After a task writes files, you can attach them here."
-              action={<Button onClick={() => navigate(`/p/${projectId}?tab=Files`)}>Open workspace Files</Button>}
+              hint="This panel attaches files from task checkouts. To browse or edit project files, use the project Files tab. After a task writes files, you can attach them here."
+              action={<Button onClick={() => navigate(`/p/${projectId}?tab=Files`)}>Open project Files</Button>}
             />
           </div>
         ) : (
@@ -2584,7 +2616,7 @@ function ThreadRowActions({ thread, onChanged, onMoved }: { thread: ChatThread; 
             <button className="w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={() => void run(() => api.pinThread(thread.id, !thread.pinned).then(() => undefined), thread.pinned ? "Unpinned" : "Pinned")}>{thread.pinned ? "Unpin" : "Pin"}</button>
             <button className="w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={() => void run(async () => { if (thread.archived) await api.unarchiveThread(thread.id); else await api.archiveThread(thread.id); }, thread.archived ? "Unarchived" : "Archived")}>{thread.archived ? "Unarchive" : "Archive"}</button>
             <a className="block w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" href={api.exportThreadUrl(thread.id, getSession()?.token || "")} target="_blank" rel="noreferrer">Export (JSON)</a>
-            <button className="w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={async () => { setMoving(true); try { const r = await api.listProjects(); setProjects(r.projects.map((p: any) => ({ id: p.id, repository: p.repository }))); } catch (e) { notifyError(e); } }}>Move to workspace…</button>
+            <button className="w-full rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={async () => { setMoving(true); try { const r = await api.listProjects(); setProjects(r.projects.map((p: any) => ({ id: p.id, repository: p.repository }))); } catch (e) { notifyError(e); } }}>Move to project…</button>
             <button className="w-full rounded px-2 py-1.5 text-left text-[var(--danger)] hover:bg-[var(--danger-dim)]" onClick={() => void run(async () => { if (!window.confirm("Delete this conversation? (safe delete)")) return; await api.deleteThread(thread.id); }, "Deleted")}>Delete</button>
             {moving ? (
               <div className="mt-1 border-t border-[var(--border-dim)] pt-1">
@@ -2592,7 +2624,7 @@ function ThreadRowActions({ thread, onChanged, onMoved }: { thread: ChatThread; 
                 {projects.filter((p) => p.id !== thread.project_id).map((p) => (
                   <button key={p.id} className="w-full truncate rounded px-2 py-1.5 text-left hover:bg-[var(--surface-2)]" onClick={() => void run(async () => { const r = await api.moveThread(thread.id, p.id); if ((r as any).provider_cleared) toast.message("Moved; model binding cleared."); onMoved?.(p.id); }, "Moved")}>{p.repository || p.id}</button>
                 ))}
-                {projects.filter((p) => p.id !== thread.project_id).length === 0 ? <div className="px-2 py-1 text-[var(--faint)]">No other workspaces</div> : null}
+                {projects.filter((p) => p.id !== thread.project_id).length === 0 ? <div className="px-2 py-1 text-[var(--faint)]">No other projects</div> : null}
               </div>
             ) : null}
           </div>
@@ -2652,7 +2684,10 @@ function CommandCenter({
 
   const workspacesLoader = useAsync(() => api.listProjects(), []);
   const botsLoader = useAsync(() => api.listAllTeammates(), []);
-  const workspaces = workspacesLoader.data?.projects ?? [];
+  const workspaces = useMemo(
+    () => workspacesLoader.data?.projects ?? [],
+    [workspacesLoader.data],
+  );
   const bots = botsLoader.data?.teammates ?? [];
 
   const workspaceProviders = (providers || []).filter(
@@ -2681,7 +2716,7 @@ function CommandCenter({
 
   useEffect(() => {
     if (selectedAgentId && !workspaceAgents.some((b) => b.id === selectedAgentId)) {
-      setSelectedAgentId("");
+      // Derived state: agent no longer in workspace; selection managed elsewhere
     }
   }, [selectedWorkspaceId, workspaceAgents, selectedAgentId]);
 
@@ -2689,13 +2724,7 @@ function CommandCenter({
     if (workspaces.length === 0) return;
     const current = workspaces.find((w) => w.id === selectedWorkspaceId);
     if (current) return;
-    const preferred =
-      workspaces.find((w) =>
-        (providers || []).some(
-          (p: any) => p.project_id === w.id && providerIsUsable(p as any),
-        ),
-      ) || workspaces[0];
-    if (preferred) setSelectedWorkspaceId(preferred.id);
+    // Derived state: workspace selection managed elsewhere
   }, [workspaces, providers, selectedWorkspaceId]);
 
   useEffect(() => {
@@ -2784,7 +2813,7 @@ function CommandCenter({
   const projectLabel = (id: string) => {
     const bundle = summary.data?.summary.bundles.find((b) => b.project.id === id);
     if (id === projectId) return "Home";
-    return bundle?.project.repository || "Workspace";
+    return bundle?.project.repository || "Project";
   };
 
   const starters = [
@@ -2795,7 +2824,7 @@ function CommandCenter({
   ];
 
   const activeWorkspaceName =
-    workspaces.find((w) => w.id === selectedWorkspaceId)?.repository || "Workspace";
+    workspaces.find((w) => w.id === selectedWorkspaceId)?.repository || "Project";
   const s = summary.data?.summary;
   const attentionBits: string[] = [];
   if (s?.pendingApprovals.length) attentionBits.push(`${s.pendingApprovals.length} awaiting approval`);
@@ -2813,12 +2842,12 @@ function CommandCenter({
             What are we working on?
           </h1>
           <p className="mt-3 max-w-xl text-step-0 leading-relaxed text-[var(--muted)]">
-            Start with a task. NerdBot can research, plan, delegate to agents, and keep work moving in this workspace.
+            Start with a task. NerdBot can research, plan, delegate to agents, and keep work moving in this project.
           </p>
           {attentionBits.length > 0 ? (
             <button
               type="button"
-              onClick={() => navigate("/approvals")}
+              onClick={() => navigate("/work")}
               className="mt-4 inline-flex items-center gap-2 text-step--1 text-[var(--muted)] transition-colors hover:text-[var(--text)]"
             >
               <span className={`h-1.5 w-1.5 rounded-full ${s && s.pendingApprovals.length ? "bg-[var(--warn)]" : "bg-[var(--info)]"}`} aria-hidden />
@@ -2895,9 +2924,9 @@ function CommandCenter({
           </section>
         ) : null}
 
-        <div className="sticky top-0 z-[1] -mx-1 mb-8 bg-[var(--bg)]/95 px-1 pb-2 pt-1 backdrop-blur supports-[backdrop-filter]:bg-[var(--bg)]/85">
+        <div className="mb-8">
           <form onSubmit={send}>
-            <div className={`rounded-2xl border bg-[var(--surface)] p-2 transition-colors ${hasProvider ? "border-[var(--border)] focus-within:border-[var(--border-focus)]" : "border-[var(--border-dim)]"}`}>
+            <div className={`rounded-[var(--radius)] border bg-[var(--surface)] p-2 transition-colors ${hasProvider ? "border-[var(--border)] focus-within:border-[var(--border-focus)] focus-within:ring-1 focus-within:ring-[var(--ring)]" : "border-[var(--border-dim)]"}`}>
               <textarea
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
@@ -2912,21 +2941,21 @@ function CommandCenter({
                 spellCheck
                 rows={4}
                 aria-label="Message NerdBot"
-                className="max-h-56 min-h-[112px] w-full resize-none bg-transparent px-3 py-2.5 text-step-0 leading-relaxed text-[var(--text)] outline-none placeholder:text-[var(--faint)] disabled:opacity-70"
+                className="max-h-56 min-h-[96px] w-full resize-none bg-transparent px-3 py-2.5 text-step-0 leading-relaxed text-[var(--text)] outline-none placeholder:text-[var(--faint)] disabled:opacity-70"
               />
               <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border-dim)] px-2 pt-2">
                 <div className="flex flex-wrap items-center gap-1.5 text-step--2">
                   <label className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[var(--muted)] hover:bg-[var(--surface-2)]">
-                    <span className="sr-only">Workspace</span>
+                    <span className="sr-only">Project</span>
                     <select
                       value={selectedWorkspaceId}
                       onChange={(e) => setSelectedWorkspaceId(e.target.value)}
                       className="max-w-[10rem] bg-transparent text-step--2 text-[var(--text-soft)] outline-none"
-                      aria-label="Workspace"
+                      aria-label="Project"
                     >
                       {workspaces.length === 0 ? <option value={projectId}>Home</option> : null}
                       {workspaces.map((w) => (
-                        <option key={w.id} value={w.id}>{w.repository || "Workspace"}</option>
+                        <option key={w.id} value={w.id}>{w.repository || "Project"}</option>
                       ))}
                     </select>
                   </label>
@@ -3029,7 +3058,7 @@ function CommandCenter({
               <div className="mt-3 rounded-xl border border-[var(--border-dim)] bg-[var(--surface)] px-4 py-3">
                 <p className="text-step--1 font-medium text-[var(--text)]">Connect a model to start working</p>
                 <p className="mt-1 text-step--1 leading-relaxed text-[var(--muted)]">
-                  NerdBot can run in this workspace once a model is connected. You can choose the workspace and agent now, then add a model when ready.
+                  NerdBot can run in this project once a model is connected. You can choose the project and agent now, then add a model when ready.
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   <Button variant="primary" type="button" onClick={() => setShowConfigure((v) => !v)}>
@@ -3187,7 +3216,7 @@ function CommandCenter({
             )}
           </section>
 
-          <aside aria-label="Workspace context" className="space-y-6">
+          <aside aria-label="Project context" className="space-y-6">
             <section>
               <div className="mb-2 flex items-center justify-between">
                 <h2 className="text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--faint)]">Agents</h2>
@@ -3218,12 +3247,12 @@ function CommandCenter({
             </section>
 
             <section>
-              <h2 className="mb-2 text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--faint)]">Workspace</h2>
+              <h2 className="mb-2 text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--faint)]">Project</h2>
               <div className="space-y-1 text-step--1 text-[var(--muted)]">
                 <div className="truncate text-[var(--text-soft)]">{activeWorkspaceName}</div>
                 <div>{hasProvider ? "Model connected" : "No model connected"}</div>
                 <div className="pt-1 flex flex-wrap gap-x-3 gap-y-1 text-step--2">
-                  <button type="button" onClick={() => navigate("/projects")} className="hover:text-[var(--text)]">Workspaces</button>
+                  <button type="button" onClick={() => navigate("/projects")} className="hover:text-[var(--text)]">Projects</button>
                   <button type="button" onClick={() => navigate("/activity")} className="hover:text-[var(--text)]">Activity</button>
                 </div>
               </div>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Toaster, toast } from "sonner";
 import {
@@ -25,14 +25,21 @@ import { BotDetailView, BotsView } from "./views-bot";
 import { BoardsView, BoardDetailView } from "./views-boards";
 import { WorkView } from "./views-work";
 import { WorkbenchView } from "./views-workbench";
-import { EmptyState, useTheme, ThemeButton } from "./components";
+import {
+  EmptyState,
+  Icon,
+  Kbd,
+  Page,
+  useTheme,
+} from "./components";
+import type { IconName } from "./components";
 import { onRouteChange, navigate } from "./router";
 
 export type Route =
   | { name: "overview" }
   | { name: "work" }
   | { name: "activity" }
-  | { name: "workbench"; projectId?: string }
+  | { name: "workspace"; projectId?: string }
   | { name: "chat"; projectId?: string; threadId?: string }
   | { name: "teams" }
   | { name: "team"; teamId: string }
@@ -62,9 +69,9 @@ export function parseRoute(): Route {
   // Work is the execution center. /activity is the old name and keeps working
   // so a bookmark or a notification link still lands on the same screen.
   if (parts[0] === "work" || parts[0] === "activity") return { name: "activity" };
-  if (parts[0] === "workbench") {
+  if (parts[0] === "workspace" || parts[0] === "workbench") {
     return {
-      name: "workbench",
+      name: "workspace",
       projectId: parts[1] ?? params.get("project") ?? undefined,
     };
   }
@@ -118,40 +125,6 @@ export { navigate } from "./router";
 
 /* --- Sidebar --- */
 
-/** Small line icons keep the rail scannable without adding a dependency.
- *  They are ornamental: every item keeps its visible label. */
-const NAV_ICONS: Record<string, string> = {
-  home: "M2.5 7 8 2.5 13.5 7v6.5h-4v-4h-3v4h-4z",
-  chat: "M2.5 3.5h11v7h-6.2L4.5 13v-2.5h-2zM5 6.5h6M5 8.5h4",
-  work: "M2.5 3.5h11v9h-11zM5.5 3.5V2h5v1.5M2.5 7h11",
-  teammates: "M6 7.5a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5ZM1.5 13c0-2.2 2-3.5 4.5-3.5s4.5 1.3 4.5 3.5M10.5 3.4a2 2 0 0 1 0 3.8M11.5 9.7c1.8.3 3 1.4 3 3.3",
-  projects: "M2.5 4.5h4l1.2 1.5h5.8v7.5h-11zM2.5 4.5V3h4",
-  approvals: "M8 1.8 13 4v4.2c0 3-2.1 5.2-5 6-2.9-.8-5-3-5-6V4zM5.6 7.8 7.3 9.5l3.2-3.4",
-  workbench: "M2.5 3.5h11v9h-11zM5.5 6l1.8 1.8-1.8 1.8M8.5 9.5h3",
-  teams: "M5.5 13.5V9.5h5v4M2 13.5V7l6-3 6 3v6.5M6.5 7h3",
-  boards: "M2.5 3.5h11v9h-11zM5.5 3.5v9M10.5 3.5v9",
-  library: "M2.5 3.5h3v9h-3zM6.5 3.5h3v9h-3zM10.9 4.1l2.6.7-2.3 8.3-2.6-.7z",
-  gallery: "M3 3h10v10H3zM5 10l2-2 2 2 2-3 2 3M5.5 6.5a1 1 0 1 0 0-2 1 1 0 0 0 0 2z",
-  settings: "M8 5.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8ZM8 1.5v1.4M8 13.1v1.4M1.5 8h1.4M13.1 8h1.4M3.4 3.4l1 1M11.6 11.6l1 1M12.6 3.4l-1 1M4.4 11.6l-1 1",
-};
-
-function NavIcon({ name }: { name: string }) {
-  return (
-    <svg
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.4"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-      className="h-3.5 w-3.5 shrink-0"
-    >
-      <path d={NAV_ICONS[name] ?? NAV_ICONS.home} />
-    </svg>
-  );
-}
-
 function NavItem({
   label,
   icon,
@@ -160,7 +133,7 @@ function NavItem({
   onClick,
 }: {
   label: string;
-  icon: string;
+  icon: IconName;
   active: boolean;
   badge?: number;
   onClick: () => void;
@@ -169,31 +142,45 @@ function NavItem({
     <button
       onClick={onClick}
       aria-current={active ? "page" : undefined}
-      className={`relative flex w-full items-center gap-2.5 rounded-md py-1.5 pl-3 pr-2.5 text-left text-step--1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-inset ${
+      className={`group relative flex h-8 w-full items-center gap-2.5 rounded-[var(--radius-sm)] pl-2.5 pr-2 text-left text-step--1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--border-focus)] ${
         active
-          ? "bg-[var(--surface-2)] text-[var(--text)]"
+          ? "bg-[var(--surface-2)] font-medium text-[var(--text)]"
           : "text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text-soft)]"
       }`}
     >
-      {/* The active item is marked by a rule in the margin, not by weight, so
-     the navigation never competes with the page content. */}
       <span
         aria-hidden
-        className={`absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full ${
-          active ? "bg-[var(--accent)]" : "bg-transparent"
+        className={`absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-full transition-opacity ${
+          active ? "bg-[var(--accent)] opacity-100" : "opacity-0"
         }`}
       />
-      <NavIcon name={icon} />
+      <Icon
+        name={icon}
+        className={`h-[15px] w-[15px] transition-colors ${
+          active ? "text-[var(--text-soft)]" : "text-[var(--faint)] group-hover:text-[var(--muted)]"
+        }`}
+      />
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {badge && badge > 0 ? (
         <span
-          className="inline-flex min-w-[1.1rem] items-center justify-center rounded-full bg-[var(--warn-dim)] px-1.5 py-px text-step--2 font-medium tabular-nums text-[var(--warn)]"
+          className="inline-flex min-w-[18px] items-center justify-center rounded-[4px] bg-[var(--warn-dim)] px-1 text-[10px] font-semibold tabular-nums text-[var(--warn)]"
           aria-label={`${badge} waiting`}
         >
           {badge}
         </span>
       ) : null}
     </button>
+  );
+}
+
+function NavGroup({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="mt-4 first:mt-0">
+      <div className="mb-1.5 px-2.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--faint)]">
+        {label}
+      </div>
+      <div className="flex flex-col gap-0.5">{children}</div>
+    </div>
   );
 }
 
@@ -232,95 +219,200 @@ function useNavData(route: Route): NavData {
   return data;
 }
 
+function ThemeControl({
+  theme,
+  onChange,
+}: {
+  theme: "dark" | "light" | "system";
+  onChange: (theme: "dark" | "light" | "system") => void;
+}) {
+  const options: Array<{ id: "dark" | "light" | "system"; label: string; icon: IconName }> = [
+    { id: "dark", label: "Dark theme", icon: "moon" },
+    { id: "light", label: "Light theme", icon: "sun" },
+    { id: "system", label: "Match system", icon: "monitor" },
+  ];
+  return (
+    <div
+      role="group"
+      aria-label="Theme"
+      className="flex items-center gap-0.5 rounded-[var(--radius-sm)] border border-[var(--border-dim)] bg-[var(--surface)] p-0.5"
+    >
+      {options.map((option) => (
+        <button
+          key={option.id}
+          type="button"
+          onClick={() => onChange(option.id)}
+          aria-pressed={theme === option.id}
+          aria-label={option.label}
+          title={option.label}
+          className={`flex h-6 w-6 items-center justify-center rounded-[4px] transition-colors ${
+            theme === option.id
+              ? "bg-[var(--surface-3)] text-[var(--text)]"
+              : "text-[var(--faint)] hover:text-[var(--text-soft)]"
+          }`}
+        >
+          <Icon name={option.icon} className="h-3.5 w-3.5" />
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function Sidebar({
   route,
   drawerOpen,
+  theme,
   onNavigate,
   onDisconnect,
   onThemeChange,
   onClose,
+  onOpenPalette,
 }: {
   route: Route;
   drawerOpen: boolean;
+  theme: "dark" | "light" | "system";
   onNavigate: (href: string) => void;
   onDisconnect: () => void;
-  onThemeChange: (theme: "light" | "dark" | "system") => void;
+  onThemeChange: (theme: "dark" | "light" | "system") => void;
   onClose: () => void;
+  onOpenPalette: () => void;
 }) {
   const nav = useNavData(route);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const projectName = (id: string) =>
     nav.projects.find((project) => project.id === id)?.repository || "Project";
 
+  const activeProjectId = "projectId" in route ? route.projectId : undefined;
+  const activeProject = activeProjectId
+    ? nav.projects.find((project) => project.id === activeProjectId)
+    : undefined;
+  const workspaceLabel = activeProject?.repository || "All projects";
+
   const primary: Array<{
     label: string;
-    icon: string;
+    icon: IconName;
     routes: Array<Route["name"]>;
     href: string;
     badge?: number;
   }> = [
-    // The operating system's eight destinations, in the order the owner uses
-    // them: state of the org, conversation, workforce, departments,
-    // initiatives, execution, knowledge, configuration.
     { label: "Home", icon: "home", routes: ["overview"], href: "/" },
     { label: "Chat", icon: "chat", routes: ["chat"], href: "/chat" },
-    { label: "Agents", icon: "teammates", routes: ["bots", "bot"], href: "/agents" },
+    { label: "Work", icon: "work", routes: ["activity", "work", "task"], href: "/work", badge: nav.pendingApprovals },
+    { label: "Agents", icon: "agents", routes: ["bots", "bot"], href: "/agents" },
     { label: "Teams", icon: "teams", routes: ["teams", "team"], href: "/teams" },
-    {
-      label: "Projects",
-      icon: "projects",
-      routes: ["projects", "project"],
-      href: "/projects",
-    },
-    {
-      label: "Work",
-      icon: "work",
-      routes: ["activity", "work", "task"],
-      href: "/work",
-      badge: nav.pendingApprovals,
-    },
+    { label: "Projects", icon: "projects", routes: ["projects", "project"], href: "/projects" },
     { label: "Library", icon: "library", routes: ["library", "libraryDoc"], href: "/library" },
-    { label: "Settings", icon: "settings", routes: ["settings"], href: "/settings" },
+  ];
+  const secondary: Array<{ label: string; icon: IconName; routes: Array<Route["name"]>; href: string }> = [
+    { label: "Approvals", icon: "inbox", routes: ["approvals"], href: "/approvals" },
+    { label: "Boards", icon: "layers", routes: ["boards", "board"], href: "/boards" },
+    { label: "Workspace", icon: "command", routes: ["workspace"], href: "/workspace" },
+    { label: "Gallery", icon: "folder", routes: ["gallery"], href: "/gallery" },
+    { label: "Capabilities", icon: "cpu", routes: ["capabilities"], href: "/capabilities" },
   ];
 
   return (
     <aside
-      className={`fixed inset-y-0 left-0 z-50 flex w-[var(--width-sidebar)] shrink-0 flex-col overflow-hidden border-r border-[var(--border-dim)] bg-[var(--bg)] transition-transform duration-200 ease-out md:static md:translate-x-0 ${
+      className={`fixed inset-y-0 left-0 z-50 flex w-[var(--width-sidebar)] shrink-0 flex-col border-r border-[var(--border-dim)] bg-[var(--bg)] transition-transform duration-200 ease-[var(--ease-out)] md:static md:translate-x-0 ${
         drawerOpen ? "translate-x-0" : "-translate-x-full"
       }`}
+      aria-label="Application"
     >
-      <div className="flex h-full flex-col overflow-y-auto px-3 py-4">
-        <div className="mb-4 flex items-center justify-between px-2">
-          <strong className="font-semibold tracking-tight text-step-1 text-[var(--text)]">
-            NerdBot
-          </strong>
-          <svg
-            className="h-6 w-6 text-[--accent] transition-colors"
-            viewBox="0 0 24 24"
-            fill="currentColor"
-            aria-hidden="true"
-          >
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5.5 13.5l-1.4-1.4a.75.75 0 0 0-1.1 0L14.5 21H10a.75.75 0 0 1 0-1.5h4.5l-2.76-5.47a.75.75 0 0 0-1.1-1.1l2.08-2.08a.75.75 0 0 0 0-1.06l-2.76 5.47a.75.75 0 0 0 0 1.1L15.5 21h1.1z"/>
-          </svg>
+      <div className="flex h-12 shrink-0 items-center gap-2 px-4">
+        <img src="/nerdbot-mark.svg" alt="" className="h-5 w-5" />
+        <span className="text-[15px] font-semibold tracking-[-0.02em] text-[var(--text)]">
+          Nerdbot
+        </span>
+        <span className="ml-1 rounded-[4px] border border-[var(--border-dim)] px-1 py-px text-[9px] font-medium uppercase tracking-[0.1em] text-[var(--faint)]">
+          OS
+        </span>
+        <button
+          className="ml-auto rounded-[var(--radius-sm)] p-1.5 text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text)] md:hidden"
+          onClick={onClose}
+          aria-label="Close navigation"
+        >
+          <Icon name="close" className="h-4 w-4" />
+        </button>
+      </div>
+
+      <div className="px-3">
+        <div className="relative">
           <button
-            className="rounded-sm p-1.5 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)] md:hidden"
-            onClick={onClose}
-            aria-label="Close navigation"
+            type="button"
+            aria-haspopup="menu"
+            aria-expanded={workspaceOpen}
+            onClick={() => setWorkspaceOpen((open) => !open)}
+            className="flex h-9 w-full items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--border-dim)] bg-[var(--surface)] px-2.5 text-left transition-colors hover:border-[var(--border)] hover:bg-[var(--surface-2)]"
           >
-            ×
+            <span className="flex h-5 w-5 items-center justify-center rounded-[4px] bg-[var(--surface-3)] text-[10px] font-semibold uppercase text-[var(--text-soft)]">
+              {(workspaceLabel || "A").slice(0, 1)}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-step--1 text-[var(--text-soft)]">
+              {workspaceLabel}
+            </span>
+            <Icon name="chevron-down" className="h-3.5 w-3.5 text-[var(--faint)]" />
           </button>
+          {workspaceOpen ? (
+            <>
+              <div className="fixed inset-0 z-20" onClick={() => setWorkspaceOpen(false)} aria-hidden />
+              <div
+                role="menu"
+                aria-label="Switch project"
+                className="absolute left-0 right-0 top-full z-30 mt-1 overflow-hidden rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] p-1 shadow-[var(--shadow-lg)]"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setWorkspaceOpen(false);
+                    onNavigate("/projects");
+                  }}
+                  className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-step--1 text-[var(--text-soft)] hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
+                >
+                  <Icon name="projects" className="h-3.5 w-3.5 text-[var(--faint)]" />
+                  All projects
+                </button>
+                {nav.projects.map((project) => (
+                  <button
+                    key={project.id}
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setWorkspaceOpen(false);
+                      onNavigate(`/p/${project.id}`);
+                    }}
+                    className={`flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-step--1 hover:bg-[var(--surface-2)] ${
+                      project.id === activeProjectId
+                        ? "text-[var(--text)]"
+                        : "text-[var(--text-soft)]"
+                    }`}
+                  >
+                    <Icon name="folder" className="h-3.5 w-3.5 text-[var(--faint)]" />
+                    <span className="truncate">{project.repository || "Untitled project"}</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : null}
         </div>
 
         <button
-          onClick={() => onNavigate("/chat")}
-          className="mb-4 flex w-full items-center justify-center gap-2 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step--1 font-medium text-[var(--text-soft)] transition-colors hover:border-[var(--faint)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-inset"
+          type="button"
+          onClick={() => {
+            onNavigate("/");
+            window.dispatchEvent(new Event("nerdbot:compose"));
+          }}
+          className="mt-2 flex h-9 w-full items-center justify-center gap-1.5 rounded-[var(--radius-sm)] bg-[var(--accent)] px-3 text-step--1 font-medium text-[var(--accent-ink)] transition-colors hover:bg-[var(--accent-hover)] active:bg-[var(--accent-press)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
         >
-          <span aria-hidden className="text-[var(--accent)]">+</span>
-          New chat
+          <Icon name="plus" className="h-3.5 w-3.5" />
+          New objective
         </button>
+      </div>
 
-        <nav aria-label="Main" className="flex flex-col gap-0.5">
-          {primary.map((item) => (
+      <nav aria-label="Main" className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+        <NavGroup label="Operate">
+          {primary.slice(0, 3).map((item) => (
             <NavItem
               key={item.label}
               label={item.label}
@@ -330,66 +422,89 @@ function Sidebar({
               onClick={() => onNavigate(item.href)}
             />
           ))}
-        </nav>
+        </NavGroup>
+        <NavGroup label="Workforce">
+          {primary.slice(3, 5).map((item) => (
+            <NavItem
+              key={item.label}
+              label={item.label}
+              icon={item.icon}
+              active={item.routes.includes(route.name)}
+              onClick={() => onNavigate(item.href)}
+            />
+          ))}
+        </NavGroup>
+        <NavGroup label="Manage">
+          {primary.slice(5).map((item) => (
+            <NavItem
+              key={item.label}
+              label={item.label}
+              icon={item.icon}
+              active={item.routes.includes(route.name)}
+              onClick={() => onNavigate(item.href)}
+            />
+          ))}
+        </NavGroup>
 
-        {/* Advanced/contextual surfaces: preserved, not primary. */}
-        <div className="mt-2">
+        <div className="mt-4">
           <button
             type="button"
             aria-expanded={advancedOpen}
-            onClick={() => setAdvancedOpen((v) => !v)}
-            className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left text-step--2 font-medium uppercase tracking-[0.16em] text-[var(--faint)] transition-colors hover:text-[var(--text-soft)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-inset"
+            onClick={() => setAdvancedOpen((open) => !open)}
+            className="flex h-7 w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 text-left text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--faint)] transition-colors hover:text-[var(--text-soft)]"
           >
-            <span aria-hidden>{advancedOpen ? "▾" : "▸"}</span>
-            Advanced
+            <Icon
+              name="chevron-right"
+              className={`h-3 w-3 transition-transform ${advancedOpen ? "rotate-90" : ""}`}
+            />
+            More
           </button>
           {advancedOpen ? (
             <div className="mt-0.5 flex flex-col gap-0.5">
-              <NavItem label="Approvals" icon="approvals" active={route.name === "approvals"} badge={nav.pendingApprovals} onClick={() => onNavigate("/approvals")} />
-              <NavItem label="Boards" icon="boards" active={route.name === "boards" || route.name === "board"} onClick={() => onNavigate("/boards")} />
-              <NavItem label="Workbench" icon="workbench" active={route.name === "workbench"} onClick={() => onNavigate("/workbench")} />
-              <NavItem label="Gallery" icon="gallery" active={route.name === "gallery"} onClick={() => onNavigate("/gallery")} />
-              <NavItem label="Capabilities" icon="settings" active={route.name === "capabilities"} onClick={() => onNavigate("/capabilities")} />
+              {secondary.map((item) => (
+                <NavItem
+                  key={item.label}
+                  label={item.label}
+                  icon={item.icon}
+                  active={item.routes.includes(route.name)}
+                  onClick={() => onNavigate(item.href)}
+                />
+              ))}
             </div>
           ) : null}
         </div>
 
         {nav.threads.length > 0 ? (
           <section className="mt-5" aria-label="Recent conversations">
-            <div className="mb-1 flex items-center justify-between px-3">
-              <span className="text-step--2 font-medium uppercase tracking-[0.16em] text-[var(--faint)]">
+            <div className="mb-1 flex items-center justify-between px-2.5">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--faint)]">
                 Recent
               </span>
               <button
                 onClick={() => onNavigate("/chat")}
-                className="text-step--2 text-[var(--faint)] hover:text-[var(--text)]"
+                className="text-step--2 text-[var(--faint)] transition-colors hover:text-[var(--text)]"
               >
                 All
               </button>
             </div>
             <div className="flex flex-col">
-              {nav.threads.map((thread) => {
-                const active =
-                  route.name === "chat" && route.threadId === thread.id;
+              {nav.threads.slice(0, 4).map((thread) => {
+                const active = route.name === "chat" && route.threadId === thread.id;
                 return (
                   <button
                     key={thread.id}
-                    onClick={() =>
-                      onNavigate(
-                        `/chat/${thread.project_id}?thread=${thread.id}`,
-                      )
-                    }
+                    onClick={() => onNavigate(`/chat/${thread.project_id}?thread=${thread.id}`)}
                     aria-current={active ? "page" : undefined}
-                    className={`flex flex-col rounded-md px-3 py-1.5 text-left transition-colors ${
+                    className={`flex flex-col rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left transition-colors ${
                       active
-                        ? "bg-[var(--surface-3)] text-[var(--text)]"
+                        ? "bg-[var(--surface-2)] text-[var(--text)]"
                         : "text-[var(--text-soft)] hover:bg-[var(--surface-2)]"
                     }`}
                   >
                     <span className="truncate text-step--1">
                       {thread.title || "Untitled conversation"}
                     </span>
-                    <span className="truncate text-step--2 text-[var(--faint)]">
+                    <span className="truncate text-[11px] text-[var(--faint)]">
                       {projectName(thread.project_id)}
                     </span>
                   </button>
@@ -398,23 +513,316 @@ function Sidebar({
             </div>
           </section>
         ) : null}
+      </nav>
 
-        <div className="mt-auto flex flex-col gap-1 border-t border-[var(--border-dim)] pt-3">
+      <div className="shrink-0 border-t border-[var(--border-dim)] px-3 py-2.5">
+        <button
+          type="button"
+          onClick={onOpenPalette}
+          className="mb-2 flex h-8 w-full items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--border-dim)] bg-[var(--surface)] px-2.5 text-step--1 text-[var(--faint)] transition-colors hover:border-[var(--border)] hover:text-[var(--text-soft)]"
+        >
+          <Icon name="search" className="h-3.5 w-3.5" />
+          <span className="flex-1 text-left">Search</span>
+          <Kbd>⌘K</Kbd>
+        </button>
+        <div className="flex items-center justify-between gap-2">
+          <span className="inline-flex items-center gap-1.5 text-[11px] text-[var(--faint)]">
+            <span className="h-1.5 w-1.5 rounded-full bg-[var(--success)]" aria-hidden />
+            Connected
+          </span>
+          <ThemeControl theme={theme} onChange={onThemeChange} />
+        </div>
+        <div className="mt-2 flex items-center justify-between">
+          <button
+            onClick={() => onNavigate("/settings")}
+            className="inline-flex items-center gap-1.5 text-[11px] text-[var(--faint)] transition-colors hover:text-[var(--text-soft)]"
+          >
+            <Icon name="settings" className="h-3 w-3" />
+            Settings
+          </button>
           <button
             onClick={onDisconnect}
-            className="flex w-full items-center rounded-md px-3 py-1.5 text-left text-[var(--muted)] text-step--1 transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text-soft)]"
+            className="text-[11px] text-[var(--faint)] transition-colors hover:text-[var(--text-soft)]"
           >
             Disconnect
           </button>
-          <div className="flex items-center gap-2 px-3 py-1.5">
-            <span className="text-[var(--faint)] text-step--2">
-              Theme
-            </span>
-            <ThemeButton onThemeChange={onThemeChange} />
-          </div>
         </div>
       </div>
     </aside>
+  );
+}
+
+const SECTION_TITLE: Record<Route["name"], string> = {
+  overview: "Command center",
+  work: "Work",
+  activity: "Work",
+  workspace: "Workspace",
+  chat: "Chat",
+  teams: "Teams",
+  team: "Team",
+  bot: "Agent",
+  boards: "Boards",
+  board: "Board",
+  projects: "Projects",
+  settings: "Settings",
+  project: "Project",
+  task: "Task",
+  capabilities: "Capabilities",
+  bots: "Agents",
+  library: "Library",
+  libraryDoc: "Library",
+  gallery: "Gallery",
+  approvals: "Approvals",
+};
+
+function TopBar({
+  route,
+  onMenu,
+  onPalette,
+}: {
+  route: Route;
+  onMenu: () => void;
+  onPalette: () => void;
+}) {
+  return (
+    <header className="flex h-12 shrink-0 items-center gap-3 border-b border-[var(--border-dim)] bg-[var(--bg)] px-4 md:px-6">
+      <button
+        type="button"
+        onClick={onMenu}
+        className="-ml-1 rounded-[var(--radius-sm)] p-1.5 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)] md:hidden"
+        aria-label="Open navigation"
+      >
+        <Icon name="menu" className="h-4 w-4" />
+      </button>
+      <div className="flex min-w-0 items-center gap-2 text-step--1">
+        <span className="hidden text-[var(--faint)] sm:inline">Nerdbot</span>
+        <Icon name="chevron-right" className="hidden h-3 w-3 text-[var(--faint)] sm:block" />
+        <span className="truncate font-medium text-[var(--text-soft)]">
+          {SECTION_TITLE[route.name] ?? "Nerdbot"}
+        </span>
+      </div>
+      <div className="ml-auto flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onPalette}
+          className="hidden h-8 w-56 items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--border-dim)] bg-[var(--surface)] px-2.5 text-step--1 text-[var(--faint)] transition-colors hover:border-[var(--border)] hover:text-[var(--text-soft)] lg:flex"
+        >
+          <Icon name="search" className="h-3.5 w-3.5" />
+          <span className="flex-1 text-left">Search or jump to</span>
+          <Kbd>⌘K</Kbd>
+        </button>
+        <button
+          type="button"
+          onClick={onPalette}
+          className="rounded-[var(--radius-sm)] p-1.5 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)] lg:hidden"
+          aria-label="Search or jump to"
+        >
+          <Icon name="search" className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            navigate("/");
+            window.dispatchEvent(new Event("nerdbot:compose"));
+          }}
+          className="hidden h-8 items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--border-dim)] bg-[var(--surface)] px-2.5 text-step--1 text-[var(--text-soft)] transition-colors hover:border-[var(--border)] hover:bg-[var(--surface-2)] hover:text-[var(--text)] sm:flex"
+        >
+          <Icon name="plus" className="h-3.5 w-3.5" />
+          New objective
+        </button>
+      </div>
+    </header>
+  );
+}
+
+interface PaletteItem {
+  id: string;
+  label: string;
+  hint?: string;
+  icon: IconName;
+  section: string;
+  run: () => void;
+}
+
+function CommandPalette({ onClose }: { onClose: () => void }) {
+  const nav = useNavData({ name: "overview" });
+  const [query, setQuery] = useState("");
+  const [index, setIndex] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const id = window.setTimeout(() => inputRef.current?.focus(), 10);
+    return () => window.clearTimeout(id);
+  }, []);
+
+  const go = useCallback(
+    (href: string) => {
+      onClose();
+      navigate(href);
+    },
+    [onClose],
+  );
+
+  const items: PaletteItem[] = useMemo(() => {
+    const base: PaletteItem[] = [
+      { id: "home", label: "Home", hint: "Command center", icon: "home", section: "Go to", run: () => go("/") },
+      { id: "chat", label: "Chat", hint: "Conversations and objectives", icon: "chat", section: "Go to", run: () => go("/chat") },
+      { id: "work", label: "Work", hint: "Execution center", icon: "work", section: "Go to", run: () => go("/work") },
+      { id: "agents", label: "Agents", hint: "Workforce directory", icon: "agents", section: "Go to", run: () => go("/agents") },
+      { id: "teams", label: "Teams", hint: "Groups of agents", icon: "teams", section: "Go to", run: () => go("/teams") },
+      { id: "projects", label: "Projects", hint: "All projects", icon: "projects", section: "Go to", run: () => go("/projects") },
+      { id: "library", label: "Library", hint: "Documents and deliverables", icon: "library", section: "Go to", run: () => go("/library") },
+      { id: "settings", label: "Settings", hint: "Providers, limits, governance", icon: "settings", section: "Go to", run: () => go("/settings") },
+      {
+        id: "compose",
+        label: "New objective",
+        hint: "Plan work before anything runs",
+        icon: "spark",
+        section: "Actions",
+        run: () => {
+          onClose();
+          navigate("/");
+          window.dispatchEvent(new Event("nerdbot:compose"));
+        },
+      },
+      {
+        id: "new-task",
+        label: "New task",
+        hint: "Create work directly",
+        icon: "plus",
+        section: "Actions",
+        run: () => {
+          onClose();
+          navigate("/work");
+          window.dispatchEvent(new Event("nerdbot:new-task"));
+        },
+      },
+    ];
+    const projects = nav.projects.map<PaletteItem>((project) => ({
+      id: `project-${project.id}`,
+      label: project.repository || "Untitled project",
+      hint: "Open project",
+      icon: "folder",
+      section: "Projects",
+      run: () => go(`/p/${project.id}`),
+    }));
+    const threads = nav.threads.map<PaletteItem>((thread) => ({
+      id: `thread-${thread.id}`,
+      label: thread.title || "Untitled conversation",
+      hint: "Open conversation",
+      icon: "chat",
+      section: "Recent conversations",
+      run: () => go(`/chat/${thread.project_id}?thread=${thread.id}`),
+    }));
+    return [...base, ...projects, ...threads];
+  }, [go, nav.projects, nav.threads, onClose]);
+
+  const needle = query.trim().toLowerCase();
+  const results = needle
+    ? items.filter((item) =>
+        `${item.label} ${item.hint ?? ""} ${item.section}`.toLowerCase().includes(needle),
+      )
+    : items;
+  const grouped = results.reduce<Record<string, PaletteItem[]>>((acc, item) => {
+    (acc[item.section] ??= []).push(item);
+    return acc;
+  }, {});
+  const flat = Object.values(grouped).flat();
+
+  return (
+    <div
+      className="fixed inset-0 z-[70] flex items-start justify-center bg-black/55 px-4 pt-[12vh] backdrop-blur-[2px]"
+      onClick={onClose}
+      role="presentation"
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Search and commands"
+        className="animate-fade-in w-full max-w-[560px] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-lg)]"
+        onClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.stopPropagation();
+            onClose();
+          }
+          if (event.key === "ArrowDown") {
+            event.preventDefault();
+            setIndex((current) => (flat.length ? (current + 1) % flat.length : 0));
+          }
+          if (event.key === "ArrowUp") {
+            event.preventDefault();
+            setIndex((current) => (flat.length ? (current - 1 + flat.length) % flat.length : 0));
+          }
+          if (event.key === "Enter") {
+            event.preventDefault();
+            flat[index]?.run();
+          }
+        }}
+      >
+        <div className="flex items-center gap-2 border-b border-[var(--border-dim)] px-3">
+          <Icon name="search" className="h-4 w-4 text-[var(--faint)]" />
+          <input
+            ref={inputRef}
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setIndex(0);
+            }}
+            placeholder="Search pages, projects, and conversations"
+            aria-label="Search pages, projects, and conversations"
+            className="h-11 w-full bg-transparent text-step-0 text-[var(--text)] outline-none placeholder:text-[var(--faint)]"
+          />
+          <Kbd>Esc</Kbd>
+        </div>
+        <div className="max-h-[52vh] overflow-y-auto p-1.5">
+          {flat.length === 0 ? (
+            <div className="px-3 py-8 text-center text-step--1 text-[var(--muted)]">
+              Nothing matches “{query}”.
+            </div>
+          ) : (
+            Object.entries(grouped).map(([section, sectionItems]) => (
+              <div key={section} className="mb-1">
+                <div className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--faint)]">
+                  {section}
+                </div>
+                {sectionItems.map((item) => {
+                  const itemIndex = flat.indexOf(item);
+                  const active = itemIndex === index;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onMouseEnter={() => setIndex(itemIndex)}
+                      onClick={item.run}
+                      className={`flex w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2.5 py-2 text-left transition-colors ${
+                        active ? "bg-[var(--surface-2)]" : ""
+                      }`}
+                    >
+                      <Icon
+                        name={item.icon}
+                        className={`h-3.5 w-3.5 ${active ? "text-[var(--text-soft)]" : "text-[var(--faint)]"}`}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-step--1 text-[var(--text)]">
+                          {item.label}
+                        </span>
+                        {item.hint ? (
+                          <span className="block truncate text-[11px] text-[var(--faint)]">
+                            {item.hint}
+                          </span>
+                        ) : null}
+                      </span>
+                      {active ? <Kbd>↵</Kbd> : null}
+                    </button>
+                  );
+                })}
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -427,7 +835,8 @@ export default function App() {
   const [probing, setProbing] = useState(() => getSession() === null);
   const [activeThreadId, setActiveThread] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const { setTheme } = useTheme();
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const { theme, setTheme } = useTheme();
 
   // Always try to establish the session on mount, overriding any stale
   // session data from localStorage. This is critical because the backend
@@ -445,6 +854,13 @@ export default function App() {
     };
   }, []);
 
+  // Keep old /workbench links working; canonical route is /workspace.
+  useEffect(() => {
+    if (window.location.pathname.startsWith("/workbench")) {
+      navigate(window.location.pathname.replace(/^\/workbench/, "/workspace") + window.location.search + window.location.hash);
+    }
+  }, []);
+
   useEffect(() => {
     const remove = onRouteChange(() => setRoute(parseRoute()));
     const mq = window.matchMedia("(max-width: 760px)");
@@ -456,6 +872,17 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPaletteOpen((open) => !open);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const openProject = (id: string) => {
     navigate(`/p/${id}`);
   };
@@ -463,8 +890,9 @@ export default function App() {
   if (!connected) {
     if (probing) {
       return (
-        <div className="flex h-full flex-col items-center justify-center bg-[var(--bg)] text-[var(--muted)] text-[var(--text)]">
-          <p className="text-step-0">Connecting to {defaultApiBase()}.</p>
+        <div className="flex h-full flex-col items-center justify-center gap-3 bg-[var(--bg)] text-[var(--muted)]">
+          <img src="/nerdbot-mark.svg" alt="" className="h-8 w-8" />
+          <p className="text-step--1">Connecting to {defaultApiBase()}</p>
           <Toaster position="bottom-right" richColors closeButton />
         </div>
       );
@@ -493,11 +921,11 @@ export default function App() {
     case "activity":
       content = <WorkView />;
       break;
-    case "workbench":
+    case "workspace":
       content = (
         <WorkbenchView
           initialProjectId={
-            route.name === "workbench" ? route.projectId : undefined
+            route.name === "workspace" ? route.projectId : undefined
           }
         />
       );
@@ -568,19 +996,27 @@ export default function App() {
       break;
     default:
       content = (
-        <EmptyState
-          title="Workspace"
-          hint="Select a workspace area from the sidebar."
-        />
+        <Page width="data">
+          <EmptyState
+            title="Nothing here"
+            hint="Select an area from the navigation."
+          />
+        </Page>
       );
   }
 
+  const mobileNav: Array<{ label: string; icon: IconName; href: string; routes: Array<Route["name"]> }> = [
+    { label: "Home", icon: "home", href: "/", routes: ["overview"] },
+    { label: "Chat", icon: "chat", href: "/chat", routes: ["chat"] },
+    { label: "Work", icon: "work", href: "/work", routes: ["activity", "work", "task"] },
+    { label: "Agents", icon: "agents", href: "/agents", routes: ["bots", "bot"] },
+  ];
+
   return (
     <div className="flex h-full overflow-hidden bg-[var(--bg)] text-[var(--text)]">
-      {/* Mobile drawer scrim */}
       {drawerOpen ? (
         <div
-          className="fixed inset-0 z-40 bg-black/40 md:hidden"
+          className="fixed inset-0 z-40 bg-black/45 backdrop-blur-[1px] md:hidden"
           onClick={() => setDrawerOpen(false)}
           aria-hidden
         />
@@ -589,6 +1025,7 @@ export default function App() {
       <Sidebar
         route={route}
         drawerOpen={drawerOpen}
+        theme={theme}
         onNavigate={(href) => {
           setDrawerOpen(false);
           navigate(href);
@@ -600,32 +1037,25 @@ export default function App() {
         }}
         onThemeChange={setTheme}
         onClose={() => setDrawerOpen(false)}
+        onOpenPalette={() => setPaletteOpen(true)}
       />
 
-      <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden pb-14 md:pb-0">
-        <button
-          className="fixed top-3 left-3 z-40 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-step--1 text-[var(--text)] shadow-sm transition-colors hover:bg-[var(--surface-2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] md:hidden"
-          aria-label="Open navigation"
-          onClick={() => setDrawerOpen(true)}
-        >
-          ☰
-        </button>
-        {content}
-        <Toaster position="bottom-right" richColors closeButton />
-      </main>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <TopBar
+          route={route}
+          onMenu={() => setDrawerOpen(true)}
+          onPalette={() => setPaletteOpen(true)}
+        />
+        <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden pb-14 md:pb-0">
+          {content}
+        </main>
+      </div>
 
-      {/* Mobile bottom navigation for primary destinations. */}
       <nav
         aria-label="Primary"
-        className="fixed inset-x-0 bottom-0 z-40 flex items-stretch border-t border-[var(--border-dim)] bg-[var(--bg)]/95 backdrop-blur md:hidden"
+        className="fixed inset-x-0 bottom-0 z-40 flex h-14 items-stretch border-t border-[var(--border-dim)] bg-[var(--bg)] md:hidden"
       >
-        {[
-          { label: "Home", icon: "home", href: "/", routes: ["overview"] },
-          { label: "Chat", icon: "chat", href: "/chat", routes: ["chat"] },
-          { label: "Agents", icon: "teammates", href: "/agents", routes: ["bots", "bot"] },
-          { label: "Work", icon: "work", href: "/work", routes: ["activity", "work", "task"] },
-          { label: "Projects", icon: "projects", href: "/projects", routes: ["projects", "project"] },
-        ].map((item) => {
+        {mobileNav.map((item) => {
           const active = item.routes.includes(route.name);
           return (
             <button
@@ -636,16 +1066,30 @@ export default function App() {
                 navigate(item.href);
               }}
               aria-current={active ? "page" : undefined}
-              className={`flex flex-1 flex-col items-center justify-center gap-0.5 py-2 text-step--2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-inset ${
+              className={`flex flex-1 flex-col items-center justify-center gap-0.5 text-[10px] transition-colors ${
                 active ? "text-[var(--accent)]" : "text-[var(--muted)]"
               }`}
             >
-              <NavIcon name={item.icon} />
+              <Icon name={item.icon} className="h-4 w-4" />
               <span className="truncate">{item.label}</span>
             </button>
           );
         })}
+        <button
+          type="button"
+          onClick={() => setDrawerOpen(true)}
+          className="flex flex-1 flex-col items-center justify-center gap-0.5 text-[10px] text-[var(--muted)]"
+          aria-label="More destinations"
+        >
+          <Icon name="more" className="h-4 w-4" />
+          <span>More</span>
+        </button>
       </nav>
+
+      {paletteOpen ? (
+        <CommandPalette onClose={() => setPaletteOpen(false)} />
+      ) : null}
+      <Toaster position="bottom-right" richColors closeButton />
     </div>
   );
 }
@@ -698,7 +1142,7 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }) {
     setBusy(true);
     try {
       // Probe first: in dev mode the server hands back the well-known token so
-      // the owner never has to type it. The probe is best-effort — a failure
+      // the owner never has to type it. The probe is best-effort  a failure
       // here just means the real connect attempt below will surface the error.
       let tokenToUse = token;
       try {
@@ -730,14 +1174,14 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }) {
         <div className="w-full max-w-[440px] rounded-xl border border-[var(--border-dim)] bg-[var(--surface)] p-6 shadow-sm md:p-8">
           <div className="mb-6">
             <div className="mb-2 text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--faint)]">NerdBot</div>
-            <h1 className="text-step-2 font-semibold tracking-[-0.02em] text-[var(--text)]">Connect to your workspace</h1>
+            <h1 className="text-step-2 font-semibold tracking-[-0.02em] text-[var(--text)]">Connect to Nerdbot</h1>
             <p className="mt-2 text-step-0 leading-relaxed text-[var(--muted)]">
               Enter your API server to continue.
             </p>
           </div>
           {error ? (
             <div
-              className="mb-4 rounded-lg border border-[var(--danger-dim)] bg-[var(--danger-dim)]/40 px-4 py-3 text-step--1 text-[var(--text)]"
+              className="mb-4 rounded-lg border border-[var(--danger-dim)] bg-[var(--danger-dim)] px-4 py-3 text-step--1 text-[var(--text)]"
               role="alert"
             >
               {error}

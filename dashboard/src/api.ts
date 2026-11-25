@@ -32,6 +32,7 @@ import type {
   Provider,
   Reminder,
   Review,
+  Routine,
   Run,
   RunEvent,
   RunEventPage,
@@ -45,11 +46,14 @@ import type {
   Teammate,
   TerminalSessionInfo,
   ThreadView,
+  WorkspaceBrowseResult,
+  WorkspaceDefaultResult,
   WorkspaceDiff,
   WorkspaceFile,
   WorkspaceFileContent,
   WorkspaceMeta,
   WorkspaceTree,
+  WorkspaceVetResult,
 } from "./types";
 
 export interface Session {
@@ -100,7 +104,7 @@ function readStoredSession(): Session | null {
       return stored;
     }
   } catch {
-    // corrupt or sandboxed storage — treat as signed out
+    // corrupt or sandboxed storage  treat as signed out
   }
   return null;
 }
@@ -113,7 +117,7 @@ export function setSession(next: Session | null): void {
       else localStorage.removeItem(SESSION_KEY);
     }
   } catch {
-    // storage unavailable (private mode etc.) — memory-only session still works
+    // storage unavailable (private mode etc.) memory-only session still works
   }
 }
 
@@ -138,7 +142,7 @@ export class ApiError extends Error {
 }
 
 /** Human-readable form for any thrown error. Gated bot actions (409) carry a
- *  pending approval object — say where to approve it instead of dumping JSON. */
+ *  pending approval object  say where to approve it instead of dumping JSON. */
 export function describeError(err: unknown): string {
   if (err instanceof ApiError) {
     const base = `Error ${err.status}: ${err.detail}`;
@@ -239,7 +243,7 @@ const patch = <T>(path: string, body: unknown = {}): Promise<T> =>
 export const api = {
   health: () => req<Health>("/health"),
   capabilities: () => req<{ capabilities: Capability[] }>("/capabilities"),
-  /** Canonical permission catalogue — the UI never hard-codes permission names. */
+  /** Canonical permission catalogue  the UI never hard-codes permission names. */
   permissions: () =>
     req<{
       permissions: Permission[];
@@ -417,16 +421,25 @@ export const api = {
     req<WorkspaceFileContent>(
       `/projects/${projectId}/workspace/file?path=${encodeURIComponent(path)}`,
     ),
-  saveProjectWorkspaceFile: (projectId: string, path: string, content: string) =>
-    req<{ path: string; size: number }>(`/projects/${projectId}/workspace/file`, {
+  saveProjectWorkspaceFile: (projectId: string, path: string, content: string, expectedHash?: string) =>
+    req<{ path: string; size: number; sha256?: string; modified?: number }>(`/projects/${projectId}/workspace/file`, {
       method: "PUT",
-      body: { path, content },
+      body: { path, content, ...(expectedHash ? { expected_hash: expectedHash } : {}) },
     }),
   attachProjectWorkspace: (projectId: string, path: string, initializeGit = false) =>
     post<WorkspaceMeta>(`/projects/${projectId}/workspace/attach`, {
       path,
       initialize_git: initializeGit,
     }),
+  browseWorkspace: (path = "") =>
+    req<WorkspaceBrowseResult>(`/workspace/browse?path=${encodeURIComponent(path)}`),
+  workspaceAudit: (projectId: string, limit = 50) =>
+    req<{ items: any[]; count: number }>(`/projects/${projectId}/workspace/audit?limit=${limit}`),
+  revertWorkspaceFile: (projectId: string, body: { path: string; snapshot_ref?: string; commit?: string; expected_hash?: string; force?: boolean }) =>
+    post<{ ok: boolean; path: string; sha256?: string }>(`/projects/${projectId}/workspace/revert`, body),
+  vetWorkspace: (path: string) =>
+    req<WorkspaceVetResult>(`/workspace/vet?path=${encodeURIComponent(path)}`),
+  defaultWorkspace: () => req<WorkspaceDefaultResult>("/workspace/default"),
   projectWorkspaceDiff: (projectId: string) =>
     req<WorkspaceDiff>(`/projects/${projectId}/workspace/diff`),
   createTerminal: (projectId: string, cols = 100, rows = 26) =>
@@ -733,6 +746,10 @@ export const api = {
   teammateSkills: (teammateId: string) => req<{ skills: any[]; resolved: any[] }>(`/teammates/${teammateId}/skills`),
   attachSkill: (teammateId: string, skillId: string) => post<any>(`/teammates/${teammateId}/skills/${skillId}`, {}),
   detachSkill: (teammateId: string, skillId: string) => req<any>(`/teammates/${teammateId}/skills/${skillId}`, { method: "DELETE" }),
+  listRoutines: (teammateId: string) => req<{ routines: Routine[] }>(`/teammates/${teammateId}/routines`),
+  createRoutine: (teammateId: string, body: Record<string, unknown>) => post<Routine>(`/teammates/${teammateId}/routines`, body),
+  patchRoutine: (routineId: string, body: Record<string, unknown>) => patch<Routine>(`/routines/${routineId}`, body),
+  deleteRoutine: (routineId: string) => req<{ deleted: boolean }>(`/routines/${routineId}`, { method: "DELETE" }),
 
   projectEvents: (projectId: string, entity?: string) =>
     req<{ events: Event[] }>(
