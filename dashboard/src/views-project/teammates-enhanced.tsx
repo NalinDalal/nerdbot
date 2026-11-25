@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { useState } from "react";
 import { api, describeError } from "../api";
 import { navigate } from "../app";

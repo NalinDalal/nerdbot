@@ -1,4 +1,3 @@
-// @ts-nocheck
 /** NerdBot Command Center - AI Operating Environment.
 
   The homepage is the user's entry point into the autonomous AI operating
@@ -12,11 +11,16 @@
   retaining all the execution infrastructure underneath.
 */
 
-import { useEffect } from "react";
-import { useAsync, Button, EmptyState } from "./components";
+import { useState, type FormEvent } from "react";
+import {
+  approvalIsPending,
+  Badge,
+  Button,
+  EmptyState,
+  useAsync,
+} from "./components";
 import { api } from "./api";
 import { navigate } from "./router";
-import { usePermissionCatalogue } from "./components/ui";
 import type { Run, Task, Teammate } from "./types";
 
 export interface ProjectBundle {
@@ -29,7 +33,7 @@ export interface ProjectBundle {
 
 export interface WorkspaceSummary {
   bundles: ProjectBundle[];
-  teams: { id: string; name: string; status: "active" | "archived" }[];
+  teams: TeamBundle[];
   bots: Teammate[];
   activeRuns: Run[];
   failedRuns: Run[];
@@ -61,9 +65,9 @@ export function summarize(
   data: Pick<WorkspaceSummary, "bundles" | "teams" | "bots">,
   now?: number,
 ): WorkspaceSummary {
-  const bundles: ProjectBundle[] = data.bundles ?? [];
-  const teams: TeamBundle[] = data.teams ?? [];
-  const bots: Teammate[] = data.bots ?? [];
+  const bundles = data.bundles ?? [];
+  const teams = data.teams ?? [];
+  const bots = data.bots ?? [];
 
   const runningRuns: Run[] = [];
   const failedRuns: Run[] = [];
@@ -74,12 +78,12 @@ export function summarize(
   let awaitingTasks = 0;
 
   for (const bundle of bundles) {
-    for (const task of bundle.tasks) {
-      if (task.status === "running") runningRuns.push(task.runs?.[0] ?? task);
-      if (task.status === "failed") failedRuns.push(task);
+    for (const run of bundle.runs) {
+      if (run.status === "running") runningRuns.push(run);
+      if (run.status === "failed") failedRuns.push(run);
     }
 
-    const tally = tasks => {
+    const tally = (tasks: Task[]) => {
       let queued = 0, running = 0, blocked = 0, awaiting = 0;
       for (const t of tasks) {
         if (t.status === "queued") queued++;
@@ -103,8 +107,8 @@ export function summarize(
 
   return {
     bundles,
-    teams: teams.length > 0 ? teams : undefined,
-    bots: bots.length > 0 ? bots : undefined,
+    teams,
+    bots,
     activeRuns: runningRuns,
     failedRuns,
     pendingApprovals,
@@ -119,78 +123,66 @@ export function summarize(
    useWorkspaceSummary hook (preserves existing contract)
    --------------------------------------------------------------- */
 
-export function useWorkspaceSummary(): ReturnType<typeof useAsync<WorkspaceSummary>> & {
+interface WorkspaceSummarySnapshot {
   summary: WorkspaceSummary;
   loadFailed: boolean;
-} {
-  const state = useAsync(async (): Promise<WorkspaceSummary> => {
+}
+
+export function useWorkspaceSummary() {
+  const state = useAsync(async (): Promise<WorkspaceSummarySnapshot> => {
     const [projectsRes, teamsRes, botsRes] = await Promise.all([
       api.listProjects(),
       api.listTeams(),
       api.listAllTeammates(),
     ]);
 
-    const projectList = projectsRes.projects ?? [];
     const bundles: ProjectBundle[] = await Promise.all(
-      projectList.map(async (project) => {
-        const tasks = api.projectTasks(project.id).then(r => r.tasks) ?? [];
-        const runs = api.projectRuns(project.id).then(r => r.runs) ?? [];
-        const approvals = api.projectApprovals(project.id).then(r => r.approvals) ?? [];
-        const teammates = api.listTeammates(project.id).then(r => r.teammates) ?? [];
-        return Promise.all([tasks, runs, approvals, teammates]).then(
-          ([tasks, runs, approvals, teammates]) => ({
-            project,
-            tasks: tasks ?? [],
-            runs: runs ?? [],
-            approvals: approvals ?? [],
-            teammates: teammates ?? [],
-          }),
-        );
+      (projectsRes.projects ?? []).map(async (project) => {
+        const [tasksRes, runsRes, approvalsRes, teammatesRes] = await Promise.all([
+          api.projectTasks(project.id),
+          api.projectRuns(project.id),
+          api.projectApprovals(project.id),
+          api.listTeammates(project.id),
+        ]);
+        return {
+          project,
+          tasks: tasksRes.tasks ?? [],
+          runs: runsRes.runs ?? [],
+          approvals: approvalsRes.approvals ?? [],
+          teammates: teammatesRes.teammates ?? [],
+        };
       }),
     );
 
-    const teamBundles: TeamBundle[] = (teamsRes.teams ?? []).map(team => {
-      const detail = api.getTeam(team.id);
-      if (!detail) return { team, projects: [], teammates: [] };
-      return {
-        team: { ...detail, name: detail.name || "Unnamed team", status: detail.status || "active" },
-        projects: detail.projects?.map((p: any) => p.id) ?? [],
-        teammates: detail.teammates ?? [],
-      };
-    });
+    const teamBundles: TeamBundle[] = await Promise.all(
+      (teamsRes.teams ?? []).map(async (team) => {
+        const detail = await api.getTeam(team.id);
+        return {
+          team: {
+            id: detail.team.id || team.id,
+            name: detail.team.name || team.name || "Unnamed team",
+            status: detail.team.status ?? team.status ?? "active",
+          },
+          projects: (detail.projects ?? []).map((p) => p.id),
+          teammates: detail.teammates ?? [],
+        };
+      }),
+    );
 
     return {
-      summary: {
-        bundles: bundles.length > 0 ? bundles : undefined,
-        teams: teamBundles.length > 0 ? teamBundles : undefined,
+      summary: summarize({
+        bundles,
+        teams: teamBundles,
         bots: botsRes.teammates ?? [],
-        activeRuns: [],
-        failedRuns: [],
-        pendingApprovals: [],
-        queuedTasks: 0,
-        runningTasks: 0,
-        blockedTasks: 0,
-        awaitingTasks: 0,
-      },
+      }),
       loadFailed: false,
     };
   }, []);
 
   return {
     ...state,
-    summary: state.data?.summary ?? {
-      bundles: [],
-      teams: [],
-      bots: [],
-      activeRuns: [],
-      failedRuns: [],
-      pendingApprovals: [],
-      queuedTasks: 0,
-      runningTasks: 0,
-      blockedTasks: 0,
-      awaitingTasks: 0,
-    },
-    loadFailed: state.data?.loadFailed ?? false,
+    summary: state.data?.summary ?? emptySummary(),
+    loadFailed: state.data?.loadFailed ?? Boolean(state.error),
   };
 }
 
@@ -227,20 +219,19 @@ export function HomeView({
   onOpenTeam: (teamId: string) => void;
 }) {
   const teamButtonExtraClass = " border-t border-[var(--border-dim)]";
-  const { data, loadFailed } = useWorkspaceSummary();
-  const summary = data?.summary ?? emptySummary();
+  const { summary, loadFailed } = useWorkspaceSummary();
 
   /* ==============================================================
      Active work at a glance — running objectives
      ============================================================== */
 
   const activeWork = summary.bundles
-    .filter(b => b.tasks.some(t => t.status === "running"))
-    .map(b => ({
+    .filter((b) => b.tasks.some((t) => t.status === "running"))
+    .map((b) => ({
       project: b.project.repository || "Unnamed project",
-      running: b.tasks.filter(t => t.status === "running").length,
-      blocked: b.tasks.filter(t => t.status === "blocked").length,
-      awaiting: b.tasks.filter(t => t.status === "awaiting_approval").length,
+      running: b.tasks.filter((t) => t.status === "running").length,
+      blocked: b.tasks.filter((t) => t.status === "blocked").length,
+      awaiting: b.tasks.filter((t) => t.status === "awaiting_approval").length,
     }));
 
   /* ==============================================================
@@ -248,38 +239,45 @@ export function HomeView({
      ============================================================== */
 
   const needsAttention = summary.bundles
-    .filter(b => b.tasks.some(t => t.status === "blocked" || t.status === "awaiting_approval"))
+    .filter((b) => b.tasks.some((t) => t.status === "blocked" || t.status === "awaiting_approval"))
     .slice(0, 3)
-    .map(b => ({
+    .map((b) => ({
+      projectId: b.project.id,
       project: b.project.repository || "Unnamed project",
       issues: b.tasks
-        .filter(t => t.status === "blocked" || t.status === "awaiting_approval")
-        .map(t => {
-          const reason = t.blocked_reason || t.status === "awaiting_approval" ? "approval needed" : t.blocked_reason;
-          return { id: t.id, reason };
-        }),
+        .filter((t) => t.status === "blocked" || t.status === "awaiting_approval")
+        .map((t) => ({
+          id: t.id,
+          reason:
+            t.status === "awaiting_approval"
+              ? "approval needed"
+              : t.blocked_reason || "blocked",
+        })),
     }));
 
   /* ==============================================================
      Pending approvals — what requires user attention
      ============================================================== */
 
-  const pendingApprovals = summary.pendingApprovals.slice(0, 5).map((a: any) => ({
+  const pendingApprovals = summary.pendingApprovals.slice(0, 5).map((a) => ({
     id: a.id,
-    project: a.project_id ? (summary.bundles?.find((b: any) => b.project.id === a.project_id)?.project?.repository || "Unnamed project") : "Unnamed project",
+    project: a.project_id
+      ? summary.bundles.find((b) => b.project.id === a.project_id)?.project.repository ||
+        "Unnamed project"
+      : "Unnamed project",
     task: a.task_id ? `task ${a.task_id}` : "unknown task",
-    description: a.description || "Approval required",
-    status: a.status,
+    description: a.tool_name || a.action || "Approval required",
+    status: a.decision,
   }));
 
   /* ==============================================================
      GUIDED START — natural language objective input
      ============================================================== */
 
-  const [objectiveText, setObjectiveText] = (React as any).useState("");
-  const [isSubmitting, setIsSubmitting] = (React as any).useState(false);
+  const [objectiveText, setObjectiveText] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleStartObjective = async (e: React.MouseEvent) => {
+  const handleStartObjective = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const trimmed = objectiveText.trim();
     if (!trimmed) return;
@@ -345,7 +343,7 @@ export function HomeView({
           <div>
             <textarea
               value={objectiveText}
-              onChange={(e: React.ChangeEvent) => setObjectiveText(e.target.value)}
+              onChange={(e) => setObjectiveText(e.target.value)}
               placeholder="e.g. Research 50 SaaS companies experiencing API dependency risks, identify their CTOs, prepare personalized outreach drafts, and organize everything in my workspace"
               rows={3}
               className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-step--1 text-[var(--text)] placeholder-text-[var(--muted)] focus-ring:outline-none focus-ring:ring-2 focus-ring ring-[var(--accent)] focus-ring:ring-offset-2 resize-none"
@@ -366,8 +364,9 @@ export function HomeView({
 
         {pendingApprovals.length > 0 && (
           <p className="mt-3 text-step--1 text-[var(--muted)]">
-            {pendingApprovals.length} pending approval{s > 1 ? 's' : ''}{' '}
-            {pendingApprovals.some(a => a.status === 'awaiting_approval') ? 'requires your approval to continue' : ''}
+            {pendingApprovals.length} pending approval
+            {pendingApprovals.length > 1 ? 's' : ''}{' '}
+            {pendingApprovals.some((a) => a.status === 'pending') ? 'requires your approval to continue' : ''}
           </p>
         )}
       </section>
@@ -432,20 +431,20 @@ export function HomeView({
                     {item.project}
                   </strong>
                   <span className="text-xs text-[var(--muted)]">
-                    {item.issues.length} issue{s > 1 ? 's' : ''}
+                    {item.issues.length} issue{item.issues.length > 1 ? 's' : ''}
                   </span>
                 </div>
                 <p className="text-step--1 text-[var(--muted)] small">
-                  {item.issues.map((issue: any, j: number) => (
+                  {item.issues.map((issue, j) => (
                     <span key={j}>
                       {j > 0 && ", "}{issue.reason}
                     </span>
-                  ))}</p
-                >
+                  ))}
+                </p>
                 <Button
                   variant="ghost"
                   className="mt-2 w-full sm:w-auto rounded-md px-3 py-1.5 text-step--1 text-[var(--muted)] hover:text-[var(--accent)] hover:bg-[var(--accent)]/10 transition-colors"
-                  onClick={() => onOpenTask(item.project, item.issues[0]?.id ?? "")}
+                  onClick={() => onOpenTask(item.projectId, item.issues[0]?.id ?? "")}
                 >
                   Resolve
                 </Button>
@@ -490,7 +489,7 @@ export function HomeView({
             My Workforce
           </h3>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
-            {summary.teams.map((bundle, index) => (
+            {summary.teams.map((bundle) => (
               <article
                 key={bundle.team.id}
                 className="rounded-xl border border-[var(--surface-2)] bg-[var(--surface)] p-3 sm:p-4 transition-colors hover:bg-[var(--surface-2)]"
@@ -517,7 +516,7 @@ export function HomeView({
 
           <div className="mt-3 flex items-center gap-2 text-step--1 text-[var(--muted)]">
             <span className="font-medium text-[var(--text)]">
-              {summary.runningTasks} task{s > 1 ? 's' : ''} running
+              {summary.runningTasks} task{summary.runningTasks > 1 ? 's' : ''} running
             </span>
             {summary.runningTasks > 0 && summary.runningTasks < 4 ? (
               <span className="ml-1 text-[var(--accent)] font-medium">in progress</span>
@@ -547,14 +546,15 @@ export function HomeView({
           />
         ) : (
           summary.teams.map((bundle, index) => {
-            const tasks = summary.bundles?.flatMap((b: any) => b.tasks) ?? [];
-            const running = tasks.filter((t: any) => t.status === "running").length;
-            const queued = tasks.filter((t: any) => t.status === "queued").length;
-            const blocked = tasks.filter((t: any) => t.status === "blocked").length;
+            const teamTasks = summary.bundles
+              .filter((b) => bundle.projects.includes(b.project.id))
+              .flatMap((b) => b.tasks);
+            const running = teamTasks.filter((t) => t.status === "running").length;
+            const queued = teamTasks.filter((t) => t.status === "queued").length;
+            const blocked = teamTasks.filter((t) => t.status === "blocked").length;
 
-            const busyBots = bundle.teammates.filter(
-              (bot: any) =>
-                bundle.tasks.some((t: any) => t.owner_teammate_id === bot.id && t.status === "running")
+            const busyBots = bundle.teammates.filter((bot) =>
+              teamTasks.some((t) => t.owner_teammate_id === bot.id && t.status === "running"),
             ).length;
 
             return (
@@ -602,7 +602,7 @@ export function HomeView({
           Projects
         </h3>
         <div className="grid grid-cols-1 sm:grid-cols-[repeat(auto-fit,minmax(260px,1fr))] gap-3">
-          {summary.bundles.map((bundle: any) => {
+          {summary.bundles.map((bundle) => {
             const tally = ((tasks: any[]) => {
               let q = 0, r = 0, b = 0, a = 0;
               for (const t of tasks) {
