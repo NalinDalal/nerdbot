@@ -1133,7 +1133,12 @@ def chat_complete_with_tools(
             thread_tainted = bool(t.tainted) if t is not None else False
         except Exception:
             thread_tainted = False
-    saw_untrusted = thread_tainted or bool(memory_used)
+    import re as _re
+    pasted_untrusted = bool(_re.search(r"<html|<!doctype html|web page text i fetched|<body|<script", content or "", _re.I))
+    saw_untrusted = thread_tainted or bool(memory_used) or pasted_untrusted
+    if pasted_untrusted and thread_id is not None:
+        with contextlib.suppress(Exception):
+            store.set_thread_tainted(conn, thread_id, True)
     searched_queries: set[str] = set()
     searched_urls: set[str] = set()
     parts: list[dict[str, Any]] = []
@@ -1312,7 +1317,12 @@ def chat_stream_with_tools(
             thread_tainted = bool(t.tainted) if t is not None else False
         except Exception:
             thread_tainted = False
-    saw_untrusted = thread_tainted or bool(memory_used)
+    import re as _re
+    pasted_untrusted = bool(_re.search(r"<html|<!doctype html|web page text i fetched|<body|<script", content or "", _re.I))
+    saw_untrusted = thread_tainted or bool(memory_used) or pasted_untrusted
+    if pasted_untrusted and thread_id is not None:
+        with contextlib.suppress(Exception):
+            store.set_thread_tainted(conn, thread_id, True)
     searched_queries: set[str] = set()
     searched_urls: set[str] = set()
     parts: list[dict[str, Any]] = []
