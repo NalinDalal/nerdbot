@@ -46,7 +46,9 @@ AGENT_PERMISSIONS: frozenset[str] = frozenset(
         "memory.write",
         "knowledge.read",
         "knowledge.write",
+        "workspace.read",
         "workspace.write",
+        "workspace.exec",
         "web.search",
         "message.send",
     }
@@ -108,9 +110,17 @@ PERMISSION_INFO: dict[str, dict[str, str]] = {
         "kind": "agent",
         "summary": "Ingest or attach project knowledge sources and evidence.",
     },
+    "workspace.read": {
+        "kind": "agent",
+        "summary": "List and read files in the bound project workspace.",
+    },
     "workspace.write": {
         "kind": "agent",
-        "summary": "Create or modify files in the task workspace (scoped, reviewable).",
+        "summary": "Create, modify, rename, or delete files in the bound project workspace.",
+    },
+    "workspace.exec": {
+        "kind": "agent",
+        "summary": "Run shell commands in the bound project workspace (deny-list/timeout enforced).",
     },
     "web.search": {
         "kind": "agent",

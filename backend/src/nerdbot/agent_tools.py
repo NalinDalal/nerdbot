@@ -24,14 +24,18 @@ class ToolPathEscape(ValueError):
 
 
 def resolve_workspace_path(workspace: Path, relpath: str) -> Path:
-    """Resolve a model-supplied path strictly inside the workspace."""
+    """Resolve a model-supplied path strictly inside the workspace.
+
+    Delegates to the shared workspace confinement so no code path resolves
+    workspace paths differently.
+    """
     if not relpath or relpath.strip() == "":
         raise ToolPathEscape("empty path")
-    base = workspace.resolve()
-    target = (base / relpath).resolve()
-    if target != base and base not in target.parents:
-        raise ToolPathEscape(f"path escapes workspace: {relpath!r}")
-    return target
+    from . import workspace as _ws
+    try:
+        return _ws.safe_workspace_path(Path(workspace).resolve(), relpath)
+    except ValueError as exc:
+        raise ToolPathEscape(str(exc)) from exc
 
 
 def tool_schemas() -> list[dict[str, Any]]:
@@ -163,70 +167,47 @@ def execute_tool(
 ) -> str:
     """Execute one tool call. Returns untrusted, bounded result text.
 
-    Raises BlockedError (policy), ExecutionError (command failure),
-    ToolPathEscape (workspace escape), Fetch* (fetch denial/failure),
-    or ValueError (bad arguments).
-    """
-    import subprocess
+    Workspace actions (run/read/write) route through the shared workspace gateway.
 
-    if name == "run_command":
-        command = arguments.get("command", "")
-        if not isinstance(command, str) or not command.strip():
-            raise ValueError("run_command requires a non-empty command string")
-        check_command(command)
-        completed = subprocess.run(
-            ["sh", "-c", command],
-            cwd=str(workspace),
-            capture_output=True,
-            text=True,
-            timeout=60.0,
-            env=child_env(),
-        )
-        if completed.returncode != 0:
-            raise ExecutionError(
-                f"exit={completed.returncode} stderr={truncate_output(scrub_secrets(completed.stderr or ''))}"
-            )
-        return truncate_output(scrub_secrets(completed.stdout or ""))
-    if name == "read_file":
-        relpath = arguments.get("path", "")
-        if not isinstance(relpath, str):
-            raise ValueError("read_file requires a path string")
-        target = resolve_workspace_path(workspace, relpath)
-        if not target.is_file():
-            raise ValueError(f"no such file: {relpath!r}")
-        if target.stat().st_size > TOOL_FILE_MAX_BYTES:
-            raise ValueError(f"file too large: {relpath!r}")
-        return truncate_output(target.read_text(encoding="utf-8", errors="replace"))
-    if name == "write_file":
-        relpath = arguments.get("path", "")
-        content = arguments.get("content", "")
-        if not isinstance(relpath, str) or not isinstance(content, str):
-            raise ValueError("write_file requires path and content strings")
-        if len(content.encode("utf-8")) > TOOL_FILE_MAX_BYTES:
-            raise ValueError("content too large")
-        target = resolve_workspace_path(workspace, relpath)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
-        return f"wrote {len(content.encode('utf-8'))} bytes to {relpath!r}"
+    Raises:
+        BlockedError, ExecutionError, ToolPathEscape, ValueError.
+    """
+    from . import workspace as _ws
+    from . import store as _store
+
+    # Workspace-bound actions go through the single gateway. Fail closed without context.
+    if name in {"run_command", "read_file", "write_file"}:
+        if conn is None or not teammate_id:
+            raise PermissionError("workspace tool denied: missing project/teammate context")
+        mate = _store.get_teammate(conn, teammate_id)
+        if mate is None:
+            raise PermissionError("workspace tool denied: unknown teammate")
+        project = _store.get_project(conn, mate.project_id)
+        if project is None:
+            raise PermissionError("workspace tool denied: unknown project")
+        actor = _ws.WorkspaceActor(kind="teammate", id=mate.id, project_id=mate.project_id, teammate=mate)
+        action = "run" if name == "run_command" else ("read" if name == "read_file" else "write")
+        relpath = str(arguments.get("path", "") or "")
+        gw_args = dict(arguments)
+        gw_args.update({"conn": conn, "data_dir": str(arguments.get("data_dir") or "")})
+        result = _ws.do(actor, action, relpath, project=project, **gw_args)
+        if not result.ok:
+            if result.denied:
+                raise PermissionError(result.error or "workspace access denied")
+            raise ValueError(result.error or "workspace action failed")
+        return truncate_output(str(result.output or ""))
+
     if name == "update_persona":
         if conn is None or not teammate_id:
             raise ValueError("update_persona requires a database and a teammate id")
         from . import persona as persona_mod
-
-        persona_mod.save_persona(
-            conn, teammate_id,
-            soul=arguments.get("soul"),
-            goals=arguments.get("goals"),
-            wisdom=arguments.get("wisdom"),
-            bump_version=True,
-        )
+        persona_mod.save_persona(conn, teammate_id, soul=arguments.get("soul"), goals=arguments.get("goals"), wisdom=arguments.get("wisdom"), bump_version=True)
         return "persona updated"
     if name == "remember":
         if conn is None or not teammate_id:
             raise ValueError("remember requires a database and a teammate id")
         from . import store
         from .models import MemoryTier
-
         content = arguments.get("content", "")
         source = arguments.get("source", "")
         tier = arguments.get("tier", MemoryTier.RAW)
@@ -241,17 +222,13 @@ def execute_tool(
         return f"remembered as {entry.id} [{tier}]"
     if name == "fetch_url":
         from . import fetch as fetch_mod
-
         url = arguments.get("url", "")
         if not isinstance(url, str):
             raise ValueError("fetch_url requires a url string")
-        # Keep the runtime tool contract text-based for compatibility; chat
-        # and research paths use fetch_url_document for richer metadata.
         return truncate_output(fetch_mod.fetch_url_text(url, transport=transport))
     if name == "web_search":
         from . import search as search_mod
         from . import store as store_mod
-
         if teammate_id:
             mate = store_mod.get_teammate(conn, teammate_id) if conn is not None else None
             if mate is not None and "web.search" not in (mate.permissions or []):

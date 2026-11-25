@@ -124,19 +124,30 @@ def resolve_speaker(
 def speaker_prompt(mate: Teammate) -> str:
     """Build the system prompt that makes the reply come *from* this teammate.
 
-    Identity first (name + role), then the persona, then instructions. The
-    prompt carries no permissions — who may do what stays in gates.py, so a
-    teammate's persona can never widen its own authority.
+    Identity first, then profile/voice/boundaries, then persona/instructions.
+    The prompt carries no permissions — who may do what stays in gates.py,
+    so a teammate's persona can never widen its own authority.
     """
     display = mate.name or mate.slug or "a teammate"
     parts = [
-        f"You are {display}, a teammate in this workspace. "
-        "Answer as yourself, in your own voice, and keep replies concise."
+        f"You are {display}, an AI teammate in this workspace. "
+        "Be present, conversational, and characterful while staying useful and honest. "
+        "Answer as yourself, in your own voice."
     ]
+    if mate.tagline:
+        parts.append(f"Tagline: {mate.tagline}")
+    if mate.voice_style:
+        parts.append(f"Voice/style: {mate.voice_style}")
+    if mate.greeting:
+        parts.append(f"Greeting (use when appropriate, especially at conversation start): {mate.greeting}")
+    if mate.boundaries:
+        parts.append(f"Boundaries: {mate.boundaries}")
     if mate.persona:
         parts.append(mate.persona)
     if mate.instructions:
         parts.append("Instructions: " + mate.instructions)
+    if mate.starter_prompts:
+        parts.append("Starter prompts you can suggest: " + " | ".join(mate.starter_prompts[:6]))
     return "\n\n".join(parts)
 
 
@@ -699,6 +710,56 @@ CHAT_TOOL_SCHEMAS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_dir",
+            "description": "List files and directories in the active project workspace. Path is relative to workspace root.",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string", "description": "Relative path, default '.'"}},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read a text file from the active project workspace. Path is relative to workspace root.",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": "Write a text file in the active project workspace. Path is relative to workspace root.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "content": {"type": "string"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_command",
+            "description": "Run a shell command in the active project workspace. Use for tests/builds/inspection; subject to deny-list and timeout.",
+            "parameters": {
+                "type": "object",
+                "properties": {"command": {"type": "string"}},
+                "required": ["command"],
+            },
+        },
+    },
 ]
 
 
@@ -709,10 +770,63 @@ def _execute_chat_tool(
     project_id: str,
     thread_id: str | None = None,
     transport: httpx.BaseTransport | None = None,
+    teammate: Any = None,
+    data_dir: str | None = None,
+    saw_untrusted: bool = False,
 ) -> str:
-    """Run one chat tool and return a bounded text result."""
+    """Run one chat tool and return a bounded text result.
+
+    Workspace tools are gated through the workspace gateway and teammate permissions.
+    Denied calls return a clear denial; they are never silently dropped.
+
+    Args:
+        name: Tool name.
+        args: Tool arguments.
+        conn: SQLite connection.
+        project_id: Active project id.
+        thread_id: Optional thread id.
+        transport: Optional HTTP transport for web tools.
+        teammate: Acting teammate, if any.
+        data_dir: Nerdbot data dir for workspace resolution.
+        saw_untrusted: Whether untrusted content was seen earlier in this turn.
+
+    Returns:
+        Bounded string result.
+    """
+    from . import workspace as _ws
 
     try:
+        if name in {"list_dir", "read_file", "write_file", "run_command"}:
+            if teammate is None:
+                return "error: workspace tools require an acting teammate"
+            action = {
+                "list_dir": "list",
+                "read_file": "read",
+                "write_file": "write",
+                "run_command": "run",
+            }[name]
+            actor = _ws.WorkspaceActor(kind="teammate", id=getattr(teammate, "id", ""), project_id=project_id, teammate=teammate)
+            relpath = str(args.get("path", ".") or ".") if name != "run_command" else ""
+            result = _ws.do(
+                actor,
+                action,
+                relpath,
+                conn=conn,
+                data_dir=data_dir or ".nerdbot-data",
+                command=str(args.get("command", "")),
+                content=str(args.get("content", "")),
+                untrusted=saw_untrusted,
+                thread_id=thread_id or "",
+            )
+            if not result.ok:
+                reason = result.error or "denied"
+                if result.denied:
+                    apr_id = result.data.get("approval_id") if isinstance(result.data, dict) else None
+                    if apr_id or reason == "approval required":
+                        return f"pending approval {apr_id or 'unknown'}: workspace {action} on {relpath or '.'} requires owner approval"
+                    return f"error: workspace {action} denied: {reason}"
+                return f"error: workspace {action} failed: {reason}"
+            return str(result.output or "")[:4000]
         if name == "web_search":
             results = search_mod.web_search(str(args.get("query", "")), transport=transport)
             return search_mod.format_results(results)
@@ -947,6 +1061,28 @@ def _openai_post(
     return data  # type: ignore[no-any-return]
 
 
+def _workspace_tools_for(teammate: Any) -> set[str]:
+    """Return workspace chat tool names permitted for a teammate.
+
+    Args:
+        teammate: Teammate model or None.
+
+    Returns:
+        Set of tool names.
+    """
+    if teammate is None:
+        return set()
+    perms = set(getattr(teammate, "permissions", []) or [])
+    tools: set[str] = set()
+    if "workspace.read" in perms:
+        tools.update({"list_dir", "read_file"})
+    if "workspace.write" in perms:
+        tools.add("write_file")
+    if "workspace.exec" in perms:
+        tools.add("run_command")
+    return tools
+
+
 def chat_complete_with_tools(
     provider: Provider | None,
     messages: list[dict[str, Any]],
@@ -958,8 +1094,29 @@ def chat_complete_with_tools(
     transport: httpx.BaseTransport | None = None,
     timeout_s: float = CHAT_TIMEOUT_S,
     max_turns: int = 5,
+    teammate: Any = None,
+    data_dir: str | None = None,
+    memory_used: bool = False,
 ) -> tuple[str, list[dict[str, Any]]]:
-    """Non-streaming completion with a bounded tool loop."""
+    """Non-streaming completion with a bounded tool loop.
+
+    Args:
+        provider: Chat provider.
+        messages: OpenAI-style messages.
+        conn: SQLite connection.
+        project_id: Project id.
+        thread_id: Optional thread id.
+        mode: chat/research/delegate.
+        transport: Optional HTTP transport.
+        timeout_s: Request timeout.
+        max_turns: Max tool turns.
+        teammate: Acting teammate; enables permission-gated workspace tools.
+        data_dir: Nerdbot data dir for workspace binding.
+
+    Returns:
+        (text, parts) tuple.
+    """
+    from . import workspace as _ws
     if provider is None:
         raise ProviderConfigurationError(
             "no chat provider available: configure an openai-compatible or mock provider"
@@ -976,7 +1133,7 @@ def chat_complete_with_tools(
             thread_tainted = bool(t.tainted) if t is not None else False
         except Exception:
             thread_tainted = False
-    saw_untrusted = thread_tainted
+    saw_untrusted = thread_tainted or bool(memory_used)
     searched_queries: set[str] = set()
     searched_urls: set[str] = set()
     parts: list[dict[str, Any]] = []
@@ -985,108 +1142,121 @@ def chat_complete_with_tools(
         "research": ["web_search", "fetch_url", "save_report", "set_reminder"],
         "delegate": ["propose_task", "list_teammates", "create_task", "set_reminder"],
     }.get(mode, ["set_reminder"])
-    allowed = set(mode_tools)
-    for _ in range(max_turns):
-        tools = [
-            t for t in CHAT_TOOL_SCHEMAS
-            if t["function"]["name"] in allowed
-            and (not (saw_untrusted or thread_tainted) or t["function"]["name"] != "create_task")
-        ]
-        data = _openai_post(
-            provider, msgs, tools=tools, transport=transport, timeout_s=timeout_s
-        )
-        try:
-            choice = data["choices"][0]["message"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise ProviderProtocolError("chat response has no message") from exc
-        tool_calls = choice.get("tool_calls") or []
-        if not tool_calls:
-            return str(choice.get("content") or "")[:RESPONSE_MAX_CHARS], parts
-        msgs.append(
-            {"role": "assistant", "content": choice.get("content"), "tool_calls": tool_calls}
-        )
-        for tc in tool_calls:
-            fn = tc.get("function") or {}
-            name = fn.get("name", "")
-            try:
-                args = json.loads(fn.get("arguments") or "{}")
-            except (ValueError, TypeError):
-                args = {}
-            if name == "web_search":
-                q = str(args.get("query", "")).strip().lower()
-                if q and q in searched_queries:
-                    result = "already searched: " + q
-                else:
-                    if q:
-                        searched_queries.add(q)
-                    result = _execute_chat_tool(name, args, conn, project_id, thread_id, transport)
-            elif name == "fetch_url":
-                u = str(args.get("url", "")).strip().lower()
-                if u and u in searched_urls:
-                    result = "already fetched: " + u
-                else:
-                    if u:
-                        searched_urls.add(u)
-                    result = _execute_chat_tool(name, args, conn, project_id, thread_id, transport)
-            elif name == "create_task" and (saw_untrusted or thread_tainted):
-                result = (
-                    "error: task creation is blocked in this turn because web "
-                    "content was read; confirm with the user before creating tasks"
-                )
-            else:
-                result = _execute_chat_tool(name, args, conn, project_id, thread_id, transport)
-            # Extract any UI part embedded in the tool result.
-            try:
-                parsed = json.loads(result) if isinstance(result, str) else None
-            except (ValueError, TypeError):
-                parsed = None
-            if isinstance(parsed, dict) and "_part" in parsed:
-                parts.append(parsed["_part"])
-                result = json.dumps({k: v for k, v in parsed.items() if k != "_part"})
-            if name in ("web_search", "fetch_url"):
-                saw_untrusted = True
-                if thread_id is not None:
-                    with contextlib.suppress(Exception):
-                        store.set_thread_tainted(conn, thread_id, True)
-            msgs.append(
-                {"role": "tool", "tool_call_id": tc.get("id"), "content": str(result)[:4000]}
+    allowed = set(mode_tools) | _workspace_tools_for(teammate)
+    project = store.get_project(conn, project_id)
+    ws_root = None
+    try:
+        if project is not None:
+            ws_root = _ws.resolve_project_root(project, data_dir or ".nerdbot-data")
+    except Exception:
+        ws_root = None
+    ws_token = _ws.set_active_workspace(ws_root)
+    try:
+        for _ in range(max_turns):
+            tools = [
+                t for t in CHAT_TOOL_SCHEMAS
+                if t["function"]["name"] in allowed
+                and (not (saw_untrusted or thread_tainted) or t["function"]["name"] != "create_task")
+            ]
+            data = _openai_post(
+                provider, msgs, tools=tools, transport=transport, timeout_s=timeout_s
             )
+            try:
+                choice = data["choices"][0]["message"]
+            except (KeyError, IndexError, TypeError) as exc:
+                raise ProviderProtocolError("chat response has no message") from exc
+            tool_calls = choice.get("tool_calls") or []
+            if not tool_calls:
+                return str(choice.get("content") or "")[:RESPONSE_MAX_CHARS], parts
+            msgs.append(
+                {"role": "assistant", "content": choice.get("content"), "tool_calls": tool_calls}
+            )
+            for tc in tool_calls:
+                fn = tc.get("function") or {}
+                name = fn.get("name", "")
+                try:
+                    args = json.loads(fn.get("arguments") or "{}")
+                except (ValueError, TypeError):
+                    args = {}
+                if name == "web_search":
+                    q = str(args.get("query", "")).strip().lower()
+                    if q and q in searched_queries:
+                        result = "already searched: " + q
+                    else:
+                        if q:
+                            searched_queries.add(q)
+                        result = _execute_chat_tool(name, args, conn, project_id, thread_id, transport, teammate, data_dir, saw_untrusted)
+                elif name == "fetch_url":
+                    u = str(args.get("url", "")).strip().lower()
+                    if u and u in searched_urls:
+                        result = "already fetched: " + u
+                    else:
+                        if u:
+                            searched_urls.add(u)
+                        result = _execute_chat_tool(name, args, conn, project_id, thread_id, transport, teammate, data_dir, saw_untrusted)
+                elif name == "create_task" and (saw_untrusted or thread_tainted):
+                    result = (
+                        "error: task creation is blocked in this turn because web "
+                        "content was read; confirm with the user before creating tasks"
+                    )
+                else:
+                    result = _execute_chat_tool(name, args, conn, project_id, thread_id, transport, teammate, data_dir, saw_untrusted)
+                # Extract any UI part embedded in the tool result.
+                try:
+                    parsed = json.loads(result) if isinstance(result, str) else None
+                except (ValueError, TypeError):
+                    parsed = None
+                if isinstance(parsed, dict) and "_part" in parsed:
+                    parts.append(parsed["_part"])
+                    result = json.dumps({k: v for k, v in parsed.items() if k != "_part"})
+                if name in ("web_search", "fetch_url", "list_dir", "read_file"):
+                    saw_untrusted = True
+                    if thread_id is not None:
+                        with contextlib.suppress(Exception):
+                            store.set_thread_tainted(conn, thread_id, True)
+                msgs.append(
+                    {"role": "tool", "tool_call_id": tc.get("id"), "content": str(result)[:4000]}
+                )
 
-    # Final pass without tools to force a text answer. Some upstreams (e.g.
-    # Groq-hosted gpt-oss) still emit a tool call when the conversation was
-    # tool-heavy and then fail the request outright ("tool choice is none, but
-    # model called a tool"). An explicit instruction to answer in text prevents
-    # that, and a retry that drops the tool transcript is the last resort.
-    final_msgs = msgs + [
-        {
-            "role": "user",
-            "content": (
-                "Write your final answer now in plain text based on the "
-                "conversation and tool results above. Do not call any more tools."
-            ),
-        }
-    ]
-    try:
-        data = _openai_post(provider, final_msgs, tools=None, transport=transport, timeout_s=timeout_s)
-    except ProviderProtocolError:
-        # Retry without the tool transcript so no tool-call pattern remains.
-        stripped: list[dict[str, Any]] = []
-        for m in msgs:
-            if m.get("role") == "assistant" and m.get("tool_calls"):
-                content = m.get("content")
-                if not content:
+        # Final pass without tools to force a text answer. Some upstreams (e.g.
+        # Groq-hosted gpt-oss) still emit a tool call when the conversation was
+        # tool-heavy and then fail the request outright ("tool choice is none, but
+        # model called a tool"). An explicit instruction to answer in text prevents
+        # that, and a retry that drops the tool transcript is the last resort.
+        final_msgs = msgs + [
+            {
+                "role": "user",
+                "content": (
+                    "Write your final answer now in plain text based on the "
+                    "conversation and tool results above. Do not call any more tools."
+                ),
+            }
+        ]
+        try:
+            data = _openai_post(provider, final_msgs, tools=None, transport=transport, timeout_s=timeout_s)
+        except ProviderProtocolError:
+            # Retry without the tool transcript so no tool-call pattern remains.
+            stripped: list[dict[str, Any]] = []
+            for m in msgs:
+                if m.get("role") == "assistant" and m.get("tool_calls"):
+                    content = m.get("content")
+                    if not content:
+                        continue
+                    stripped.append({"role": "assistant", "content": content})
+                elif m.get("role") == "tool":
                     continue
-                stripped.append({"role": "assistant", "content": content})
-            elif m.get("role") == "tool":
-                continue
-            else:
-                stripped.append(m)
-        data = _openai_post(provider, stripped + [final_msgs[-1]], tools=None, transport=transport, timeout_s=timeout_s)
-    try:
-        return str(data["choices"][0]["message"].get("content") or "")[:RESPONSE_MAX_CHARS], parts
-    except (KeyError, IndexError, TypeError, AttributeError):
-        return "", parts
+                else:
+                    stripped.append(m)
+            data = _openai_post(provider, stripped + [final_msgs[-1]], tools=None, transport=transport, timeout_s=timeout_s)
+        try:
+            return str(data["choices"][0]["message"].get("content") or "")[:RESPONSE_MAX_CHARS], parts
+        except (KeyError, IndexError, TypeError, AttributeError):
+            return "", parts
 
+
+    finally:
+        from .workspace import _ACTIVE_WORKSPACE
+        _ACTIVE_WORKSPACE.reset(ws_token)
 
 def chat_stream_with_tools(
     provider: Provider | None,
@@ -1099,12 +1269,29 @@ def chat_stream_with_tools(
     transport: httpx.BaseTransport | None = None,
     timeout_s: float = CHAT_TIMEOUT_S,
     chunk_size: int = 64,
+    teammate: Any = None,
+    data_dir: str | None = None,
+    memory_used: bool = False,
 ) -> Iterator[dict[str, Any]]:
     """Streaming wrapper: runs the tool loop, yielding progress + answer events.
 
-    Events are dicts with a ``kind`` of ``status`` (progress text) or ``text``
-    (answer chunk). The final answer is delivered as ``text`` events.
+    Args:
+        provider: Chat provider.
+        messages: OpenAI-style messages.
+        conn: SQLite connection.
+        project_id: Project id.
+        thread_id: Optional thread id.
+        mode: chat/research/delegate.
+        transport: Optional HTTP transport.
+        timeout_s: Request timeout.
+        chunk_size: Chunk size for text events.
+        teammate: Acting teammate for permission-gated workspace tools.
+        data_dir: Nerdbot data dir for workspace binding.
+
+    Yields:
+        Event dicts.
     """
+    from . import workspace as _ws
     if provider is None:
         raise ProviderConfigurationError(
             "no chat provider available: configure an openai-compatible or mock provider"
@@ -1125,7 +1312,7 @@ def chat_stream_with_tools(
             thread_tainted = bool(t.tainted) if t is not None else False
         except Exception:
             thread_tainted = False
-    saw_untrusted = thread_tainted
+    saw_untrusted = thread_tainted or bool(memory_used)
     searched_queries: set[str] = set()
     searched_urls: set[str] = set()
     parts: list[dict[str, Any]] = []
@@ -1134,114 +1321,126 @@ def chat_stream_with_tools(
         "research": ["web_search", "fetch_url", "save_report", "set_reminder"],
         "delegate": ["propose_task", "list_teammates", "create_task", "set_reminder"],
     }.get(mode, ["set_reminder"])
-    allowed = set(mode_tools)
-    for _ in range(5):
-        tools = [
-            t for t in CHAT_TOOL_SCHEMAS
-            if t["function"]["name"] in allowed
-            and (not (saw_untrusted or thread_tainted) or t["function"]["name"] != "create_task")
-        ]
-        data = _openai_post(provider, msgs, tools=tools, transport=transport, timeout_s=timeout_s)
-        try:
-            choice = data["choices"][0]["message"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise ProviderProtocolError("chat response has no message") from exc
-        tool_calls = choice.get("tool_calls") or []
-        if not tool_calls:
-            text = str(choice.get("content") or "")[:RESPONSE_MAX_CHARS]
-            for index in range(0, len(text), chunk_size):
-                yield {"kind": "text", "text": text[index:index + chunk_size]}
-            return
-        msgs.append({"role": "assistant", "content": choice.get("content"), "tool_calls": tool_calls})
-        for tc in tool_calls:
-            fn = tc.get("function") or {}
-            name = fn.get("name", "")
+    allowed = set(mode_tools) | _workspace_tools_for(teammate)
+    project = store.get_project(conn, project_id)
+    ws_root = None
+    try:
+        if project is not None:
+            ws_root = _ws.resolve_project_root(project, data_dir or ".nerdbot-data")
+    except Exception:
+        ws_root = None
+    ws_token = _ws.set_active_workspace(ws_root)
+    try:
+        for _ in range(5):
+            tools = [
+                t for t in CHAT_TOOL_SCHEMAS
+                if t["function"]["name"] in allowed
+                and (not (saw_untrusted or thread_tainted) or t["function"]["name"] != "create_task")
+            ]
+            data = _openai_post(provider, msgs, tools=tools, transport=transport, timeout_s=timeout_s)
             try:
-                args = json.loads(fn.get("arguments") or "{}")
-            except (ValueError, TypeError):
-                args = {}
-            if name == "web_search":
-                yield {"kind": "status", "text": f"Searching: {str(args.get('query', ''))[:80]}"}
-            elif name == "fetch_url":
-                yield {"kind": "status", "text": f"Reading: {str(args.get('url', ''))[:80]}"}
-            elif name == "create_task":
-                yield {"kind": "status", "text": "Creating task…"}
-            else:
-                yield {"kind": "status", "text": f"Running {name}…"}
-            if name == "web_search":
-                q = str(args.get("query", "")).strip().lower()
-                if q and q in searched_queries:
-                    result = "already searched: " + q
+                choice = data["choices"][0]["message"]
+            except (KeyError, IndexError, TypeError) as exc:
+                raise ProviderProtocolError("chat response has no message") from exc
+            tool_calls = choice.get("tool_calls") or []
+            if not tool_calls:
+                text = str(choice.get("content") or "")[:RESPONSE_MAX_CHARS]
+                for index in range(0, len(text), chunk_size):
+                    yield {"kind": "text", "text": text[index:index + chunk_size]}
+                return
+            msgs.append({"role": "assistant", "content": choice.get("content"), "tool_calls": tool_calls})
+            for tc in tool_calls:
+                fn = tc.get("function") or {}
+                name = fn.get("name", "")
+                try:
+                    args = json.loads(fn.get("arguments") or "{}")
+                except (ValueError, TypeError):
+                    args = {}
+                if name == "web_search":
+                    yield {"kind": "status", "text": f"Searching: {str(args.get('query', ''))[:80]}"}
+                elif name == "fetch_url":
+                    yield {"kind": "status", "text": f"Reading: {str(args.get('url', ''))[:80]}"}
+                elif name == "create_task":
+                    yield {"kind": "status", "text": "Creating task…"}
                 else:
-                    if q:
-                        searched_queries.add(q)
-                    result = _execute_chat_tool(name, args, conn, project_id, thread_id, transport)
-            elif name == "fetch_url":
-                u = str(args.get("url", "")).strip().lower()
-                if u and u in searched_urls:
-                    result = "already fetched: " + u
+                    yield {"kind": "status", "text": f"Running {name}…"}
+                if name == "web_search":
+                    q = str(args.get("query", "")).strip().lower()
+                    if q and q in searched_queries:
+                        result = "already searched: " + q
+                    else:
+                        if q:
+                            searched_queries.add(q)
+                        result = _execute_chat_tool(name, args, conn, project_id, thread_id, transport, teammate, data_dir, saw_untrusted)
+                elif name == "fetch_url":
+                    u = str(args.get("url", "")).strip().lower()
+                    if u and u in searched_urls:
+                        result = "already fetched: " + u
+                    else:
+                        if u:
+                            searched_urls.add(u)
+                        result = _execute_chat_tool(name, args, conn, project_id, thread_id, transport, teammate, data_dir, saw_untrusted)
+                elif name == "create_task" and (saw_untrusted or thread_tainted):
+                    result = (
+                        "error: task creation is blocked in this turn because web "
+                        "content was read; confirm with the user before creating tasks"
+                    )
                 else:
-                    if u:
-                        searched_urls.add(u)
-                    result = _execute_chat_tool(name, args, conn, project_id, thread_id, transport)
-            elif name == "create_task" and (saw_untrusted or thread_tainted):
-                result = (
-                    "error: task creation is blocked in this turn because web "
-                    "content was read; confirm with the user before creating tasks"
+                    result = _execute_chat_tool(name, args, conn, project_id, thread_id, transport, teammate, data_dir, saw_untrusted)
+                try:
+                    parsed = json.loads(result) if isinstance(result, str) else None
+                except (ValueError, TypeError):
+                    parsed = None
+                if isinstance(parsed, dict) and "_part" in parsed:
+                    parts.append(parsed["_part"])
+                    result = json.dumps({k: v for k, v in parsed.items() if k != "_part"})
+                if name in ("web_search", "fetch_url", "list_dir", "read_file"):
+                    saw_untrusted = True
+                    if thread_id is not None:
+                        with contextlib.suppress(Exception):
+                            store.set_thread_tainted(conn, thread_id, True)
+                msgs.append(
+                    {"role": "tool", "tool_call_id": tc.get("id"), "content": str(result)[:4000]}
                 )
-            else:
-                result = _execute_chat_tool(name, args, conn, project_id, thread_id, transport)
-            try:
-                parsed = json.loads(result) if isinstance(result, str) else None
-            except (ValueError, TypeError):
-                parsed = None
-            if isinstance(parsed, dict) and "_part" in parsed:
-                parts.append(parsed["_part"])
-                result = json.dumps({k: v for k, v in parsed.items() if k != "_part"})
-            if name in ("web_search", "fetch_url"):
-                saw_untrusted = True
-                if thread_id is not None:
-                    with contextlib.suppress(Exception):
-                        store.set_thread_tainted(conn, thread_id, True)
-            msgs.append(
-                {"role": "tool", "tool_call_id": tc.get("id"), "content": str(result)[:4000]}
-            )
 
-    if parts:
-        yield {"kind": "parts", "parts": parts}
-    if thread_id is not None and (saw_untrusted or thread_tainted):
-        with contextlib.suppress(Exception):
-            store.set_thread_tainted(conn, thread_id, True)
-    yield {"kind": "status", "text": "Writing…"}
-    final_msgs = msgs + [
-        {
-            "role": "user",
-            "content": (
-                "Write your final answer now in plain text based on the "
-                "conversation and tool results above. Do not call any more tools."
-            ),
-        }
-    ]
-    try:
-        data = _openai_post(provider, final_msgs, tools=None, transport=transport, timeout_s=timeout_s)
-    except ProviderProtocolError:
-        # Groq-hosted gpt-oss fails the tool-less final pass with
-        # "tool choice is none, but model called a tool"; retry without the
-        # tool transcript so no tool-call pattern remains.
-        stripped: list[dict[str, Any]] = []
-        for m in msgs:
-            if m.get("role") == "assistant" and m.get("tool_calls"):
-                content = m.get("content")
-                if content:
-                    stripped.append({"role": "assistant", "content": content})
-            elif m.get("role") == "tool":
-                continue
-            else:
-                stripped.append(m)
-        data = _openai_post(provider, stripped + [final_msgs[-1]], tools=None, transport=transport, timeout_s=timeout_s)
-    try:
-        text = str(data["choices"][0]["message"].get("content") or "")[:RESPONSE_MAX_CHARS]
-    except (KeyError, IndexError, TypeError, AttributeError):
-        text = ""
-    for index in range(0, len(text), chunk_size):
-        yield {"kind": "text", "text": text[index:index + chunk_size]}
+        if parts:
+            yield {"kind": "parts", "parts": parts}
+        if thread_id is not None and (saw_untrusted or thread_tainted):
+            with contextlib.suppress(Exception):
+                store.set_thread_tainted(conn, thread_id, True)
+        yield {"kind": "status", "text": "Writing…"}
+        final_msgs = msgs + [
+            {
+                "role": "user",
+                "content": (
+                    "Write your final answer now in plain text based on the "
+                    "conversation and tool results above. Do not call any more tools."
+                ),
+            }
+        ]
+        try:
+            data = _openai_post(provider, final_msgs, tools=None, transport=transport, timeout_s=timeout_s)
+        except ProviderProtocolError:
+            # Groq-hosted gpt-oss fails the tool-less final pass with
+            # "tool choice is none, but model called a tool"; retry without the
+            # tool transcript so no tool-call pattern remains.
+            stripped: list[dict[str, Any]] = []
+            for m in msgs:
+                if m.get("role") == "assistant" and m.get("tool_calls"):
+                    content = m.get("content")
+                    if content:
+                        stripped.append({"role": "assistant", "content": content})
+                elif m.get("role") == "tool":
+                    continue
+                else:
+                    stripped.append(m)
+            data = _openai_post(provider, stripped + [final_msgs[-1]], tools=None, transport=transport, timeout_s=timeout_s)
+        try:
+            text = str(data["choices"][0]["message"].get("content") or "")[:RESPONSE_MAX_CHARS]
+        except (KeyError, IndexError, TypeError, AttributeError):
+            text = ""
+        for index in range(0, len(text), chunk_size):
+            yield {"kind": "text", "text": text[index:index + chunk_size]}
+    finally:
+        from .workspace import _ACTIVE_WORKSPACE
+        _ACTIVE_WORKSPACE.reset(ws_token)
