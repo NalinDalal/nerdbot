@@ -1134,7 +1134,13 @@ def chat_complete_with_tools(
         except Exception:
             thread_tainted = False
     import re as _re
-    pasted_untrusted = bool(_re.search(r"<html|<!doctype html|web page text i fetched|<body|<script", content or "", _re.I))
+    last_user = ""
+    for _m in reversed(msgs):
+        if _m.get("role") == "user":
+            _c = _m.get("content")
+            last_user = _c if isinstance(_c, str) else json.dumps(_c, ensure_ascii=False)
+            break
+    pasted_untrusted = bool(_re.search(r"<html|<!doctype html|web page text i fetched|<body|<script", last_user, _re.I))
     saw_untrusted = thread_tainted or bool(memory_used) or pasted_untrusted
     if pasted_untrusted and thread_id is not None:
         with contextlib.suppress(Exception):
