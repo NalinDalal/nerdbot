@@ -207,6 +207,10 @@ CREATE TABLE IF NOT EXISTS workspace_audit (
   args_summary TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_workspace_audit_project ON workspace_audit(project_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS owner_settings (
+  owner TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, updated_at TEXT NOT NULL,
+  PRIMARY KEY (owner, key)
+);
 CREATE TABLE IF NOT EXISTS providers (
   id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
   kind TEXT NOT NULL DEFAULT 'local', name TEXT NOT NULL DEFAULT '',
@@ -1067,6 +1071,38 @@ def record_event(
     return event
 
 
+# -- Owner settings ---------------------------------------------------------
+
+
+def get_owner_setting(conn: sqlite3.Connection, owner: str, key: str) -> str | None:
+    row = conn.execute(
+        "SELECT value FROM owner_settings WHERE owner=? AND key=?", (owner, key)
+    ).fetchone()
+    return str(row["value"]) if row else None
+
+
+def set_owner_setting(conn: sqlite3.Connection, owner: str, key: str, value: str) -> None:
+    conn.execute(
+        "INSERT INTO owner_settings(owner,key,value,updated_at) VALUES(?,?,?,?) "
+        "ON CONFLICT(owner,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+        (owner, key, value, _now_iso()),
+    )
+    conn.commit()
+
+
+def resolve_owner_default_provider(conn: sqlite3.Connection, owner: str) -> Provider | None:
+    pid = get_owner_setting(conn, owner, "default_provider_id")
+    if not pid:
+        return None
+    provider = get_provider(conn, pid)
+    if provider is None:
+        return None
+    proj = get_project(conn, provider.project_id)
+    if proj is None or proj.owner != owner:
+        return None
+    return provider
+
+
 # -- Projects ---------------------------------------------------------------
 
 
@@ -1080,7 +1116,35 @@ def create_project(
     )
     conn.commit()
     record_event(conn, project.id, "project", project.id, "project.created")
+    default = resolve_owner_default_provider(conn, owner)
+    if default is not None:
+        copy_provider_to_project(conn, default.id, project.id)
     return project
+
+
+def copy_provider_to_project(conn: sqlite3.Connection, provider_id: str, target_project_id: str) -> Provider:
+    provider = get_provider(conn, provider_id)
+    if provider is None:
+        raise KeyError(f"unknown provider {provider_id}")
+    target = get_project(conn, target_project_id)
+    if target is None:
+        raise KeyError(f"unknown project {target_project_id}")
+    source_project = get_project(conn, provider.project_id)
+    if source_project is None or source_project.owner != target.owner:
+        raise ValueError("provider owner mismatch")
+    copied = create_provider(
+        conn,
+        target_project_id,
+        kind=provider.kind,
+        name=provider.name,
+        config=dict(provider.config),
+        capabilities=list(provider.capabilities),
+    )
+    if provider.status != copied.status:
+        set_provider_status(conn, copied.id, provider.status)
+        copied = get_provider(conn, copied.id)
+    set_owner_setting(conn, target.owner, "default_provider_id", provider.id)
+    return copied
 
 
 def _project_from_row(row: sqlite3.Row) -> Project:

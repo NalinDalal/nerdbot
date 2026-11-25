@@ -3247,6 +3247,32 @@ def create_app() -> FastAPI:
         require_project_owner(conn, project_id, principal)
         return {"providers": [_provider_public(p) for p in store.list_providers(conn, project_id)]}
 
+    @app.get("/settings/owner-default-provider")
+    def get_owner_default_provider(
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        provider = store.resolve_owner_default_provider(conn, principal)
+        return {"provider": provider.model_dump(mode="json") if provider else None}
+
+    @app.put("/settings/owner-default-provider")
+    def set_owner_default_provider(
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        provider_id = str(body.get("provider_id") or "").strip()
+        if not provider_id:
+            raise HTTPException(status_code=400, detail="provider_id is required")
+        provider = store.get_provider(conn, provider_id)
+        if provider is None:
+            raise HTTPException(status_code=404, detail="provider not found")
+        project = store.get_project(conn, provider.project_id)
+        if project is None or project.owner != principal:
+            raise HTTPException(status_code=404, detail="provider not found")
+        store.set_owner_setting(conn, principal, "default_provider_id", provider.id)
+        return {"provider": provider.model_dump(mode="json")}
+
     @app.get("/providers/{provider_id}")
     def get_provider(
         provider_id: str,
@@ -5969,10 +5995,10 @@ def create_app() -> FastAPI:
     ) -> Any:
         """Download the project workspace as a zip archive.
 
-        Owner-only and audited. Files leave the container only through this
-        explicit export path; default deployments do not bind-mount workspaces.
+        Owner-only and audited. Streams from a temporary file, enforces a total
+        size cap, and skips symlinks that resolve outside the workspace.
         """
-        import io
+        import tempfile
         import zipfile
         from fastapi.responses import StreamingResponse
 
@@ -5980,55 +6006,97 @@ def create_app() -> FastAPI:
         project = store.get_project(conn, project_id)
         if project is None:  # pragma: no cover
             raise HTTPException(status_code=404, detail="project not found")
-        root = workspace_mgr.ensure_project_workspace(project, _data_dir())
+        root = workspace_mgr.ensure_project_workspace(project, _data_dir()).resolve()
         actor = workspace_mgr.WorkspaceActor(kind="user", id=principal, project_id=project_id)
         allowed, reason = workspace_mgr._check_workspace_permission(actor, "read")
         if not allowed:
             store.record_workspace_audit(
-                conn,
-                project_id=project_id,
-                actor_kind="user",
-                actor_id=principal,
-                action="export",
-                path="",
-                ok=False,
-                denied=True,
-                reason=reason,
+                conn, project_id=project_id, actor_kind="user", actor_id=principal,
+                action="export", path="", ok=False, denied=True, reason=reason,
             )
             raise HTTPException(status_code=403, detail=reason)
 
-        buf = io.BytesIO()
+        max_bytes = int(os.environ.get("NERDBOT_WORKSPACE_EXPORT_MAX_BYTES", str(64 * 1024 * 1024)))
+        max_bytes = max(1, min(max_bytes, 1024 * 1024 * 1024))
+        tmp = tempfile.SpooledTemporaryFile(max_size=max_bytes + 1024, mode="w+b")
         file_count = 0
-        with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            for dirpath, dirnames, filenames in os.walk(root):
-                dirnames[:] = [d for d in dirnames if d not in workspace_mgr.SKIP_DIRS and not d.startswith(".git")]
-                for name in filenames:
-                    full = Path(dirpath) / name
-                    try:
-                        rel = full.relative_to(root).as_posix()
-                    except ValueError:
-                        continue
-                    try:
-                        zf.write(full, rel)
-                        file_count += 1
-                    except OSError:
-                        continue
-        buf.seek(0)
+        try:
+            total_src = 0
+            with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+                    dirnames[:] = [d for d in dirnames if d not in workspace_mgr.SKIP_DIRS and not d.startswith(".git")]
+                    for name in filenames:
+                        full = Path(dirpath) / name
+                        try:
+                            if full.is_symlink():
+                                target = full.resolve()
+                                if target != root and root not in target.parents:
+                                    continue
+                                continue
+                            resolved = full.resolve()
+                            if resolved != root and root not in resolved.parents:
+                                continue
+                            rel = resolved.relative_to(root).as_posix()
+                            st = resolved.stat()
+                        except (ValueError, OSError):
+                            continue
+                        total_src += int(st.st_size)
+                        if total_src > max_bytes:
+                            raise HTTPException(
+                                status_code=413,
+                                detail=f"workspace export exceeds size cap ({max_bytes} bytes)",
+                            )
+                        try:
+                            zf.write(full, rel)
+                            file_count += 1
+                        except OSError:
+                            continue
+                        if tmp.tell() > max_bytes:
+                            raise HTTPException(
+                                status_code=413,
+                                detail=f"workspace export exceeds size cap ({max_bytes} bytes)",
+                            )
+            if tmp.tell() > max_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"workspace export exceeds size cap ({max_bytes} bytes)",
+                )
+        except HTTPException as exc:
+            store.record_workspace_audit(
+                conn, project_id=project_id, actor_kind="user", actor_id=principal,
+                action="export", path="", ok=False, denied=False, reason=str(exc.detail),
+                args_summary=f"files={file_count} max_bytes={max_bytes}",
+            )
+            tmp.close()
+            raise
+        except Exception:
+            tmp.close()
+            raise
+
+        size = tmp.tell()
+        tmp.seek(0)
         store.record_workspace_audit(
-            conn,
-            project_id=project_id,
-            actor_kind="user",
-            actor_id=principal,
-            action="export",
-            path="",
-            ok=True,
-            denied=False,
-            reason="ok",
-            args_summary=f"files={file_count}",
+            conn, project_id=project_id, actor_kind="user", actor_id=principal,
+            action="export", path="", ok=True, denied=False, reason="ok",
+            args_summary=f"files={file_count} bytes={size}",
         )
+
+        def _iter():
+            try:
+                while True:
+                    chunk = tmp.read(1024 * 64)
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                tmp.close()
+
         filename = f"{project_id}-workspace.zip"
-        headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
-        return StreamingResponse(buf, media_type="application/zip", headers=headers)
+        headers = {
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(size),
+        }
+        return StreamingResponse(_iter(), media_type="application/zip", headers=headers)
 
     @app.get("/projects/{project_id}/workspace/diff")
     def get_project_workspace_diff(

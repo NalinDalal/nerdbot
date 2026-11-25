@@ -179,21 +179,7 @@ def resolve_chat_provider(
                 m = provider
         return cap or m
 
-    picked = _pick(store.list_providers(conn, project_id))
-    if picked is not None:
-        return picked
-    # New projects do not inherit providers; fall back to any active provider
-    # configured by the same owner so chat works without per-project duplication.
-    project = store.get_project(conn, project_id)
-    if project is None:
-        return None
-    for other in store.list_projects(conn, project.owner):
-        if other.id == project_id:
-            continue
-        picked = _pick(store.list_providers(conn, other.id))
-        if picked is not None:
-            return picked
-    return None
+    return _pick(store.list_providers(conn, project_id))
 
 
 def _has_credentials(provider: Provider) -> bool:
@@ -390,7 +376,7 @@ def chat_complete(
     """One non-streaming completion, capped. Mock needs no transport."""
     if provider is None:
         raise ProviderConfigurationError(
-            "no chat provider available: configure an openai-compatible or mock provider"
+            "no chat provider available: configure a provider for this project or set an owner default provider"
         )
     if provider.kind == ProviderKind.MOCK:
         return _mock_reply(messages)[:RESPONSE_MAX_CHARS]
@@ -472,7 +458,7 @@ def chat_stream(
     """
     if provider is None:
         raise ProviderConfigurationError(
-            "no chat provider available: configure an openai-compatible or mock provider"
+            "no chat provider available: configure a provider for this project or set an owner default provider"
         )
     if provider.kind == ProviderKind.MOCK:
         text = _mock_reply(messages)[:RESPONSE_MAX_CHARS]
@@ -1143,7 +1129,7 @@ def chat_complete_with_tools(
     from . import workspace as _ws
     if provider is None:
         raise ProviderConfigurationError(
-            "no chat provider available: configure an openai-compatible or mock provider"
+            "no chat provider available: configure a provider for this project or set an owner default provider"
         )
     if provider.kind == ProviderKind.MOCK:
         return _mock_reply(messages)[:RESPONSE_MAX_CHARS], []
@@ -1329,7 +1315,7 @@ def chat_stream_with_tools(
     from . import workspace as _ws
     if provider is None:
         raise ProviderConfigurationError(
-            "no chat provider available: configure an openai-compatible or mock provider"
+            "no chat provider available: configure a provider for this project or set an owner default provider"
         )
     if provider.kind == ProviderKind.MOCK:
         text = _mock_reply(messages)[:RESPONSE_MAX_CHARS]
