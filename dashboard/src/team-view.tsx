@@ -26,7 +26,7 @@ export function TeamView({ objectiveId, onOpenTask }: { objectiveId: string; onO
             try {
               const pr = await api.listProviders(d.project_id);
               setProviders(pr.providers?.flatMap((p: any) => p.models ? [{ id: p.id, name: p.name }] : [{ id: p.id, name: p.name }]) || []);
-            } catch {}
+            } catch { /* provider list is optional */ }
           }
         }
       } catch (e: any) {

@@ -5,7 +5,7 @@ import { Button, EmptyState, ErrorState, LoadingState, Page, useAsync } from "..
 import { ConversationView } from "../views-chat";
 import { ProjectOperatingOverview } from "./overview";
 import { TasksTab } from "./tasks";
-import { TeammatesTab } from "./teammates";
+import { TeammatesTab } from "./teammates-enhanced";
 import { ProvidersTab } from "./providers";
 import { IssuesTab } from "./issues";
 import { KnowledgeTab } from "./knowledge";
@@ -92,7 +92,7 @@ export function ProjectDetailView({
           href="/projects"
           className="inline-flex items-center gap-1 text-step--1 text-[var(--muted)] transition-colors hover:text-[var(--text)]"
         >
-          <span aria-hidden>←</span> Workspaces
+          <span aria-hidden>←</span> Projects
         </a>
         {tab !== "Overview" ? (
           <div className="flex flex-wrap items-center gap-2">
@@ -103,14 +103,14 @@ export function ProjectDetailView({
       </div>
       {tab !== "Overview" ? (
         <div className="mb-4 min-w-0">
-          <div className="mb-1 text-step--2 uppercase tracking-[0.16em] text-[var(--faint)]">Workspace</div>
+          <div className="mb-1 text-step--2 uppercase tracking-[0.16em] text-[var(--faint)]">Project</div>
           <h1 className="truncate text-step-2 font-semibold tracking-tight text-[var(--text)]">{workspaceName}</h1>
         </div>
       ) : null}
 
       <div
         role="tablist"
-        aria-label="Workspace sections"
+        aria-label="Project sections"
         className="mb-6 flex flex-nowrap items-center gap-1 overflow-x-auto rounded-lg border border-[var(--border-dim)] bg-[var(--surface)] p-1 md:flex-wrap md:overflow-visible"
       >
         {PRIMARY_TABS.map((name) => (
@@ -213,7 +213,7 @@ function ProjectBoardsTab({ projectId }: { projectId: string }) {
     <div>
       <div className="mb-3 flex items-center justify-between gap-2">
         <span className="text-step--1 text-[var(--muted)]">
-          Boards scoped to this project. Manage all boards from Workspace → Advanced.
+          Boards scoped to this project. Manage every board from Boards.
         </span>
         <Button onClick={() => navigate("/boards")}>All boards →</Button>
       </div>

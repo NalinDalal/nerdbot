@@ -1,8 +1,9 @@
-/* ===== Design tokens ===== */
-/* Self-hosted Geist (SIL OFL 1.1, license in public/fonts/OFL.txt). Variable
- * weights, latin subset — the whole UI type system ships with the app and
- * needs no third-party CDN: a self-hosted workspace must render correctly
- * with no internet. */
+/* ===== Nerdbot design tokens =====
+ *
+ * One type family, one neutral ramp, one accent, one radius scale.
+ * Dark is the primary theme: graphite surfaces with a cool cast, not an
+ * inverted light theme. Light is paper, not white everywhere.
+ */
 @font-face {
   font-family: "Geist";
   font-style: normal;
@@ -18,62 +19,65 @@
   src: url("/fonts/geist-mono-variable.woff2") format("woff2");
 }
 
-/* Dark theme (default): calm, neutral, product-grade surfaces. */
 :root {
   --font-sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
-  /* Type scale */
-  --step-minus-3: clamp(0.62rem, 0.6rem + 0.08vw, 0.68rem);
-  --step-minus-2: clamp(0.72rem, 0.7rem + 0.08vw, 0.76rem);
-  --step-minus-1: clamp(0.8rem, 0.78rem + 0.1vw, 0.86rem);
-  --step-0: clamp(0.95rem, 0.93rem + 0.12vw, 1rem);
-  --step-1: clamp(1.12rem, 1.06rem + 0.25vw, 1.28rem);
-  --step-2: clamp(1.35rem, 1.22rem + 0.5vw, 1.7rem);
-  --step-3: clamp(1.7rem, 1.45rem + 0.9vw, 2.2rem);
-  --step-4: clamp(2.1rem, 1.75rem + 1.4vw, 2.8rem);
-  --step-5: clamp(2.6rem, 2rem + 2.2vw, 3.6rem);
+  /* Type scale. Body is 15, metadata 12.5, page titles 30. */
+  --step-minus-3: 0.6875rem; /* 11 */
+  --step-minus-2: 0.75rem; /* 12 */
+  --step-minus-1: 0.8125rem; /* 13 */
+  --step-0: 0.9375rem; /* 15 */
+  --step-1: 1.0625rem; /* 17 */
+  --step-2: 1.375rem; /* 22 */
+  --step-3: 1.75rem; /* 28 */
+  --step-4: 2.25rem; /* 36 */
+  --step-5: 3rem; /* 48 */
 
-  /* Surfaces: one neutral family, subtle depth */
-  --bg: #0b0d10;
-  --bg-inverse: #f5f7fa;
-  --surface: #12161b;
-  --surface-2: #171c22;
-  --surface-3: #1d232b;
-  --surface-hover: #222a33;
-  --border: #27303a;
-  --border-dim: #1e2630;
-  --border-focus: #3563f4;
-  --text: #e8edf3;
-  --text-soft: #c3ccd6;
-  --text-inverse: #0b0d10;
-  --muted: #93a0ad;
-  --faint: #748291;
-  --ring: rgba(53, 99, 244, 0.35);
+  /* Dark (default). */
+  --bg: #0a0c10;
+  --bg-inverse: #f6f7f9;
+  --surface: #10141a;
+  --surface-2: #161b22;
+  --surface-3: #1c232c;
+  --surface-hover: #202832;
+  --border: #252d38;
+  --border-dim: #1a2028;
+  --border-strong: #38424f;
+  --border-focus: #4f7dfc;
+  --line: #1a2028;
 
-  /* Bot faces (unchanged semantics) */
-  --face-plate-light: #f2f3f2;
-  --face-plate-dark: #0c1116;
+  --text: #eef2f7;
+  --text-soft: #c9d2dd;
+  --text-inverse: #0a0c10;
+  --muted: #98a4b2;
+  --faint: #7d8a99;
 
-  /* Semantic: one accent, restrained */
-  --accent: #3563f4;
-  --accent-dim: rgba(53, 99, 244, 0.16);
-  --accent-hover: #4d74ff;
-  --accent-2: #7553e8;
-  --accent-2-dim: rgba(117, 83, 232, 0.16);
-  --success: #22a06b;
-  --danger: #dc5a5a;
-  --danger-dim: rgba(220, 90, 90, 0.14);
-  --warn: #d97706;
-  --warn-dim: rgba(217, 119, 6, 0.14);
-  --info: #7553e8;
-  --info-dim: rgba(117, 83, 232, 0.16);
+  --accent: #4f7dfc;
+  --accent-dim: rgba(79, 125, 252, 0.14);
+  --accent-hover: #6a93ff;
+  --accent-press: #3f6ae8;
+  --accent-ink: #ffffff;
+  --accent-2: #8b6cf0;
+  --accent-2-dim: rgba(139, 108, 240, 0.14);
 
-  --radius: 10px;
-  --radius-sm: 8px;
-  --radius-lg: 14px;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
-  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.35);
+  --success: #3fbd8b;
+  --success-dim: rgba(63, 189, 139, 0.12);
+  --danger: #ef7070;
+  --danger-dim: rgba(239, 112, 112, 0.13);
+  --warn: #e3a33f;
+  --warn-dim: rgba(227, 163, 63, 0.13);
+  --info: #6aa8ff;
+  --info-dim: rgba(106, 168, 255, 0.13);
+
+  --ring: rgba(79, 125, 252, 0.42);
+
+  --radius: 8px;
+  --radius-sm: 6px;
+  --radius-lg: 12px;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.42);
+
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-sharp: cubic-bezier(0.2, 0, 0.38, 0.9);
   --duration-in: 180ms;
@@ -92,127 +96,71 @@
   --space-20: 64px;
   --space-24: 80px;
 
-  --width-sidebar: 252px;
-  --width-conversation-sidebar: 288px;
-  --max-width-read: 72ch;
-  --max-width-wide: 1120px;
+  --width-sidebar: 232px;
+  --width-conversation-sidebar: 280px;
+  --max-width-read: 68ch;
+  --max-width-wide: 1240px;
+
+  --face-plate-light: #f2f3f2;
+  --face-plate-dark: #0c1116;
+
+  color-scheme: dark;
 }
 
-/* Light theme */
 [data-theme="light"] {
+  color-scheme: light;
   --bg: #f6f7f9;
-  --bg-inverse: #0b0d10;
+  --bg-inverse: #10141a;
   --surface: #ffffff;
-  --surface-2: #f1f3f6;
-  --surface-3: #e8ebf0;
-  --surface-hover: #e2e7ee;
-  --border: #d7dde6;
-  --border-dim: #e3e7ee;
-  --border-focus: #3563f4;
-  --text: #121720;
-  --text-soft: #3a4654;
+  --surface-2: #f2f4f7;
+  --surface-3: #e8ecf1;
+  --surface-hover: #e4e9f0;
+  --border: #dde3ea;
+  --border-dim: #ebeff4;
+  --border-strong: #c4ccd6;
+  --border-focus: #2f5ce0;
+  --line: #e4e9ef;
+
+  --text: #0e1319;
+  --text-soft: #37424f;
   --text-inverse: #ffffff;
-  --muted: #5b6878;
-  --faint: #738294;
-  --ring: rgba(53, 99, 244, 0.22);
+  --muted: #5a6774;
+  --faint: #6b7684;
 
-  --accent: #3563f4;
-  --accent-dim: rgba(53, 99, 244, 0.1);
-  --accent-hover: #2a52d9;
-  --accent-2: #7553e8;
-  --accent-2-dim: rgba(117, 83, 232, 0.1);
-  --success: #178a5a;
-  --danger: #c64545;
-  --danger-dim: rgba(198, 69, 69, 0.1);
-  --warn: #b45309;
-  --warn-dim: rgba(180, 83, 9, 0.1);
-  --info: #6947d8;
-  --info-dim: rgba(105, 71, 216, 0.1);
+  --accent: #2f5ce0;
+  --accent-dim: rgba(47, 92, 224, 0.09);
+  --accent-hover: #244fc9;
+  --accent-press: #1e44b0;
+  --accent-ink: #ffffff;
+  --accent-2: #6b4fd6;
+  --accent-2-dim: rgba(107, 79, 214, 0.09);
 
-  --shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
-  --shadow-lg: 0 12px 28px rgba(16, 24, 40, 0.1);
+  --success: #0f7b57;
+  --success-dim: rgba(15, 123, 87, 0.08);
+  --danger: #bd3f3f;
+  --danger-dim: rgba(189, 63, 63, 0.07);
+  --warn: #8f5600;
+  --warn-dim: rgba(143, 86, 0, 0.08);
+  --info: #2f5ce0;
+  --info-dim: rgba(47, 92, 224, 0.08);
+
+  --ring: rgba(47, 92, 224, 0.22);
+  --shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-lg: 0 18px 40px rgba(16, 24, 40, 0.12);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #0b0d10;
-    --bg-inverse: #f5f7fa;
-    --surface: #12161b;
-    --surface-2: #171c22;
-    --surface-3: #1d232b;
-    --surface-hover: #222a33;
-    --border: #27303a;
-    --border-dim: #1e2630;
-    --text: #e8edf3;
-    --text-soft: #c3ccd6;
-    --text-inverse: #0b0d10;
-    --muted: #93a0ad;
-    --faint: #748291;
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
-    --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.35);
-  }
-}
-
-/* Dark mode (.dark class) — tinted backgrounds, lighter text, reduced saturation */
-.dark {
-  --bg: #12161b;
-  --bg-inverse: #f5f7fa;
-  --surface: #1d232b;
-  --surface-2: #171c22;
-  --surface-3: #222a33;
-  --border: #27303a;
-  --border-dim: #1e2630;
-  --border-focus: #3563f4;
-  --text: #e8edf3;
-  --text-soft: #c3ccd6;
-  --text-inverse: #0b0d10;
-  --muted: #93a0ad;
-  --faint: #748291;
-  --shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
-  --shadow-lg: 0 12px 28px rgba(16, 24, 40, 0.1);
-}
-
-.dark {
-  --bg: #12161b;
-  --bg-inverse: #f5f7fa;
-  --surface: #1d232b;
-  --surface-2: #171c22;
-  --surface-3: #222a33;
-  --border: #27303a;
-  --border-dim: #1e2630;
-  --border-focus: #3563f4;
-  --text: #e8edf3;
-  --text-soft: #c3ccd6;
-  --text-inverse: #0b0d10;
-  --muted: #93a0ad;
-  --faint: #748291;
-  --ring: rgba(53, 99, 244, 0.22);
-
-  /* Dark-mode color adjustments: reduce saturation by ~20% on accents,
-     keep same hue, lighter text instead of darker backgrounds. */
-  --accent: #3563f4;   /* same hue as light, increased lightness in dark */
-  --accent-dim: rgba(53, 99, 244, 0.16);
-  --accent-hover: #4d74ff;
-  --accent-2: #7553e8;
-  --accent-2-dim: rgba(117, 83, 232, 0.16);
-  --success: #22a06b;   /* slightly lighter than light version */
-  --danger: #dc5a5a;   /* reduced saturation */
-  --danger-dim: rgba(220, 90, 90, 0.14);
-  --warn: #d97706;   /* reduced saturation */
-  --warn-dim: rgba(217, 119, 6, 0.14);
-  --info: #7553e8;   /* tinted near-black for neutral roles */
-  --info-dim: rgba(105, 71, 216, 0.1);
-}
-
-/* ===== Tailwind directives */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 /* ===== Base ===== */
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+}
 
-html, body, #root {
+html,
+body,
+#root {
   margin: 0;
   height: 100%;
   background: var(--bg);
@@ -225,23 +173,70 @@ html, body, #root {
   -moz-osx-font-smoothing: grayscale;
 }
 
-.dark { color-scheme: dark; }
-[data-theme="light"] { color-scheme: light; }
+body {
+  overflow: hidden;
+}
 
-::selection { background: var(--accent-dim); color: var(--text); }
+::selection {
+  background: var(--accent-dim);
+  color: var(--text);
+}
 
-a { color: inherit; text-decoration: none; }
-a:hover { color: var(--text); }
+a {
+  color: inherit;
+  text-decoration: none;
+}
 
-.mono { font-family: var(--font-mono); }
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
 
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+/* One focus treatment for the whole product. */
 :focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 1px;
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+/* Quiet scrollbars keep dense tables and rails calm. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border: 3px solid var(--bg);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
+}
+
+input,
+textarea,
+select,
+button {
+  font-family: inherit;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+  *,
+  *::before,
+  *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
@@ -250,8 +245,67 @@ a:hover { color: var(--text); }
 }
 
 /* ===== Terminal chrome (workbench) ===== */
-#workbench-terminal { border: 1px solid var(--border-dim); border-radius: var(--radius-sm); overflow: hidden; }
-#workbench-terminal .xterm-focus-glow { display: none !important; }
-#workbench-terminal .xterm .xterm-scrollbar-state { background: transparent !important; }
-#workbench-terminal .xterm .xterm-scrollbar .xterm-scrollbar-area { opacity: 0.45 !important; }
-#workbench-terminal .xterm .xterm-scrollbar .xterm-scrollbar-area:not(:hover) { transition: background-color 200ms ease; }
+#workbench-terminal {
+  border: 1px solid var(--border-dim);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+#workbench-terminal .xterm-focus-glow {
+  display: none !important;
+}
+#workbench-terminal .xterm .xterm-scrollbar-state {
+  background: transparent !important;
+}
+#workbench-terminal .xterm .xterm-scrollbar .xterm-scrollbar-area {
+  opacity: 0.45 !important;
+}
+#workbench-terminal .xterm .xterm-scrollbar .xterm-scrollbar-area:not(:hover) {
+  transition: background-color 200ms ease;
+}
+
+/* ===== Shared easing helpers ===== */
+@keyframes nerdbot-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@keyframes nerdbot-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: nerdbot-fade-in var(--duration-in) var(--ease-out) both;
+}
+
+/* Functional shimmer for loading placeholders. Not decoration. */
+.skeleton {
+  background-image: linear-gradient(
+    90deg,
+    var(--surface-2) 0%,
+    var(--surface-3) 45%,
+    var(--surface-2) 90%
+  );
+  background-size: 220% 100%;
+  animation: nerdbot-shimmer 1.4s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in,
+  .skeleton {
+    animation: none;
+  }
+  .skeleton {
+    background: var(--surface-2);
+  }
+}

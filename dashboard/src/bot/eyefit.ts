@@ -13,7 +13,7 @@
  * choice is the heart of the fix, far more than the geometry that follows:
  *
  * Solved inside the render loop, the correction reacts to everything that
- * moves at sixty frames per second — the gaze drift, the pointer, the
+ * moves at sixty frames per second the gaze drift, the pointer, the
  * expression mid-morph, the nearest edge changing, the most constrained eye
  * changing. Seven variants were written that way and all of them produced a
  * visible movement artefact: permanent jitter, a 26-unit jump in direction
@@ -103,7 +103,7 @@ interface Empreinte {
  * through the tangent matrix is therefore a segment thickened by an ELLIPSE,
  * and a disc of the radius of its major axis covers it: so the largest
  * singular value is used. The measurement stays conservative in the strict
- * sense — a positive margin guarantees the capsule is inside.
+ * sense a positive margin guarantees the capsule is inside.
  *
  * Blinking is not in there: a closed eye does not need room made for it.
  */
@@ -144,7 +144,7 @@ function empreintes(visage: Visage, sil: Pose["sil"], radii: number[]): Empreint
 
 /**
  * Shortest approach between an outline and a segment: the distance, and the
- * vector that goes from the outline towards the segment — the direction that
+ * vector that goes from the outline towards the segment the direction that
  * clears.
  *
  * Both come out of the SAME pass. Computing them separately doubled the one
@@ -227,11 +227,11 @@ const DICHOTOMIE = 8;
  * placed a little lower on a body that has no room at the top, which is the
  * gesture you would make by hand. The variants that bounded each eye
  * separately pulled the pair apart, and the ones that scaled the face down
- * made the eyes smaller — visibly.
+ * made the eyes smaller visibly.
  *
  * The targeted margin is the one of the ORIGINAL profile, not a strict
  * clearance: on the circle the outer eye already grazes the edge, 17.3 units
- * for a ball of radius 100, and that is wanted — it is what gives the
+ * for a ball of radius 100, and that is wanted it is what gives the
  * volume. It is capped by what the shape offers at its centre, otherwise the
  * request is untenable on a flat body.
  *
@@ -239,7 +239,7 @@ const DICHOTOMIE = 8;
  * smallest norm that fits, so we probe a crown of directions and bisect the
  * distance along each. A gradient descent was written first and it does not
  * converge: clearing the pair from one edge brings it closer to the other, so
- * it stutters and only keeps its best attempt — dropping its turns from 40 to
+ * it stutters and only keeps its best attempt dropping its turns from 40 to
  * 18 was enough to bring 34 overflows back. Here the result does not depend
  * on a convergence: each direction is solved exactly, to the bisection step.
  */
@@ -280,7 +280,7 @@ function resous(epreuves: Epreuve[]): { x: number; y: number } {
 
   /*
    * Already good: the circle's case, and that of any shape wide enough. The
-   * capsule must FIT, and not be tighter than on the original profile —
+   * capsule must FIT, and not be tighter than on the original profile
    * without that second condition, a shape where nothing fits satisfied the
    * first one degenerately and we gave up. `wide` has capsules 87 units
    * long, `notify` discs 50 across: on a triangle or a droplet they overflow
@@ -342,8 +342,8 @@ function resous(epreuves: Epreuve[]): { x: number; y: number } {
  * otherwise.
  *
  * ONE table entry per expression, and not a worst case common to all of
- * them. A worst case looked more convincing — a constant offset cannot move
- * when the expression changes — but it is untenable: on a capsule, `neutre`
+ * them. A worst case looked more convincing a constant offset cannot move
+ * when the expression changes but it is untenable on a capsule `neutre`
  * has the eyes high and asks to go down while `frightened` has them low and
  * asks to go up. No single translation satisfies both, and the measurement
  * agrees (4 overflows of 4.8 units).
@@ -411,7 +411,7 @@ const NUL = { x: 0, y: 0 } as const;
 const clef = (state: StateId, expr: string | null) => `${state}|${expr ?? ""}`;
 
 /**
- * Cache of the offsets, keyed by the shape's radii ARRAY REFERENCE — which is
+ * Cache of the offsets, keyed by the shape's radii ARRAY REFERENCE which is
  * already the engine's convention: its `radii === this.shape` guard relies on
  * that same stability. An unknown profile, or `null`, corrects nothing.
  *
@@ -448,7 +448,7 @@ function entryFor(
 
 /**
  * The offset to apply to both eyes for this shape on this state, in units of
- * the ball radius — the engine puts it back to its own scale.
+ * the ball radius the engine puts it back to its own scale.
  *
  * Worth zero as soon as the shape is not in the catalogue, which covers
  * `null` and the circle: on the circle both profiles are the same, so the

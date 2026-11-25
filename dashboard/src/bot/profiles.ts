@@ -5,7 +5,7 @@
  * Unit: the radius of the resting ball = 1.
  *
  * Ported from `bloub` (MIT, jeremy-prt/bloub). Upstream generated this file
- * with `tools/extract-profiles.py` — do not edit by hand.
+ * with `tools/extract-profiles.py` do not edit by hand.
  */
 
 export const PROFILE_SAMPLES = 64;

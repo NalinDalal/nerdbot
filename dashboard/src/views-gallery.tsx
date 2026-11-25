@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api, getSession } from "./api";
 import { notifyError } from "./app";
@@ -60,9 +60,9 @@ export function GalleryView() {
       setProjects(r.projects || []);
       if (!projectId && r.projects?.[0]?.id) setProjectId(r.projects[0].id);
     }).catch(() => {});
-  }, []);
+  }, [projectId]);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     if (!projectId) { setAssets([]); setTotal(0); return; }
     setLoading(true); setError(null);
     try {
@@ -70,8 +70,8 @@ export function GalleryView() {
       setAssets(res.assets || []); setTotal(res.total || 0);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setLoading(false); }
-  };
-  useEffect(() => { void load(); }, [projectId, q, mime]);
+  }, [projectId, q, mime]);
+  useEffect(() => { void load(); }, [projectId, q, mime, load]);
 
   const upload = async (file: File) => {
     if (!projectId) return;
@@ -90,7 +90,7 @@ export function GalleryView() {
       <PageHeader
         eyebrow="Workspace"
         title="Gallery"
-        description="Manage images and files for this workspace (view/manage only — no editing, OCR, or transcription). Upload policy: up to 10 MB per asset; stored per-project with metadata and safe previews/thumbnails where supported."
+        description="Manage images and files for this workspace (view/manage no editing OCR or transcription). Upload policy: up to 10 MB per asset; stored per-project with metadata and safe previews/thumbnails where supported."
         actions={<>
           <Button variant="primary" onClick={() => fileRef.current?.click()} disabled={!projectId || busy}>Upload file</Button>
           <input ref={fileRef} type="file" className="hidden" aria-label="Upload gallery asset" onChange={(e) => { const f = e.target.files?.[0]; e.target.value=""; if (f) void upload(f); }} />
@@ -146,7 +146,7 @@ export function GalleryView() {
                     <Badge variant="neutral">{formatBytes(a.size || 0)}</Badge>
                     {(a.metadata as any)?.storage_policy ? <Badge variant="neutral">{String((a.metadata as any).storage_policy)}</Badge> : null}
                   </div>
-                  <div className="mt-1 text-step--2 text-[var(--faint)]">Source: {a.source || "—"} · {a.id}</div>
+                  <div className="mt-1 text-step--2 text-[var(--faint)]">Source: {a.source || "none"} · {a.id}</div>
                   {(a.thread_id || a.task_id || a.doc_id) ? <div className="mt-0.5 text-step--2 text-[var(--faint)]">Linked: {a.thread_id ? `thread ${a.thread_id} ` : ""}{a.task_id ? `task ${a.task_id} ` : ""}{a.doc_id ? `doc ${a.doc_id}` : ""}</div> : null}
                   <div className="mt-2 flex flex-wrap gap-2">
                     <Button onClick={() => window.open(url, "_blank")}>Preview</Button>

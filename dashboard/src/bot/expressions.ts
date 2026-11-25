@@ -9,7 +9,7 @@ import type { EyeCfg } from "./states";
  * the head orientation, the eye separation, their proportions, and each
  * eye's own tilt. The last one is what makes anger and sadness possible:
  * they ask for MIRRORED tilts (the tops converging or diverging), which the
- * head roll alone cannot do — it leans both eyes the same way.
+ * head roll alone cannot do it leans both eyes the same way.
  *
  * Only the resting state carries this expression. The expressive states of
  * the video (wink, wide eyes, notification) keep their own: that is what the
@@ -154,7 +154,7 @@ export const EXPRESSIONS: BotExpression[] = [
   },
   {
     // half-lowered lids: this goes through `open`, so the vertical squash on
-    // screen — the same mechanism as a blink
+    // screen the same mechanism as a blink
     id: "somnolent",
     gaze: { yaw: 6, pitch: -9, roll: -3 },
     split: 16,

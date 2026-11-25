@@ -89,12 +89,12 @@ export const COLOR_IDS = Object.keys(COLOR_LABELS) as ColorId[];
 export const EXPRESSION_IDS = Object.keys(EXPRESSION_LABELS) as ExpressionId[];
 
 /**
- * Normalises a face coming from anywhere — the API, a stored bot, a form —
+ * Normalises a face coming from anywhere the API, a stored bot a form
  * into one the renderer can draw.
  *
  * An unknown id falls back to the default rather than throwing: the face is
  * cosmetic, and a bot whose face the dashboard cannot draw should still
- * show up. This mirrors the engine's own rule — it accepts any profile and
+ * show up. This mirrors the engine's own rule it accepts any profile and
  * does not depend on its callers' prudence.
  */
 export function normalizeFace(raw: unknown): BotFace {
@@ -166,7 +166,7 @@ export function faceInk(face: BotFace): string {
  *
  * The eyes of the bot are holes punched through its body, so whatever is
  * behind the body is what shows in them. That background therefore has to
- * contrast with the body colour — and the palette holds both a near-black
+ * contrast with the body colour and the palette holds both a near-black
  * and a near-white, so no single plate works for all twelve.
  *
  * So the plate is the opposite of the body: a light body gets a dark plate,

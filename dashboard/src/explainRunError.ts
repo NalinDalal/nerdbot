@@ -9,7 +9,7 @@
  * unchanged, unedited, and no invented explanation.
  *
  * NOTE: this whole thing is a stopgap. Matching the error by its string
- * toils until the backend sets a blocked_reason for this case — once one
+ * toils until the backend sets a blocked_reason for this case  once one
  * arrives, the translation moves server-side and this file shrinks to a
  * pass-through.
  */
@@ -28,7 +28,7 @@ export interface RunErrorExplanation {
 }
 
 /** The error text a failed run carries: stderr first, then the output
- *  excerpt — the executor writes the one meaningful string to whichever is
+ *  excerpt the executor writes the one meaningful string to whichever is
  *  filled, so either may hold it. */
 function runErrorText(run: { stderr: string; output_excerpt: string }): string {
   return run.stderr.trim() || run.output_excerpt.trim();

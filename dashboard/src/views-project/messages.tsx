@@ -12,7 +12,7 @@ export function MessagesTab({ projectId }: { projectId: string }) {
     return () => clearInterval(t);
   }, [msgs.reload]);
   const nameOf = (id: string | null): string => {
-    if (!id) return "—";
+    if (!id) return "none";
     return mates.data?.teammates.find((m) => m.id === id)?.persona || id.slice(0, 10);
   };
   const rows = msgs.data?.messages ?? [];
@@ -56,7 +56,7 @@ export function MessagesTab({ projectId }: { projectId: string }) {
                   </td>
                   <td className={TABLE_TD}>{nameOf(m.from_teammate_id)}</td>
                   <td className={TABLE_TD}>{m.to_teammate_id ? nameOf(m.to_teammate_id) : "everyone"}</td>
-                  <td className={TABLE_TD}>{m.board_name || "—"}</td>
+                  <td className={TABLE_TD}>{m.board_name || "none"}</td>
                   <td style={{ maxWidth: 420, wordBreak: "break-word" }}><Markdown text={m.content} /></td>
                   <td className="text-[var(--muted)]">{new Date(m.created_at).toLocaleString()}</td>
                 </tr>

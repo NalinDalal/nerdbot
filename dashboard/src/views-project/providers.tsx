@@ -226,7 +226,7 @@ function EditProviderForm({ provider, onDone }: { provider: Provider; onDone: ()
       <Field label="Base URL">
         <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
       </Field>
-      <Field label="API key — leave empty to keep the current one" error={error ?? undefined}>
+      <Field label="API key leave empty to keep the current one" error={error ?? undefined}>
         <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} autoComplete="off" />
       </Field>
       <div className="flex items-center gap-3" style={{ marginTop: 8 }}>

@@ -20,7 +20,7 @@ const CONTROL_CLASS =
 type ControlEvent = React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>;
 
 /** Small controlled form over a flat string map. One required rule per
- *  field, inline errors, and an honest inline failure box — deliberately
+ *  field, inline errors, and an honest inline failure box deliberately
  *  plain React instead of a form library, which cost more bundle than it
  *  bought for a form this simple. */
 export function EntityForm({

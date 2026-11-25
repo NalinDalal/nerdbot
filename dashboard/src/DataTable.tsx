@@ -16,7 +16,7 @@ export interface Column<T> {
 /** How a row lays out in the stack mode (narrow screens): one column's
  *  render is the title, an optional status-like column sits beside it,
  *  and the rest become labelled lines beneath. Columns are named by key,
- *  so the same render functions drive both layouts — nothing drifts. */
+ *  so the same render functions drive both layouts nothing drifts. */
 export interface StackSpec {
   title: string;
   badge?: string;
@@ -45,7 +45,7 @@ export function DataTable<T extends { id: string }>({ columns, rows, onRowClick,
           /* The divider under the final row would double the shell's own
              bottom border, so the last row's cells drop it explicitly
              (`!border-b-0`, which out-specifies the border-b baked into
-             TABLE_TD). Composed per cell — a variant like `last:[&>td]`
+             TABLE_TD). Composed per cell a variant like `last:[&>td]`
              compiles to `td:last-child` and strips the whole table's last
              column instead. */
           const isLastRow = rowIndex === rows.length - 1;
@@ -87,7 +87,7 @@ export function DataTable<T extends { id: string }>({ columns, rows, onRowClick,
               i > 0 ? "border-t border-[var(--border-dim)]" : ""
             }`}
           >
-            {/* Title on top, status beneath, labelled meta lines last —
+            {/* Title on top, status beneath, labelled meta lines last
                 header order without the fixed grid. */}
             {titleColumn ? (
               <div className="min-w-0">{titleColumn.render ? titleColumn.render(r) : cellText(r, stack.title)}</div>

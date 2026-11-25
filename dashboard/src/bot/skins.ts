@@ -12,7 +12,7 @@ import {
  *
  * Unlike the animated silhouettes (`profiles.ts`), these are NOT measured off
  * the video: they are built analytically from the original customiser's
- * grid. Two distinct sources, on purpose — the animated states must stay
+ * grid. Two distinct sources, on purpose the animated states must stay
  * faithful to the video, the base shapes are a user choice.
  *
  * Ported from `bloub` (MIT, jeremy-prt/bloub).

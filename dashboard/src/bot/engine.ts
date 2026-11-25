@@ -41,7 +41,7 @@ export interface BotFrame {
 }
 
 /**
- * Where the bot looks when something outside drives it — the pointer, for
+ * Where the bot looks when something outside drives it the pointer, for
  * now.
  *
  * `yaw` and `pitch` are ABSOLUTE directions, which replace the state's
@@ -52,8 +52,8 @@ export interface BotFrame {
  *   expression's orientation would read its arrival value while the morph is
  *   still running, and the eyes would jump on every mood change;
  * - and it has to be absolute on BOTH axes. In relative terms the eye
- *   height followed the height of each expression — "neutral" looks at
- *   +28.6deg while the others sit between -9 and +9 — so the eyes dropped in
+ *   height followed the height of each expression "neutral" looks at
+ *   +28.6deg while the others sit between -9 and +9 so the eyes dropped in
  *   one step on the first mood change. What makes an expression's character
  *   during tracking is the SHAPE of its eyes (narrowed, round, mismatched),
  *   not where it looks: that is the cursor's call.
@@ -61,7 +61,7 @@ export interface BotFrame {
  * `mix` says how much the outside drives the DIRECTION (0 = not at all).
  *
  * `wander` says, separately, how much automatic drift is left. The two do
- * not get confused: when the pointer moves, the drift must fade out —
+ * not get confused: when the pointer moves, the drift must fade out
  * cumulated, the bot would look like it is searching for the cursor without
  * ever holding it. But when there is NO pointer (arrival by keyboard, on
  * touch, or the mouse out of the window), the head must stay turned AND keep
@@ -69,7 +69,7 @@ export interface BotFrame {
  *
  * `spin` is a turn to travel ON THE WAY, in degrees, melted away to 0 with
  * the arrival. Because the eyes live on a sphere, a turn takes them behind
- * the ball and brings them back on the other side — and `-360deg` being the
+ * the ball and brings them back on the other side and `-360deg` being the
  * same angle as `0`, it does not change where they end up.
  */
 export interface Look {
@@ -161,7 +161,7 @@ export class BotEngine {
    * Duration of the catch-up of the gaze towards its target. Shorter than
    * `SHAPE_MORPH`: a gaze that follows should look attentive, not sticky.
    * Since the target is re-set on every pointer move, it is this duration
-   * that gives the tracking its inertia — the gaze never quite reaches a
+   * that gives the tracking its inertia the gaze never quite reaches a
    * cursor that keeps moving.
    */
   static readonly LOOK_MORPH = 0.24;
@@ -238,7 +238,7 @@ export class BotEngine {
    * It starts from the CURRENT value, and not from the previous target as
    * `setShape` does: this method is called on every pointer move, and
    * starting from the old target would pull the gaze back one notch before
-   * each catch-up — the tracking would stutter instead of gliding.
+   * each catch-up the tracking would stutter instead of gliding.
    *
    * Same contract as `setShape` otherwise: the outside state enters through
    * a timestamped setter, never through a variable read during `sample`,
@@ -248,7 +248,7 @@ export class BotEngine {
     /*
      * A non-finite target is refused. The engine KEEPS the last one: a single
      * `NaN` would propagate to every frame and the bot would never settle
-     * again. This happened for real — a `getBoundingClientRect` on a
+     * again. This happened for real a `getBoundingClientRect` on a
      * zero-sized box gives `0 / 0` at the call site. That one is fixed, but
      * the engine has no business relying on its callers' prudence to stay
      * replayable.
@@ -292,7 +292,7 @@ export class BotEngine {
    * It is READ from a table and interpolated, never recomputed:
    * `eyefit.ts` explains why that distinction is the whole fix. Here it only
    * has to be interpolated along the shape's axis, with exactly the curve and
-   * the duration of the silhouette morph — same cause, so it must be the
+   * the duration of the silhouette morph same cause, so it must be the
    * same movement.
    *
    * The table is queried on the BOUNDS of the morph (`shapePrev` and `shape`)
@@ -303,7 +303,7 @@ export class BotEngine {
   private decalageAtTime(now: number, state: StateId): { x: number; y: number } {
     /**
      * One morph axis: the table is read on its two BOUNDS and interpolated
-     * with its curve. Never on the interpolated value — that one has no
+     * with its curve. Never on the interpolated value that one has no
      * identity and exists in no table, and feeding it to the table is what
      * made the earlier versions jitter.
      */
@@ -351,7 +351,7 @@ export class BotEngine {
    * its role during playback and exactly what you do not want when coming
    * back to the start of a sequence. Replaying frame 0 after a full pass
    * mixed the first state with the LAST one, and the GIF export opened on a
-   * ball with no eyes — the comet has a null `eyeAlpha`.
+   * ball with no eyes the comet has a null `eyeAlpha`.
    *
    * `sample` stays a pure function of time: like `setState`, this is a
    * timestamped setter, called by the sequence driver, never during a
@@ -368,7 +368,7 @@ export class BotEngine {
 
   /**
    * Origin of the fade in progress: the frozen pose if there is one, else
-   * the state being left evaluated at its own elapsed time — so still
+   * the state being left evaluated at its own elapsed time so still
    * animating, which is wanted.
    */
   private origine(
@@ -412,8 +412,8 @@ export class BotEngine {
    * construction, whatever the number of chained changes.
    *
    * And ONLY in that case. Freezing on every change would stop the animation
-   * of the state being left dead for the whole fade — the "!" of `alert`
-   * would freeze mid-run — while there is nothing to correct outside a
+   * of the state being left dead for the whole fade the "!" of `alert`
+   * would freeze mid-run while there is nothing to correct outside a
    * morph: the state being left is already exactly the image on screen.
    */
   setState(id: StateId, now: number) {
@@ -441,7 +441,7 @@ export class BotEngine {
     const since = now - this.tCur;
     // The previous state is never purged: `since < def.morph` is enough to
     // ignore it once the fade is over, and forgetting it would make the
-    // engine non-replayable — re-reading a date from before the end of the
+    // engine non-replayable re-reading a date from before the end of the
     // fade would not find it any more. It is the optimisation that looks
     // innocent and breaks everything.
     const origine = since < def.morph ? this.origine(now, shape, expr) : null;
@@ -449,13 +449,13 @@ export class BotEngine {
       // Exponential ease-out: the curve measured on the video. The body does
       // not overshoot (only the pip and the opening of the eyes do).
       // The ratio is clamped: re-reading a date BEFORE the state change would
-      // give a negative ratio, which the ease-out extrapolates — the
+      // give a negative ratio, which the ease-out extrapolates the
       // silhouette would then start thirty times too far away.
       const ratio = easings.easeOutQuint(clamp(since / def.morph));
       pose = blendPose(origine, pose, ratio);
       // The eye offset follows the SAME curve as the silhouette that motivates
       // it. It comes from the state being left, which `setState` always
-      // reports at the same time as the origin — the test is there for the
+      // reports at the same time as the origin the test is there for the
       // typing, not for a real case.
       const quitte = this.prev;
       if (quitte) {
@@ -476,7 +476,7 @@ export class BotEngine {
       // The two targets REPLACE the pose's ones instead of adding to them (see
       // `Look`), and the turn is subtracted along the way. The drift is added
       // AFTER the mix, otherwise the target would cancel it at the same time
-      // as the pose — and it has to survive a turned head with no pointer.
+      // as the pose and it has to survive a turned head with no pointer.
       yaw: lerp(pose.gaze.yaw, look.yaw, look.mix) + life.dYaw - look.spin,
       pitch: lerp(pose.gaze.pitch, look.pitch, look.mix) + life.dPitch,
       // the roll follows nothing: the bot's head is tilted -13deg in the

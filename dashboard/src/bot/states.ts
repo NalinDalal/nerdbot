@@ -43,8 +43,8 @@ export interface EyeCfg {
   /**
    * The capsule's own tilt, in degrees, positive = the top leans right.
    * Applied AFTER the sphere's tangent frame. Without it, both eyes always
-   * lean the same way (the head roll), and anger and sadness — which need
-   * mirrored tilts — are out of reach.
+   * lean the same way (the head roll), and anger and sadness which need
+   * mirrored tilts are out of reach.
    */
   tilt?: number;
 }
@@ -488,8 +488,8 @@ export const STATES: StateDef[] = [
      * Entry into the settings view.
      *
      * The ONLY state that is not measured off the video: it is CHOSEN, like
-     * the `--ink` colour. It borrows `orbit`'s vocabulary — the same rings,
-     * with their measured parameters — but cuts short: 1 s instead of 3.4,
+     * the `--ink` colour. It borrows `orbit`'s vocabulary the same rings,
+     * with their measured parameters but cuts short: 1 s instead of 3.4,
      * half the rings, and no triangle.
      *
      * The two flags set to `true` are the whole point of this state:

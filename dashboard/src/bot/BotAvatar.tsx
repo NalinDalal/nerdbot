@@ -133,7 +133,7 @@ export function BotAvatar({
   }, [engine, running]);
 
   // Pointer tracking: the eyes follow the cursor, but only on the states
-  // that carry the resting face — elsewhere the gaze pose IS the animation.
+  // that carry the resting face elsewhere the gaze pose IS the animation.
   useEffect(() => {
     if (!running || !follow) return;
     let pointer: { x: number; y: number } | null = null;
@@ -268,7 +268,7 @@ export function BotAvatar({
 
       {/*
         The plate the face is drawn on. The eyes are holes punched through
-        the body, so the plate is what shows in them — and it is also what
+        the body, so the plate is what shows in them and it is also what
         keeps the near-black and near-white bodies of the palette legible.
       */}
       {plate !== "none" ? (

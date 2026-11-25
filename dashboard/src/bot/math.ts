@@ -1,7 +1,7 @@
 /**
  * Small numeric helpers shared by the bot engine.
  *
- * Ported from `bloub` (MIT, jeremy-prt/bloub) — an SVG recreation of the
+ * Ported from `bloub` (MIT, jeremy-prt/bloub) an SVG recreation of the
  * x.ai bot avatar. See `bot face implementation notes (see external documentation archive)` for the attribution.
  */
 

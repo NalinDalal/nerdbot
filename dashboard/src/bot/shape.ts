@@ -220,7 +220,7 @@ export function superellipseProfile(n: number, sx = 1, sy = 1): number[] {
 
 /**
  * Radial profile of a UNION of discs: r(theta) = the furthest of the
- * ray/disc intersections. Exact as long as the origin is inside the union —
+ * ray/disc intersections. Exact as long as the origin is inside the union
  * which is what gives the cloud its bumps without any path boolean.
  */
 export function unionOfCirclesProfile(circles: Array<{ x: number; y: number; r: number }>): number[] {

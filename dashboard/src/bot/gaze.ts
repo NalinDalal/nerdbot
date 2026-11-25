@@ -7,7 +7,7 @@ import { clamp, easings } from "./math";
  *
  * Ported from `bloub` (MIT, jeremy-prt/bloub). Pure: the pointer position
  * enters as already-normalised coordinates, so the rule can be tested without
- * a DOM — and it has to be, because two signs in it are easy to get wrong.
+ * a DOM and it has to be, because two signs in it are easy to get wrong.
  */
 
 /**
@@ -61,13 +61,13 @@ export const TURN_TIME = 1.1;
 /**
  * A SCRIPTED gaze: evaluated on every frame with the time elapsed since the
  * start of the arrival, in seconds. The script therefore carries its own
- * clock and can chain several movements — the component only evaluates it
+ * clock and can chain several movements the component only evaluates it
  * and has no duration to know about.
  *
  * The RULE, and it is what makes a script maintenance-free: it must FINISH
  * at `mix: 0`, so the state's pose is the only thing in charge. There is
- * then never anything to release, and that release — which would show up as a
- * last slide of the eyes, right when everything should be settled — does not
+ * then never anything to release, and that release which would show up as a
+ * last slide of the eyes, right when everything should be settled does not
  * exist.
  */
 export type GazeScript = (t: number) => Look;
@@ -93,7 +93,7 @@ export interface Aim {
  * Nothing here compensates for the displayed expression: that is the
  * engine's mix, because only it knows the pose at time t. Doing it here
  * would mean reading the expression's ARRIVAL yaw while the engine is still
- * morphing — and the eyes would jump on every mood change.
+ * morphing and the eyes would jump on every mood change.
  */
 export function lookTarget({ nx, ny, tour, pointer }: Aim): Look {
   return {

@@ -22,7 +22,7 @@ export const RAYON = 100;
  * rings.
  *
  * Not a free value: the orbit rings and the comet swoosh reach 1.4 times the
- * radius, i.e. 140. Nothing bounds that at runtime — it is the hand-tuned
+ * radius, i.e. 140. Nothing bounds that at runtime it is the hand-tuned
  * `RINGS` and `SWOOSH` tables in `decor.ts` that keep them under 158.
  */
 export const DEMI_VIEWBOX = 158;

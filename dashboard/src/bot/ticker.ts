@@ -2,7 +2,7 @@
  * One animation loop for every face on the page.
  *
  * Each animated avatar used to run its own `requestAnimationFrame`. Two is
- * comfortable and twenty is a page that janks — which is why the lists draw a
+ * comfortable and twenty is a page that janks which is why the lists draw a
  * still frame. Binding a bot's face to its real status makes more faces worth
  * animating, so the loop is shared first: one scheduler, one clock, and the
  * avatars subscribe to it.
@@ -80,7 +80,7 @@ export function createTicker(schedule: FrameScheduler): Ticker {
 
 /**
  * The browser's scheduler. Guarded so importing this module outside a browser
- * — in a test — does not throw before anyone has subscribed.
+ * in a test does not throw before anyone has subscribed.
  */
 const browserFrames: FrameScheduler = {
   request(callback) {

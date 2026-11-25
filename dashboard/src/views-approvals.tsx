@@ -19,7 +19,7 @@ import type { ApprovalInboxItem } from "./types";
  *
  * One place for every request that is waiting on a human answer, across all
  * the workspaces: what was asked, which bot asked, which task it is for, and
- * what it will do once the answer is yes. An expired request is not hidden —
+ * what it will do once the answer is yes. An expired request is not hidden,
  * it is shown as expired, with the way to ask again.
  */
 export function ApprovalsView() {
@@ -43,8 +43,8 @@ export function ApprovalsView() {
   /**
    * Ask the server to heal what it can, once, when the inbox opens.
    *
-   * A decision that landed but was never carried out — the server died
-   * between the two — is only found by the sweep, and nobody is going to
+   * A decision that landed but was never carried out ,  the server died
+   * between the two ,  is only found by the sweep, and nobody is going to
    * press a button for it. The sweep is idempotent and it is the owner's
    * own server, so asking on the way in is the honest thing to do.
    */

@@ -306,7 +306,7 @@ function PermissionsForm({ mate, onSaved }: { mate: TeammateT; onSaved: () => vo
             {perm.name}
             <span className="text-[var(--muted)]" style={{ fontSize: 11 }}>
               {" "}
-              — {perm.summary}
+               {perm.summary}
             </span>
           </label>
         ))}
@@ -321,7 +321,7 @@ function PermissionsForm({ mate, onSaved }: { mate: TeammateT; onSaved: () => vo
             {perm.name}
             <span className="text-[var(--muted)]" style={{ fontSize: 11 }}>
               {" "}
-              — {perm.summary}
+               {perm.summary}
             </span>
           </label>
         ))}
@@ -329,7 +329,7 @@ function PermissionsForm({ mate, onSaved }: { mate: TeammateT; onSaved: () => vo
       {unknownHeld.length > 0 ? (
         <div className={ERROR_BOX} role="alert">
           This bot holds permission names the server does not know: {unknownHeld.join(", ")}. They grant
-          nothing and will be rejected on save — remove them below.
+          nothing and will be rejected on save remove them below.
           <div className="flex items-center gap-3" style={{ gap: 6, marginTop: 6 }}>
             {unknownHeld.map((p) => (
               <Button key={p} type="button" variant="danger" onClick={() => toggle(p)}>
@@ -502,7 +502,7 @@ function BotForm({
           }}
           className={FORM_INPUT}
         >
-          <option value="">(none — start blank)</option>
+          <option value="">(none start blank)</option>
           {ROLE_TEMPLATES.map((t) => (
             <option key={t.id} value={t.id}>
               {t.label}
@@ -544,7 +544,7 @@ function BotForm({
             <option value="">(attach later)</option>
             {providers.map((p) => (
               <option key={p.id} value={p.id}>
-                {p.name || p.id} — {String(p.config.model ?? "")}
+                {p.name || p.id} {String(p.config.model ?? "")}
               </option>
             ))}
           </select>

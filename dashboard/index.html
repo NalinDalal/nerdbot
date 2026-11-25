@@ -1,9 +1,39 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>NerdBot</title>
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#0a0c10" />
+    <link rel="icon" type="image/svg+xml" href="/nerdbot-mark.svg" />
+    <title>Nerdbot</title>
+    <script>
+      /* Paint the stored theme before React mounts so a reload never flashes
+       * the wrong surface. Mirrors the key and values in components.tsx. */
+      (function () {
+        try {
+          var stored = localStorage.getItem("nerdbot.theme") || "dark";
+          var resolved =
+            stored === "system"
+              ? window.matchMedia("(prefers-color-scheme: dark)").matches
+                ? "dark"
+                : "light"
+              : stored;
+          var root = document.documentElement;
+          root.classList.remove("dark", "light");
+          root.removeAttribute("data-theme");
+          if (resolved === "light") {
+            root.classList.add("light");
+            root.setAttribute("data-theme", "light");
+            document
+              .querySelector('meta[name="theme-color"]')
+              .setAttribute("content", "#f6f7f9");
+          } else {
+            root.classList.add("dark");
+          }
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

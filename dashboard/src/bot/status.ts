@@ -11,8 +11,8 @@ import type { StateId } from "./states";
  * The mapping is deliberately coarse. A pose is read at a glance and at
  * twenty-eight pixels, so the question it answers is "does this thing want
  * something from me?", not "which of nine failure kinds is this?". Where two
- * statuses would produce near-identical poses — `blocked` and `failed` both
- * become `alert` — one pose is better than two that differ by a nuance nobody
+ * statuses would produce near-identical poses `blocked` and `failed` both
+ * become `alert` one pose is better than two that differ by a nuance nobody
  * will see. The status badge keeps the word.
  *
  * `done` is a moment rather than a state, so nothing derives it from history:
@@ -74,7 +74,7 @@ interface HasStatus {
  * What a bot is doing right now, derived from its work rather than its own
  * column.
  *
- * A teammate's own `status` says whether it is enabled — `active` — and never
+ * A teammate's own `status` says whether it is enabled `active` and never
  * says that it is busy, so the bot's page cannot show "working" from it. Its
  * tasks can. The order is the order of who is blocking whom: an unanswered
  * approval is the owner's move, so it outranks everything; then work in
@@ -82,7 +82,7 @@ interface HasStatus {
  *
  * Only durable signals are used. A run's history contains every failure the
  * bot ever had, and reading that would leave a bot looking alarmed forever,
- * so failures are read from the tasks — which are what a human retries.
+ * so failures are read from the tasks which are what a human retries.
  */
 export function botActivity(
   status: string,

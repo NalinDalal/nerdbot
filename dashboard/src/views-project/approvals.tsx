@@ -89,7 +89,7 @@ export function ApprovalsTab({ projectId }: { projectId: string }) {
                   </a>
                 ) : null}
                 <div className="mono text-[var(--muted)]" style={{ fontSize: 12 }}>
-                  digest: {approval.digest || "—"}
+                  digest: {approval.digest || "none"}
                 </div>
               </div>
               <div className="flex items-center gap-3">
@@ -139,7 +139,7 @@ export function ApprovalsTab({ projectId }: { projectId: string }) {
                       />
                     </td>
                     <td className="text-[var(--muted)]">
-                      {approval.executed_at ? new Date(approval.executed_at).toLocaleString() : "—"}
+                      {approval.executed_at ? new Date(approval.executed_at).toLocaleString() : "none"}
                     </td>
                   </tr>
                 ))}

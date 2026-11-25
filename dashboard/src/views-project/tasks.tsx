@@ -23,7 +23,7 @@ export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenT
   const [showCreate, setShowCreate] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   /* New task drafts the two text fields (title + details), the executable
-     command, and the owner/issue picks — the EntityPicker turns raw
+     command, and the owner/issue picks  the EntityPicker turns raw
      `owner_teammate_id` inputs into a searchable select. */
   const [title, setTitle] = useState("");
   const [details, setDetails] = useState("");
@@ -241,7 +241,7 @@ export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenT
                   return (
                     <button
                       key={task.id}
-                      className={`flex w-full items-start justify-between gap-4 px-4 py-3 text-left transition-colors hover:bg-[var(--surface-2)] ${needsAction ? "bg-[var(--warn-dim)]/30" : ""}`}
+                      className={`flex w-full items-start justify-between gap-4 px-4 py-3 text-left transition-colors hover:bg-[var(--surface-2)] ${needsAction ? "bg-[var(--warn-dim)]" : ""}`}
                       onClick={() => onOpenTask(task.id)}
                     >
                       <div className="min-w-0 flex-1">
@@ -298,7 +298,7 @@ export function TasksTab({ projectId, onOpenTask }: { projectId: string; onOpenT
                 return <span className="block truncate max-w-[24rem]" title={label}>{label}</span>;
               } },
               { key: "status", header: "Status", render: (run) => <StatusBadge status={run.status} /> },
-              { key: "exit", header: "Exit", render: (run) => run.exit_code ?? "—" },
+              { key: "exit", header: "Exit", render: (run) => run.exit_code ?? "none" },
               { key: "runtime", header: "Runtime", render: (run) => run.runtime },
             ]}
             rows={runs.data.runs}

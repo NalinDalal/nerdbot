@@ -5,7 +5,7 @@ import { useSyncExternalStore } from "react";
  *
  * The stylesheet's `prefers-reduced-motion` block only reaches CSS animations
  * and transitions. The bot avatars are drawn by a `requestAnimationFrame`
- * loop, so they need to be told separately — otherwise a face keeps morphing
+ * loop, so they need to be told separately  otherwise a face keeps morphing
  * for someone who has just told their system not to.
  *
  * `useSyncExternalStore` rather than an effect with a state: the preference

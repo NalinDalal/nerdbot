@@ -101,7 +101,7 @@ export function SchedulesTab({ projectId }: { projectId: string }) {
                   <div className="text-step--2 text-[var(--faint)]">{schedule.timezone || "UTC"}</div>
                 </td>
                 <td className="mono text-[var(--muted)]">
-                  {schedule.next_run_at ? new Date(schedule.next_run_at).toLocaleString() : "—"}
+                  {schedule.next_run_at ? new Date(schedule.next_run_at).toLocaleString() : "none"}
                 </td>
                 <td className={TABLE_TD}>
                   <div className="flex flex-wrap items-center gap-1.5">
@@ -267,7 +267,7 @@ function ScheduleHistoryModal({ schedule, onClose }: { schedule: any; onClose: (
                   <StatusBadge status={r.status} />
                   <span className="mono text-step--2 text-[var(--faint)]">{new Date(r.fired_at).toLocaleString()}</span>
                 </div>
-                {r.task_id ? <div className="mt-1 text-step--2 text-[var(--muted)]">task {r.task_id} · run {r.run_id || "—"}</div> : null}
+                {r.task_id ? <div className="mt-1 text-step--2 text-[var(--muted)]">task {r.task_id} · run {r.run_id || "none"}</div> : null}
                 {r.error ? <div className="mt-1 text-[var(--danger)]">{r.error}</div> : null}
               </div>
             ))

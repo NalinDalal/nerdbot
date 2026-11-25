@@ -6,7 +6,7 @@ function cleanTitleLine(line: string): string {
   return line
     .trim()
     .replace(/^[\s#*-]+/, "")
-    .replace(/[\s:\-#—]+$/, "")
+    .replace(/[\s:\-#]+$/, "")
     .replace(/\s+/g, " ")
     .trim();
 }

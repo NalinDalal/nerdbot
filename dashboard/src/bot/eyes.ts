@@ -4,7 +4,7 @@ import { clamp, createRng, loopNoise } from "./math";
  * The eyes are painted on a sphere, not laid flat.
  *
  * Measured on the reference video: the eye closest to the edge is 0.69 times
- * the width of the other, and 0.663 times its area — exactly the depth
+ * the width of the other, and 0.663 times its area exactly the depth
  * factor (z = 0.669) of a point on a sphere at that distance from the
  * centre. So a real head orientation is modelled: each eye takes the
  * tangent frame of the sphere and projects it orthographically. The

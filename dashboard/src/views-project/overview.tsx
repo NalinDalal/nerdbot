@@ -260,7 +260,7 @@ function Section({
 function PartialLoadNotice({ failed, onRetry }: { failed: string[]; onRetry: () => void }) {
   if (failed.length === 0) return null;
   return (
-    <div className="rounded-md border border-[var(--warn)]/40 bg-[var(--warn-dim)] px-4 py-3 text-step--1 text-[var(--text)]" role="status">
+    <div className="rounded-md border border-[var(--warn)] bg-[var(--warn-dim)] px-4 py-3 text-step--1 text-[var(--text)]" role="status">
       Some workspace information could not be loaded: {failed.join(", ")}. Showing available data. {" "}
       <button className="font-medium underline underline-offset-2" onClick={onRetry}>Retry</button>
     </div>
@@ -391,14 +391,14 @@ export function ProjectOperatingOverview({
         </div>
         <div className="flex flex-wrap gap-x-5 gap-y-2 text-step--1">
           <span className={attentionCount > 0 ? "text-[var(--warn)]" : "text-[var(--muted)]"}>
-            <strong className="font-semibold tabular-nums">{failedSources.includes("tasks") && failedSources.includes("approvals") ? "—" : attentionCount}</strong> need attention
+            <strong className="font-semibold tabular-nums">{failedSources.includes("tasks") && failedSources.includes("approvals") ? "0" : attentionCount}</strong> need attention
           </span>
           <span className="text-[var(--border)]" aria-hidden>·</span>
-          <span className="text-[var(--muted)]"><strong className="font-semibold tabular-nums text-[var(--text-soft)]">{failedSources.includes("tasks") ? "—" : inProgressCount}</strong> in progress</span>
+          <span className="text-[var(--muted)]"><strong className="font-semibold tabular-nums text-[var(--text-soft)]">{failedSources.includes("tasks") ? "0" : inProgressCount}</strong> in progress</span>
           <span className="text-[var(--border)]" aria-hidden>·</span>
-          <span className="text-[var(--muted)]"><strong className="font-semibold tabular-nums text-[var(--text-soft)]">{failedSources.includes("tasks") ? "—" : doneTasks.length}</strong> completed</span>
+          <span className="text-[var(--muted)]"><strong className="font-semibold tabular-nums text-[var(--text-soft)]">{failedSources.includes("tasks") ? "0" : doneTasks.length}</strong> completed</span>
           <span className="text-[var(--border)]" aria-hidden>·</span>
-          <span className="text-[var(--muted)]"><strong className="font-semibold tabular-nums text-[var(--text-soft)]">{failedSources.includes("library") && failedSources.includes("gallery") ? "—" : deliverables.length}</strong> outcomes</span>
+          <span className="text-[var(--muted)]"><strong className="font-semibold tabular-nums text-[var(--text-soft)]">{failedSources.includes("library") && failedSources.includes("gallery") ? "0" : deliverables.length}</strong> outcomes</span>
         </div>
       </header>
 
