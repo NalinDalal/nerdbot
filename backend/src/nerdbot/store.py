@@ -159,6 +159,7 @@ CREATE INDEX IF NOT EXISTS idx_teammate_skills ON teammate_skills(teammate_id);
 CREATE TABLE IF NOT EXISTS teammate_routines (
   id TEXT PRIMARY KEY, teammate_id TEXT NOT NULL, project_id TEXT NOT NULL,
   name TEXT NOT NULL, prompt TEXT NOT NULL DEFAULT '', interval_s INTEGER NOT NULL DEFAULT 3600,
+  cron TEXT NOT NULL DEFAULT '',
   enabled INTEGER NOT NULL DEFAULT 1, kind TEXT NOT NULL DEFAULT 'watch',
   last_run_at TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
 );
@@ -868,6 +869,13 @@ _PHASE36_COLUMNS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
+_PHASE37_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    # Routine triggers: cron schedule and trigger kind expansion.
+    "teammate_routines": [
+        ("cron", "TEXT NOT NULL DEFAULT ''"),
+    ],
+}
+
 
 _PHASE20_COLUMNS: dict[str, list[tuple[str, str]]] = {
     # Bot persona files (ai-teammates model): a bot's identity, its active
@@ -902,7 +910,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
                   _PHASE21_COLUMNS, _PHASE22_COLUMNS, _PHASE23_COLUMNS, _PHASE24_COLUMNS,
                   _PHASE25_COLUMNS, _PHASE26_COLUMNS, _PHASE27_COLUMNS, _PHASE28_COLUMNS,
                   _PHASE29_COLUMNS, _PHASE30_COLUMNS, _PHASE31_COLUMNS, _PHASE32_COLUMNS,
-                  _PHASE33_COLUMNS, _PHASE34_COLUMNS, _PHASE35_COLUMNS, _PHASE36_COLUMNS):
+                  _PHASE33_COLUMNS, _PHASE34_COLUMNS, _PHASE35_COLUMNS, _PHASE36_COLUMNS, _PHASE37_COLUMNS):
         for table, columns in phase.items():
             phases.setdefault(table, []).extend(columns)
     for table, columns in phases.items():
@@ -2473,6 +2481,14 @@ def set_task_status(
     conn.commit()
     if status != task.status:
         record_event(conn, task.project_id, "task", task_id, f"task.status.{status.value}")
+        if status == TaskStatus.DONE:
+            try:
+                from . import routines as _routines
+                done_task = get_task(conn, task_id)
+                if done_task is not None:
+                    _routines.fire_task_done_triggers(conn, done_task, actor_teammate_id=getattr(done_task, "owner_teammate_id", "") or "")
+            except Exception:
+                pass
 
 
 def check_dependencies_acyclic(
@@ -7737,6 +7753,7 @@ def create_routine(
     interval_s: int = 3600,
     enabled: bool = True,
     kind: str = "watch",
+    cron: str = "",
 ) -> Routine:
     mate = get_teammate(conn, teammate_id)
     if mate is None:
@@ -7749,16 +7766,17 @@ def create_routine(
         name=name or "Routine",
         prompt=prompt or "",
         interval_s=max(60, int(interval_s or 3600)),
+        cron=str(cron or ""),
         enabled=bool(enabled),
         kind=kind or "watch",
         last_run_at="",
         created_at=datetime.fromisoformat(now.replace("Z", "+00:00")) if now.endswith("Z") else datetime.fromisoformat(now),
     )
     conn.execute(
-        "INSERT INTO teammate_routines (id,teammate_id,project_id,name,prompt,interval_s,enabled,kind,last_run_at,created_at)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO teammate_routines (id,teammate_id,project_id,name,prompt,interval_s,cron,enabled,kind,last_run_at,created_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         (routine.id, routine.teammate_id, routine.project_id, routine.name, routine.prompt, routine.interval_s,
-         int(routine.enabled), routine.kind, routine.last_run_at, routine.created_at.isoformat()),
+         routine.cron, int(routine.enabled), routine.kind, routine.last_run_at, routine.created_at.isoformat()),
     )
     conn.commit()
     return routine
@@ -7773,6 +7791,7 @@ def _routine_from_row(row: sqlite3.Row) -> Routine:
         name=row["name"],
         prompt=row["prompt"] or "",
         interval_s=int(row["interval_s"] or 3600),
+        cron=str(row["cron"] or "") if "cron" in keys else "",
         enabled=bool(row["enabled"]),
         kind=row["kind"] or "watch",
         last_run_at=row["last_run_at"] or "",
@@ -7795,7 +7814,7 @@ def update_routine(conn: sqlite3.Connection, routine_id: str, **fields: Any) -> 
     if routine is None:
         raise KeyError(f"unknown routine {routine_id}")
     updates = {}
-    for k in ("name","prompt","interval_s","enabled","kind","last_run_at"):
+    for k in ("name","prompt","interval_s","cron","enabled","kind","last_run_at"):
         if k in fields and fields[k] is not None:
             updates[k] = fields[k]
     if not updates:

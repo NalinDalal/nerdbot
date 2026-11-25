@@ -231,15 +231,16 @@ class BoardMessage(BaseModel):
 
 
 class Routine(BaseModel):
-    """A simple proactive routine for a teammate (Grok-bot-like autonomy)."""
+    """A proactive routine/trigger for a teammate (Grok-bot-like autonomy)."""
     id: str
     teammate_id: str
     project_id: str
     name: str
     prompt: str
     interval_s: int = 3600
+    cron: str = ""
     enabled: bool = True
-    kind: str = "watch"  # watch | task | message
+    kind: str = "watch"  # watch | task | message | on_task_done | on_mention
     last_run_at: str = ""
     created_at: datetime = Field(default_factory=_utcnow)
 

@@ -329,6 +329,7 @@ class RoutineCreate(_Body):
     name: str | None = None
     prompt: str | None = None
     interval_s: int | None = None
+    cron: str | None = None
     enabled: bool | None = None
     kind: str | None = None
 
@@ -337,6 +338,7 @@ class RoutinePatch(_Body):
     name: str | None = None
     prompt: str | None = None
     interval_s: int | None = None
+    cron: str | None = None
     enabled: bool | None = None
     kind: str | None = None
     last_run_at: str | None = None
