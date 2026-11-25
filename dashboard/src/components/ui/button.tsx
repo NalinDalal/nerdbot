@@ -33,7 +33,7 @@ export function Button({
   size = "default",
   fullWidth = false,
   className,
-}: ButtonProps) => {
+}: ButtonProps) {
   // Size classes
   const sizeClasses = {
     sm: "px-3 py-1.5 text-sm",

@@ -245,7 +245,7 @@ export function BotDetailView({
   const [testDraft, setTestDraft] = useState("");
   const [testBusy, setTestBusy] = useState(false);
   const [testWorkspace, setTestWorkspace] = useState<string>("");
-  useEffect(() => { if (section === "test" && mate) api.getProjectWorkspace(mate.project_id).then((ws: any) => setTestWorkspace(ws.root || "")).catch(() => {}); }, [section, mate?.project_id]);
+  useEffect(() => { const m = (all.data as any)?.teammates?.find((x: any) => x.id === teammateId); if (section === "test" && m) api.projectWorkspace(m.project_id).then((ws: any) => setTestWorkspace(ws.root || "")).catch(() => {}); }, [section, teammateId, all.data]);
 
   const openEditor = () => {
     if (!mate) return;
@@ -385,8 +385,7 @@ export function BotDetailView({
   const taskList = (tasks.data as { tasks: Task[] }).tasks;
   const runList = (runs.data as { runs: Run[] }).runs;
   const unclaimed = taskList.find((t) => t.status === "pending" && !t.owner_teammate_id);
-  const openCount = taskList.filter((t) => !["done", "failed", "cancelled"].includes(t.status)).length;
-
+  
   /** What this bot is doing right now; the face is posed to match. */
   const activity = botActivity(mate.status, taskList, runList);
   const modelName = mate.provider_id
@@ -416,7 +415,7 @@ export function BotDetailView({
   const runningTasks = taskList.filter((t) => t.status === "running").length;
   const pendingTasks = taskList.filter((t) => !["done", "failed", "cancelled"].includes(t.status)).length;
   const completedTasks = taskList.filter((t) => t.status === "done").length;
-  const successfulRuns = runList.filter((r) => r.outcome?.outcome === "carried_out").length;
+  const successfulRuns = runList.filter((r: any) => r.outcome?.outcome === "carried_out").length;
   const failedRuns = runList.filter((r) => r.exit_code !== 0 && r.exit_code !== null).length;
 
   return (
@@ -455,7 +454,7 @@ export function BotDetailView({
                 label={mate.status}
                 pulse={mate.status === "running"}
               />
-              <Badge variant="secondary" pill>
+              <Badge variant="info">
                 {modelName || (mate.provider_id ? "Model connected" : "No model")}
               </Badge>
               <span aria-hidden>·</span>
@@ -468,9 +467,7 @@ export function BotDetailView({
             <div className="mt-2 flex items-center gap-2 text-step--1 text-[var(--muted)]">
               <span>{mate.memory_scope} memory scope</span>
               {mate.provider_id && (
-                <Badge variant="link" size="sm" onClick={() => navigate(`/p/${mate.project_id}`)}>
-                  Go to project
-                </Badge>
+                <button className="text-step--2 text-[var(--accent)] hover:underline" onClick={() => navigate(`/p/${mate.project_id}`)}>Go to project</button>
               )}
             </div>
             {runList.length > 0 && (

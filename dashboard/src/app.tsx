@@ -924,7 +924,7 @@ export default function App() {
     case "workspace":
       content = (
         <WorkbenchView
-          initialProjectId={
+          projectId={
             route.name === "workspace" ? route.projectId : undefined
           }
         />

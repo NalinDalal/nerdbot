@@ -19,9 +19,10 @@ export function Badge({
   children,
   variant = "default",
   size = "sm",
-  inverted = false,
+  inverted: _inverted = false,
   className,
-}: BadgeProps) => {
+}: BadgeProps) {
+  void _inverted;
   // Determine styles based on EXISTING token names from styles.css
   let bg = "";
   let color = "";

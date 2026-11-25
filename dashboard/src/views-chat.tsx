@@ -56,8 +56,8 @@ function ActivityRailContent({
   const scoped = projectId
     ? (() => {
         const bundle = raw.bundles.find((b) => b.project.id === projectId);
-        const activeRuns = raw.activeRuns.filter((r) => r.projectId === projectId);
-        const failedRuns = raw.failedRuns.filter((r) => r.projectId === projectId);
+        const activeRuns = raw.activeRuns.filter((r: any) => r.projectId === projectId);
+        const failedRuns = raw.failedRuns.filter((r: any) => r.projectId === projectId);
         const pendingApprovals = raw.pendingApprovals.filter((a: any) => a.approval?.project_id === projectId || raw.bundles.find((b)=>b.project.id===projectId)?.approvals.some((x:any)=>x.id===a.approval?.id));
         const queuedTasks = bundle ? bundle.tasks.filter((t) => ["pending", "queued", "ready"].includes(t.status)).length : 0;
         return { activeRuns, failedRuns, pendingApprovals, queuedTasks, workspaceName: bundle?.project.repository };
@@ -125,7 +125,7 @@ function ActivityRailContent({
             Running ({activeRuns.length})
           </div>
           <ul className="flex flex-col gap-1.5">
-            {activeRuns.slice(0, 6).map(({ run, task, projectName, projectId }) => (
+            {activeRuns.slice(0, 6).map(({ run, task, projectName, projectId }: any) => (
               <li key={run.id} className="rounded-md bg-[var(--surface-2)] px-2.5 py-2 text-step--1">
                 <div className="truncate text-[var(--text)]">
                   {task?.description || run.task_id}
@@ -160,7 +160,7 @@ function ActivityRailContent({
             Recent failures ({failedRuns.length})
           </div>
           <ul className="flex flex-col gap-1.5">
-            {failedRuns.slice(0, 4).map(({ run, task, projectName, projectId }) => (
+            {failedRuns.slice(0, 4).map(({ run, task, projectName, projectId }: any) => (
               <li key={run.id} className="rounded-md bg-[var(--danger-dim)] px-2.5 py-2 text-step--1 text-[var(--danger)]">
                 <div className="truncate">
                   {task?.description || run.task_id}
@@ -268,12 +268,12 @@ export function ConversationView({
   }
 
   const isHome = !projectId;
-  const workspaceName = summary.data?.summary.bundles.find(
-    (bundle) => bundle.project.id === resolvedProjectId,
+  const workspaceName = (summary.data as any)?.summary?.bundles?.find(
+    (bundle: any) => bundle.project.id === resolvedProjectId,
   )?.project.repository;
-  const s = summary.data?.summary;
+  const s = (summary.data as any)?.summary;
   const activityCount = s
-    ? s.pendingApprovals.length + s.failedRuns.length + s.activeRuns.length
+    ? (s?.pendingApprovals?.length||0) + (s?.failedRuns?.length||0) + (s?.activeRuns?.length||0)
     : 0;
   const hasActivity = activityCount > 0;
 
@@ -825,7 +825,7 @@ function ThreadPane({
 
   useEffect(() => {
     let alive = true;
-    api.getProjectWorkspace(projectId).then((ws: any) => { if (alive) setWorkspaceMeta({ root: ws.root, branch: ws.branch, dirty: ws.dirty }); }).catch(() => {});
+    api.projectWorkspace(projectId).then((ws: any) => { if (alive) setWorkspaceMeta({ root: ws.root, branch: ws.branch, dirty: ws.dirty }); }).catch(() => {});
     return () => { alive = false; };
   }, [projectId]);
   // Speaker announced by the stream's first event, so the in-flight bubble
@@ -2811,7 +2811,7 @@ function CommandCenter({
 
   const sorted = recentThreads;
   const projectLabel = (id: string) => {
-    const bundle = summary.data?.summary.bundles.find((b) => b.project.id === id);
+    const bundle = (summary.data as any)?.summary?.bundles?.find((b: any) => b.project.id === id);
     if (id === projectId) return "Home";
     return bundle?.project.repository || "Project";
   };
@@ -2825,7 +2825,7 @@ function CommandCenter({
 
   const activeWorkspaceName =
     workspaces.find((w) => w.id === selectedWorkspaceId)?.repository || "Project";
-  const s = summary.data?.summary;
+  const s = (summary.data as any)?.summary;
   const attentionBits: string[] = [];
   if (s?.pendingApprovals.length) attentionBits.push(`${s.pendingApprovals.length} awaiting approval`);
   if (s?.failedRuns.length) attentionBits.push(`${s.failedRuns.length} need review`);

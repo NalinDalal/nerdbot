@@ -186,11 +186,45 @@ export function WorkbenchView({ projectId: routeProjectId }: { projectId?: strin
     () => (projectId ? api.workspaceAudit(projectId, 30).then((r) => r.items || []) : Promise.resolve([])),
     [projectId],
   );
+  const tree = useAsync<any>(
+    () => (projectId ? api.projectWorkspaceTree(projectId) : Promise.resolve(null)),
+    [projectId],
+  );
+  const [selectedFile, setSelectedFile] = useState<string>("");
+  const [fileContent, setFileContent] = useState<string>("");
+  const [fileHash, setFileHash] = useState<string>("");
+  const [fileLoading, setFileLoading] = useState(false);
+  const [fileSaving, setFileSaving] = useState(false);
+  const [fileConflict, setFileConflict] = useState<string>("");
   useEffect(() => {
     if (!projectId) return;
     const t = window.setInterval(() => { void audit.reload(); }, 4000);
     return () => window.clearInterval(t);
   }, [projectId]);
+  const openFile = async (path: string) => {
+    if (!projectId) return;
+    setFileLoading(true); setFileConflict("");
+    try {
+      const f = await api.projectWorkspaceFile(projectId, path);
+      setSelectedFile(f.path); setFileContent(f.content || ""); setFileHash(f.sha256 || "");
+    } catch (err) { notifyError(err); }
+    finally { setFileLoading(false); }
+  };
+  const saveFile = async () => {
+    if (!projectId || !selectedFile) return;
+    setFileSaving(true); setFileConflict("");
+    try {
+      const res = await api.saveProjectWorkspaceFile(projectId, selectedFile, fileContent, fileHash || undefined);
+      setFileHash(res.sha256 || fileHash);
+      toast.success("Saved");
+      await Promise.all([workspace.reload(), tree.reload(), audit.reload()]);
+    } catch (err: any) {
+      const msg = String(err?.message || err || "");
+      if (msg.includes("409") || msg.toLowerCase().includes("current sha256") || msg.toLowerCase().includes("changed since")) {
+        setFileConflict(msg);
+      } else { notifyError(err); }
+    } finally { setFileSaving(false); }
+  };
 
   const selectProject = (id: string) => {
     setProjectId(id);
@@ -315,6 +349,26 @@ export function WorkbenchView({ projectId: routeProjectId }: { projectId?: strin
               </section>
             </div>
           ) : null}
+
+          <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
+            <div className="text-step--2 uppercase tracking-[0.14em] text-[var(--faint)]">Files</div>
+            <p className="mt-1 text-step--2 text-[var(--muted)]">Browse workspace files. Saves use content hash; conflicts are shown if the file changed.</p>
+            <div className="mt-3 grid gap-3 lg:grid-cols-[280px_1fr]">
+              <div className="max-h-80 overflow-auto rounded-xl border border-[var(--border-dim)] p-2">
+                {(tree.data?.files || []).length === 0 ? <div className="text-step--2 text-[var(--faint)]">No files found.</div> : (tree.data?.files || []).slice(0, 200).map((f: any) => (
+                  <button key={f.path} className={`block w-full truncate rounded px-2 py-1 text-left text-step--2 ${selectedFile===f.path?"bg-[var(--surface-2)] text-[var(--text)]":"text-[var(--muted)] hover:bg-[var(--surface-2)]"}`} onClick={() => void openFile(f.path)} title={f.path}>{f.path}</button>
+                ))}
+              </div>
+              <div>
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <div className="mono truncate text-step--2 text-[var(--faint)]">{selectedFile || "Select a file"}</div>
+                  <div className="flex gap-2"><Button disabled={!selectedFile || fileSaving || fileLoading} onClick={() => void saveFile()}>{fileSaving ? "Saving..." : "Save"}</Button></div>
+                </div>
+                {fileConflict ? <div className="mb-2 rounded-xl border border-[var(--warn)]/40 bg-[var(--warn)]/10 px-3 py-2 text-step--2 text-[var(--warn)]">Conflict: {fileConflict}</div> : null}
+                <textarea className={`${FORM_INPUT} min-h-64 w-full font-mono text-step--2`} value={fileContent} onChange={(e) => setFileContent(e.target.value)} disabled={!selectedFile || fileLoading} aria-label="Workspace file editor" />
+              </div>
+            </div>
+          </section>
 
           <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
             <div className="text-step--2 uppercase tracking-[0.14em] text-[var(--faint)]">Activity</div>
