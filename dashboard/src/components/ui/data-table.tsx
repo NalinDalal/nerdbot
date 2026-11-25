@@ -1,13 +1,12 @@
 "use client";
 
-import { ReactNode } from "react";
 
-export interface DataTableHeadCell = {
+export interface DataTableHeadCell {
   header: string;
   className?: string;
 };
 
-export interface DataTableRow = {
+export interface DataTableRow {
   cells: string[];
   onClick?: () => void;
   className?: string;
@@ -45,7 +44,7 @@ export function DataTable({
   onRowSelect,
   emptyState,
   className,
-}: DataTableProps) => {
+}: DataTableProps) {
   // Transform headers
   const tableHeaders = Array.isArray(headers)
     ? headers.map((h) => ({ header: h, className: h } as DataTableHeadCell))
@@ -111,7 +110,7 @@ export function DataTable({
                 <tr
                   key={rowIndex}
                   className={rowClasses}
-                  onClick={row.onClick || onRowSelect ? () => onRowSelect(row) : undefined}
+                  onClick={row.onClick || onRowSelect ? () => onRowSelect?.(row) : undefined}
                 >
                   {row.cells.map((cell, cellIndex) => (
                     <td

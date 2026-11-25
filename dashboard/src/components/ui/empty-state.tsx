@@ -28,7 +28,7 @@ export function EmptyState({
   cta,
   trailing,
   className,
-}: EmptyStateProps) => {
+}: EmptyStateProps) {
   return (
     <div
       className={`

@@ -52,6 +52,16 @@ export interface Teammate {
   fallback_provider_id: string | null;
   fallback_model: string;
   face: BotFace;
+  tagline?: string;
+  voice_style?: string;
+  boundaries?: string;
+  starter_prompts?: string[];
+  greeting?: string;
+  behavior_tuning?: Record<string, unknown>;
+  presence_mode?: string;
+  autonomy_policy?: Record<string, unknown>;
+  autonomy_level?: "ask_first" | "act_and_report" | "act_silently" | string;
+  paused?: boolean;
 }
 
 export interface Task {
@@ -173,7 +183,7 @@ export interface KnowledgeSource {
 export interface LibraryDoc {
   id: string;
   project_id: string;
-  /** note | doc | upload — how the document arrived. */
+  /** note | doc | upload how the document arrived. */
   kind: string;
   /** md | html | csv | text */
   format?: string;
@@ -212,7 +222,7 @@ export interface LibraryDocAccess {
   id: string;
   doc_id: string;
   teammate_id: string;
-  /** read | write — a missing row means no access at all. */
+  /** read | write a missing row means no access at all. */
   access: string;
   created_at: string;
 }
@@ -449,6 +459,19 @@ export interface BoardMessage {
   created_at: string;
 }
 
+export interface Routine {
+  id: string;
+  teammate_id: string;
+  project_id: string;
+  name: string;
+  prompt: string;
+  interval_s: number;
+  enabled: boolean;
+  kind: string;
+  last_run_at: string;
+  created_at: string;
+}
+
 /** Board feed message as returned per-project (adds the board's name). */
 export interface ProjectMessage extends BoardMessage {
   board_name: string;
@@ -480,7 +503,7 @@ export interface Approval {
 
 /** One row of the owner's cross-workspace approvals inbox. */
 export interface ApprovalInboxItem extends Approval {
-  /** pending — decidable now; expired — nobody answered; resolved — decided. */
+  /** pending decidable now; expired nobody answered; resolved decided. */
   state: "pending" | "expired" | "resolved";
   /** True when this approval holds an action that can be carried out. */
   resumable: boolean;
@@ -665,6 +688,8 @@ export interface WorkspaceFileContent {
   path: string;
   content: string;
   size: number;
+  modified?: number;
+  sha256?: string;
 }
 
 export interface WorkspaceDiff {
@@ -672,6 +697,29 @@ export interface WorkspaceDiff {
   status: WorkspaceChange[];
   git: boolean;
   exists: boolean;
+}
+
+export interface WorkspaceBrowseDir {
+  name: string;
+  path: string;
+}
+
+export interface WorkspaceBrowseResult {
+  path: string;
+  parent: string | null;
+  dirs: WorkspaceBrowseDir[];
+  truncated: boolean;
+  selectable: boolean;
+}
+
+export interface WorkspaceVetResult {
+  ok: boolean;
+  path: string | null;
+}
+
+export interface WorkspaceDefaultResult {
+  ok: boolean;
+  path: string | null;
 }
 
 /** One durable progress step emitted while a run is executing. */

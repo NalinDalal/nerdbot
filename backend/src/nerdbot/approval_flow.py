@@ -72,24 +72,24 @@ def _execute_checkpoint(
 ) -> tuple[str, str]:
     """Carry out one approved action. Returns (outcome, text).
 
-    ``outcome`` is ``carried_out``, ``refused`` or ``waiting``.
+    Supports both app-tool checkpoints and workspace gateway approvals.
+    Workspace approvals execute through `workspace.do()` exactly once after
+    claiming the checkpoint and verifying digest binding.
+
+    Args:
+        conn: SQLite connection.
+        approval: Approval row with checkpoint.
+        data_dir: Nerdbot data directory.
+
+    Returns:
+        Tuple (outcome, text) where outcome is carried_out/refused/waiting.
     """
+    from . import workspace as _ws
+
     arguments = _parse_arguments(approval.tool_arguments)
     if arguments is None:
         return "refused", "the checkpointed action could not be read; it was not performed"
 
-    mate = store.get_teammate(conn, approval.teammate_id) if approval.teammate_id else None
-    if mate is None:
-        return "refused", "the bot that asked for this approval is gone; it was not performed"
-
-    task = store.get_task(conn, approval.task_id) if approval.task_id else None
-    if task is None:
-        return "refused", "the work that asked for this approval is gone"
-
-    # The action must still be the one that was asked for. The binding covers
-    # the tool, its canonical arguments, the bot, the run and the task, so a
-    # checkpoint that was tampered with, or whose work has moved, is not
-    # performed.
     expected = store.tool_digest(
         tool_name=approval.tool_name,
         arguments=approval.tool_arguments,
@@ -103,14 +103,52 @@ def _execute_checkpoint(
             "the action no longer matches the request that was approved; it was not performed",
         )
 
+    # Workspace gateway approvals.
+    if str(approval.tool_name or "").startswith("workspace.") or str(approval.action or "").startswith("workspace."):
+        try:
+            store.mark_approval_resumed(conn, approval.id)
+        except store.ApprovalAlreadyResumed:
+            return "refused", "this action is already being carried out; it was not performed twice"
+        try:
+            payload = arguments
+            actor = _ws.WorkspaceActor(
+                kind=str(payload.get("actor_kind") or "teammate"),
+                id=str(payload.get("actor_id") or approval.requester or ""),
+                project_id=str(payload.get("project_id") or approval.project_id or ""),
+                teammate=store.get_teammate(conn, approval.teammate_id) if approval.teammate_id else None,
+            )
+            action = str(payload.get("action") or approval.tool_name.replace("workspace.", "", 1))
+            path = str(payload.get("path") or "")
+            raw_args = payload.get("args") if isinstance(payload.get("args"), dict) else {}
+            # Force execution: approval already granted; pass approved=True to bypass ask_first.
+            gw_args = dict(raw_args)
+            gw_args.update({"conn": conn, "data_dir": data_dir, "approved": True, "untrusted": False})
+            result = _ws.do(actor, action, path, **gw_args)
+            if not result.ok:
+                msg = f"workspace action refused/failed: {result.error}"
+                store.record_approval_resume_result(conn, approval.id, f"refused: {result.error}")
+                return "refused", msg
+            out = result.output or "ok"
+            store.record_approval_resume_result(conn, approval.id, "performed", out)
+            return "carried_out", out
+        except Exception as exc:  # noqa: BLE001
+            message = f"the approved action failed: {type(exc).__name__}: {exc}"
+            store.record_approval_resume_result(conn, approval.id, f"failed: {exc}")
+            return "refused", message
+
+    mate = store.get_teammate(conn, approval.teammate_id) if approval.teammate_id else None
+    if mate is None:
+        return "refused", "the bot that asked for this approval is gone; it was not performed"
+
+    task = store.get_task(conn, approval.task_id) if approval.task_id else None
+    if task is None:
+        return "refused", "the work that asked for this approval is gone"
+
     ctx = agent_context_mod.build(conn, task, mate)
     ctx.data_dir = data_dir
     ctx.run_id = approval.run_id
     ctx.teammate = mate
 
-    # The checkpoint is claimed BEFORE the action runs, and the claim is
-    # atomic: a crash between here and the action means the action is LOST
-    # rather than repeated, and a second worker cannot perform it at all.
     try:
         store.mark_approval_resumed(conn, approval.id)
     except store.ApprovalAlreadyResumed:
@@ -135,9 +173,6 @@ def _execute_checkpoint(
         return "refused", message
 
     if ctx.pending_approvals:
-        # The action is still gated: a second permission is missing. The
-        # request that was just approved is one of several, so the run waits
-        # again and the new request is what the owner sees next.
         store.record_approval_resume_result(conn, approval.id, "waiting")
         return "waiting", _waiting_text(ctx.pending_approvals)
     store.record_approval_resume_result(conn, approval.id, "performed", result)
@@ -418,4 +453,50 @@ def expire_waiting_action(
     outcome.output = note
     outcome.run_status = RunStatus.FAILED.value
     outcome.task_status = TaskStatus.BLOCKED.value
+    return outcome
+
+
+def resume_standalone_approval(conn: sqlite3.Connection, approval: Approval, data_dir: str = ".") -> ResumeOutcome:
+    """Resume a standalone (non-run) workspace approval.
+
+    Args:
+        conn: SQLite connection.
+        approval: Decided approval row.
+        data_dir: Nerdbot data dir.
+
+    Returns:
+        ResumeOutcome.
+    """
+    outcome = ResumeOutcome(run_id=approval.run_id or "", task_id=approval.task_id or "")
+    if approval.decision not in (Decision.APPROVED, Decision.APPROVED_FOREVER):
+        outcome.outcome = "skipped"
+        outcome.output = "approval not approved"
+        return outcome
+    state, text = _execute_checkpoint(conn, approval, data_dir)
+    outcome.outcome = state
+    outcome.output = text
+    if state == "carried_out":
+        outcome.performed = [approval.id]
+    return outcome
+
+
+def close_standalone_rejected(conn: sqlite3.Connection, approval: Approval) -> ResumeOutcome:
+    """Close a standalone workspace approval that was denied.
+
+    Args:
+        conn: SQLite connection.
+        approval: Rejected approval row.
+
+    Returns:
+        ResumeOutcome.
+    """
+    outcome = ResumeOutcome(run_id=approval.run_id or "", task_id=approval.task_id or "")
+    note = f"the request was refused by the owner ({approval.action}); it was not performed"
+    if approval.tool_name:
+        try:
+            store.record_approval_resume_result(conn, approval.id, "refused", note)
+        except Exception:
+            pass
+    outcome.outcome = "refused"
+    outcome.output = note
     return outcome

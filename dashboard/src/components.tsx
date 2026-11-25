@@ -18,7 +18,7 @@ export function StatusBadge({
   const tone = statusTone(status);
   const dot =
     tone === "ok"
-      ? "bg-[var(--accent)]"
+      ? "bg-[var(--success)]"
       : tone === "bad"
         ? "bg-[var(--danger)]"
         : tone === "warn"
@@ -27,8 +27,8 @@ export function StatusBadge({
             ? "bg-[var(--info)]"
             : "bg-[var(--faint)]";
   return (
-    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-step--1 font-medium border border-transparent bg-[var(--surface-2)]`}>
-      <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />
+    <span className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-step--1 font-medium text-[var(--text-soft)]">
+      <span className={`h-1.5 w-1.5 rounded-full ${dot}`} aria-hidden />
       {label ?? statusLabel(status)}
     </span>
   );
@@ -169,13 +169,17 @@ export function Page({
 }: {
   children: ReactNode;
   className?: string;
-  width?: "reading" | "data" | "fill";
+  width?: "reading" | "data" | "wide" | "fill";
 }) {
-  const max = width === "reading" ? "max-w-[860px]" : width === "data" ? "max-w-[1120px]" : "max-w-none";
-  const pad = "px-4 py-6 pl-14 md:px-8 md:py-8";
+  const max =
+    width === "reading"
+      ? "max-w-[820px]"
+      : width === "data"
+        ? "max-w-[var(--max-width-wide)]"
+        : "max-w-none";
   return (
     <div className={`flex-1 overflow-y-auto overflow-x-hidden bg-[var(--bg)] ${className}`}>
-      <div className={`mx-auto w-full ${max} ${pad}`}>
+      <div className={`mx-auto w-full ${max} px-5 py-6 md:px-8 md:py-8`}>
         {children}
       </div>
     </div>
@@ -196,11 +200,11 @@ export function PageHeader({
   back?: { label: string; onClick: () => void };
 }) {
   return (
-    <div className="mb-8">
+    <div className="mb-6 md:mb-8">
       {back ? (
         <button
           onClick={back.onClick}
-          className="mb-4 inline-flex items-center gap-1.5 rounded-md px-1 py-0.5 text-step--1 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
+          className="mb-4 inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] px-1 py-0.5 text-step--1 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
         >
           <span aria-hidden>←</span> {back.label}
         </button>
@@ -208,20 +212,20 @@ export function PageHeader({
       <div className="flex flex-wrap items-start justify-between gap-x-8 gap-y-4">
         <div className="min-w-[14rem] flex-1">
           {eyebrow ? (
-            <div className="mb-2 text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--faint)]">
+            <div className="mb-1.5 text-step--1 font-medium text-[var(--faint)]">
               {eyebrow}
             </div>
           ) : null}
-          <h1 className="text-step-2 font-semibold tracking-[-0.02em] text-[var(--text)]">
+          <h1 className="text-step-3 font-semibold leading-[1.15] tracking-[-0.03em] text-[var(--text)]">
             {title}
           </h1>
           {description ? (
             typeof description === "string" ? (
-              <p className="mt-2 max-w-[68ch] text-step-0 leading-relaxed text-[var(--muted)]">
+              <p className="mt-2 max-w-[70ch] text-step-0 leading-relaxed text-[var(--muted)]">
                 {description}
               </p>
             ) : (
-              <div className="mt-2 max-w-[68ch] text-step-0 leading-relaxed text-[var(--muted)]">
+              <div className="mt-2 max-w-[70ch] text-step-0 leading-relaxed text-[var(--muted)]">
                 {description}
               </div>
             )
@@ -250,13 +254,13 @@ export function PageSection({
 }) {
   return (
     <section className={`mb-8 last:mb-0 ${className}`}>
-      <div className="mb-3 flex flex-wrap items-start justify-between gap-x-6 gap-y-2">
+      <div className="mb-3 flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
         <div className="min-w-0">
-          <h2 className="text-step-0 font-semibold tracking-tight text-[var(--text)]">
+          <h2 className="text-step-1 font-semibold tracking-[-0.02em] text-[var(--text)]">
             {title}
           </h2>
           {description ? (
-            <p className="mt-0.5 max-w-[68ch] text-step--1 text-[var(--muted)]">
+            <p className="mt-0.5 max-w-[70ch] text-step--1 text-[var(--muted)]">
               {description}
             </p>
           ) : null}
@@ -399,12 +403,12 @@ export function StatusDot({
  *
  *  The face the owner picked when they set the bot up: a body shape, a
  *  colour and a resting expression, drawn as an SVG by the bot engine in
- *  `src/bot/`. Nothing is loaded and nothing is derived from the bot id —
+ *  `src/bot/`. Nothing is loaded and nothing is derived from the bot id
  *  two bots look different because their owner said so.
  *
  *  A live bot is a whole screen of faces, so the small ones draw a single
  *  frame: twenty animation loops on one page is a page that janks. The
- *  frame is still POSED, though — `state` says what the bot is doing, and a
+ *  frame is still POSED, though `state` says what the bot is doing, and a
  *  face frozen mid-work still reads as working.
  *
  *  `status` also draws the small status dot, because a caller that has the
@@ -513,28 +517,48 @@ export function relativeTime(iso: string): string {
 
 /* --- Empty / loading / error states --- */
 
-export function EmptyState({ title, hint, action }: { title: string; hint?: string; action?: ReactNode }) {
+export function EmptyState({
+  title,
+  hint,
+  action,
+}: {
+  title: string;
+  hint?: string;
+  action?: ReactNode;
+}) {
   return (
-    <div className="flex flex-col items-center justify-center px-6 py-10 text-center">
-      <div className="text-step-1 font-semibold text-[var(--text)]">{title}</div>
+    <div className="flex flex-col items-center justify-center px-6 py-14 text-center">
+      <div
+        aria-hidden
+        className="mb-4 flex h-10 w-10 items-center justify-center rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface-2)] text-[var(--faint)]"
+      >
+        <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.5">
+          <path d="M4 4h12v12H4z" />
+          <path d="M7 8h6M7 11h4" strokeLinecap="round" />
+        </svg>
+      </div>
+      <div className="text-step-1 font-semibold tracking-[-0.01em] text-[var(--text)]">{title}</div>
       {hint ? (
-        <div className="mt-3 text-step-0 text-[var(--muted)] leading-1.5 max-w-[42ch]">
+        <div className="mt-2 max-w-[46ch] text-step--1 leading-relaxed text-[var(--muted)]">
           {hint}
         </div>
       ) : null}
-      {action ? (
-        <div className="mt-6">{action}</div>
-      ) : null}
+      {action ? <div className="mt-5">{action}</div> : null}
     </div>
   );
 }
 
 export function LoadingState({ lines = 3 }: { lines?: number }) {
   return (
-    <div role="status" aria-label="Loading" aria-live="polite" className="flex flex-col gap-1.5">
+    <div role="status" aria-label="Loading" aria-live="polite" className="flex flex-col gap-2 py-2">
       {Array.from({ length: lines }).map((_, i) => (
-        <div key={i} className="h-3.5 w-full rounded-sm bg-[var(--surface-2)] animate-shimmer" />
+        <div
+          key={i}
+          className="skeleton h-3.5 rounded-[4px]"
+          style={{ width: `${Math.max(38, 100 - i * 13)}%` }}
+        />
       ))}
+      <span className="sr-only">Loading</span>
     </div>
   );
 }
@@ -604,26 +628,28 @@ export function Modal({ title, children, onClose }: { title: string; children: R
 
   return (
     <div
-      className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/55 backdrop-blur-sm"
+      className="fixed inset-0 z-[60] flex items-end justify-center bg-black/55 p-0 backdrop-blur-[2px] sm:items-center sm:p-4"
       onClick={onClose}
       onKeyDown={handleKeyDown}
     >
       <div
         ref={panelRef}
-        className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-lg"
+        className="animate-fade-in max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] p-5 shadow-[var(--shadow-lg)] sm:rounded-[var(--radius-lg)] sm:p-6"
         role="dialog"
         aria-modal="true"
         aria-label={title}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between mb-4">
-          <strong className="text-step-1 font-semibold">{title}</strong>
+        <div className="mb-4 flex items-start justify-between gap-4">
+          <strong className="text-step-1 font-semibold tracking-[-0.01em] text-[var(--text)]">{title}</strong>
           <button
             onClick={onClose}
             aria-label="Close"
-            className="rounded-sm p-1.5 text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--surface-2)] transition-colors"
+            className="-mr-1 -mt-1 rounded-[var(--radius-sm)] p-1.5 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
           >
-            ×
+            <svg viewBox="0 0 16 16" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="m4 4 8 8M12 4l-8 8" strokeLinecap="round" />
+            </svg>
           </button>
         </div>
         {children}
@@ -676,33 +702,41 @@ export function Button({
   children,
   onClick,
   variant = "default",
+  size = "md",
   disabled,
   type = "button",
   className,
   title,
   ariaLabel,
+  ariaBusy,
 }: {
   children?: ReactNode;
   onClick?: () => void;
   variant?: "default" | "primary" | "danger" | "ghost";
+  size?: "sm" | "md";
   disabled?: boolean;
   type?: "button" | "submit" | "reset";
   className?: string;
   title?: string;
   /** Use when the visible text is hidden at small breakpoints. */
   ariaLabel?: string;
+  ariaBusy?: boolean;
 }) {
   const base =
-    "inline-flex items-center justify-center gap-1.5 rounded-md border px-3 py-2 text-step--1 font-medium transition-[background-color,border-color,color,box-shadow] duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-0 max-lg:min-h-10";
+    "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-[var(--radius-sm)] border font-medium transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--bg)] active:translate-y-px";
+  const sizes: Record<string, string> = {
+    sm: "h-7 px-2.5 text-step--1",
+    md: "h-[34px] px-3 text-step--1",
+  };
   const variants: Record<string, string> = {
     default:
-      "border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-2)] hover:border-[var(--faint)]",
+      "border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:border-[var(--border-strong)] hover:bg-[var(--surface-2)]",
     primary:
-      "border-[var(--accent)] bg-[var(--accent)] text-white font-semibold hover:bg-[var(--accent-hover)] hover:border-[var(--accent-hover)]",
+      "border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-ink)] hover:border-[var(--accent-hover)] hover:bg-[var(--accent-hover)] active:bg-[var(--accent-press)]",
     danger:
-      "border-[var(--danger-dim)] bg-[var(--danger-dim)] text-[var(--danger)] hover:border-[var(--danger)] hover:bg-transparent",
+      "border-transparent bg-transparent text-[var(--danger)] hover:border-[var(--danger)] hover:bg-[var(--danger-dim)]",
     ghost:
-      "border-transparent bg-transparent text-[var(--text-soft)] hover:bg-[var(--surface-2)] hover:text-[var(--text)]",
+      "border-transparent bg-transparent text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text)]",
   };
   return (
     <button
@@ -711,7 +745,8 @@ export function Button({
       disabled={disabled}
       title={title}
       aria-label={ariaLabel}
-      className={`${base} ${variants[variant]} ${className || ""}`}
+      aria-busy={ariaBusy}
+      className={`${base} ${sizes[size]} ${variants[variant]} ${className || ""}`}
     >
       {children}
     </button>
@@ -727,18 +762,20 @@ export function Badge({
   children?: ReactNode;
   variant?: "neutral" | "ok" | "bad" | "warn" | "info";
 }) {
-  const bg = variant === "ok" ? "bg-[var(--accent-dim)] text-[var(--accent)]" : variant === "bad" ? "bg-[var(--danger-dim)] text-[var(--danger)]" : variant === "warn" ? "bg-[var(--warn-dim)] text-[var(--warn)]" : variant === "info" ? "bg-[var(--info-dim)] text-[var(--info)]" : "bg-[var(--surface-2)] text-[var(--muted)]";
-  const dot =
+  const tone =
     variant === "ok"
-      ? "bg-[var(--accent)]"
+      ? "border-transparent bg-[var(--success-dim)] text-[var(--success)]"
       : variant === "bad"
-        ? "bg-[var(--danger)]"
+        ? "border-transparent bg-[var(--danger-dim)] text-[var(--danger)]"
         : variant === "warn"
-          ? "bg-[var(--warn)]"
-          : "bg-[var(--info)]";
+          ? "border-transparent bg-[var(--warn-dim)] text-[var(--warn)]"
+          : variant === "info"
+            ? "border-transparent bg-[var(--info-dim)] text-[var(--info)]"
+            : "border-[var(--border-dim)] bg-transparent text-[var(--muted)]";
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full border border-transparent px-2.5 py-0.5 text-step--1 font-medium ${bg}`}>
-      {variant === "neutral" ? null : <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />}
+    <span
+      className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[5px] border px-1.5 py-0.5 text-step--2 font-medium ${tone}`}
+    >
       {children}
     </span>
   );
@@ -761,7 +798,7 @@ export function approvalStateLabel(state: string): string {
 
 /**
  * The state of an approval, from the server's rule: an undecided request
- * whose time is up is DEAD, not pending — deciding it would fail. It still
+ * whose time is up is DEAD not pending deciding it would fail. It still
  * has to be visible, because a request nobody answered is exactly the kind
  * of silence that makes a workspace feel stuck.
  */
@@ -1067,4 +1104,199 @@ export function usePermissionCatalogue(): PermissionCatalogue {
     denied: (held: string[]) =>
       permissions.filter((p) => !held.includes(p.name)),
   };
+}
+
+/* --- Icon system ---
+ *
+ * One family: 16px box, 1.5 stroke, round caps. Every icon is ornamental
+ * unless the control has no text label, in which case the control carries
+ * an aria-label. Never mix filled and stroked icons in one surface.
+ */
+export type IconName =
+  | "home"
+  | "chat"
+  | "work"
+  | "agents"
+  | "teams"
+  | "projects"
+  | "library"
+  | "settings"
+  | "plus"
+  | "search"
+  | "chevron-down"
+  | "chevron-right"
+  | "command"
+  | "sun"
+  | "moon"
+  | "monitor"
+  | "menu"
+  | "close"
+  | "arrow-right"
+  | "alert"
+  | "check"
+  | "clock"
+  | "play"
+  | "pause"
+  | "rotate"
+  | "external"
+  | "more"
+  | "filter"
+  | "download"
+  | "upload"
+  | "folder"
+  | "document"
+  | "spark"
+  | "activity"
+  | "lock"
+  | "plug"
+  | "cpu"
+  | "layers"
+  | "target"
+  | "inbox"
+  | "book"
+  | "users"
+  | "stop";
+
+const ICON_PATHS: Record<IconName, ReactNode> = {
+  home: <path d="M2.5 7 8 2.5 13.5 7v6.5h-4v-4h-3v4h-4z" />,
+  chat: <path d="M2.5 3.5h11v7h-6.2L4.5 13v-2.5h-2z" />,
+  work: <><rect x="2.5" y="3.5" width="11" height="9" rx="1" /><path d="M5.5 3.5V2h5v1.5M2.5 7h11" /></>,
+  agents: <><circle cx="6" cy="5.5" r="2.25" /><path d="M1.5 13c0-2.2 2-3.5 4.5-3.5s4.5 1.3 4.5 3.5M10.5 3.6a2 2 0 0 1 0 3.8M11.5 9.8c1.8.3 3 1.4 3 3.2" /></>,
+  teams: <><path d="M5.5 13.5V9.5h5v4M2 13.5V7l6-3 6 3v6.5" /><path d="M6.5 7h3" /></>,
+  projects: <path d="M2.5 4.5h4l1.2 1.5h5.8v7.5h-11zM2.5 4.5V3h4" />,
+  library: <><rect x="2.5" y="3.5" width="3" height="9" rx=".5" /><rect x="6.5" y="3.5" width="3" height="9" rx=".5" /><path d="m10.9 4.1 2.6.7-2.3 8.3-2.6-.7z" /></>,
+  settings: <><circle cx="8" cy="8" r="2.2" /><path d="M8 1.5v1.3M8 13.2v1.3M1.5 8h1.3M13.2 8h1.3M3.4 3.4l.9.9M11.7 11.7l.9.9M12.6 3.4l-.9.9M4.3 11.7l-.9.9" /></>,
+  plus: <path d="M8 3v10M3 8h10" />,
+  search: <><circle cx="7" cy="7" r="4.2" /><path d="m10.2 10.2 3.3 3.3" /></>,
+  "chevron-down": <path d="m4 6 4 4 4-4" />,
+  "chevron-right": <path d="m6 4 4 4-4 4" />,
+  command: <path d="M6 2.5A1.75 1.75 0 1 1 6 6h4a1.75 1.75 0 1 1 0-3.5v7.5A1.75 1.75 0 1 1 6 10h4a1.75 1.75 0 1 1 0 3.5V6H6z" />,
+  sun: <><circle cx="8" cy="8" r="3" /><path d="M8 1.5v1M8 13.5v1M1.5 8h1M13.5 8h1M3.4 3.4l.7.7M11.9 11.9l.7.7M12.6 3.4l-.7.7M4.1 11.9l-.7.7" /></>,
+  moon: <path d="M13 9.3A5.4 5.4 0 0 1 6.7 3a5.4 5.4 0 1 0 6.3 6.3z" />,
+  monitor: <><rect x="2" y="3" width="12" height="8" rx="1" /><path d="M6 13h4M8 11v2" /></>,
+  menu: <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" />,
+  close: <path d="m4 4 8 8M12 4l-8 8" />,
+  "arrow-right": <path d="M3 8h10M9 4l4 4-4 4" />,
+  alert: <><path d="M8 2.5 14 13H2z" /><path d="M8 6.5v3M8 11.5h.01" /></>,
+  check: <path d="m3 8.5 3.2 3L13 4.5" />,
+  clock: <><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3.3l2.2 1.3" /></>,
+  play: <path d="M5.5 3.5 12.5 8l-7 4.5z" />,
+  pause: <path d="M6 3.5v9M10 3.5v9" />,
+  rotate: <><path d="M13 8a5 5 0 1 1-1.5-3.6" /><path d="M13.5 2.5v3h-3" /></>,
+  external: <path d="M9.5 2.5H13.5v4M13 3 7.5 8.5M12 10v3.5H2.5V4H6" />,
+  more: <><circle cx="3.5" cy="8" r=".8" fill="currentColor" stroke="none" /><circle cx="8" cy="8" r=".8" fill="currentColor" stroke="none" /><circle cx="12.5" cy="8" r=".8" fill="currentColor" stroke="none" /></>,
+  filter: <path d="M2.5 3.5h11L9.5 8.3v4.2l-3 1V8.3z" />,
+  download: <path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M2.5 13.5h11" />,
+  upload: <path d="M8 10.5v-8M4.5 6 8 2.5 11.5 6M2.5 13.5h11" />,
+  folder: <path d="M2 4h4l1 1.5h7v8H2z" />,
+  document: <><path d="M4 2h5l3 3v9H4z" /><path d="M9 2v3h3M6 8h4M6 10.5h4" /></>,
+  spark: <path d="M8 1.5 9.3 6l4.2 2-4.2 2L8 14.5 6.7 10 2.5 8l4.2-2z" />,
+  activity: <path d="M1.5 8h3l2-4.5 3 9 2-4.5h3" />,
+  lock: <><rect x="3.5" y="7" width="9" height="6.5" rx="1" /><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" /></>,
+  plug: <path d="M5 2.5v4M11 2.5v4M3 6.5h10v2a5 5 0 0 1-10 0zM8 13.5v1" />,
+  cpu: <><rect x="4" y="4" width="8" height="8" rx="1" /><rect x="6.5" y="6.5" width="3" height="3" /><path d="M6 2v2M10 2v2M6 12v2M10 12v2M2 6h2M2 10h2M12 6h2M12 10h2" /></>,
+  layers: <path d="m8 2 6 3-6 3-6-3zM2 8l6 3 6-3M2 11l6 3 6-3" />,
+  target: <><circle cx="8" cy="8" r="5.5" /><circle cx="8" cy="8" r="2.5" /><path d="M8 1v2M8 13v2M1 8h2M13 8h2" /></>,
+  inbox: <><path d="M2.5 9.5 4 3.5h8l1.5 6v3h-11z" /><path d="M2.5 9.5H6l.6 1.5h2.8l.6-1.5h3.5" /></>,
+  book: <path d="M3 2.5h9.5v11H3zM5 2.5v11M7.5 5.5h3" />,
+  users: <><circle cx="5.5" cy="5.5" r="2" /><circle cx="11.5" cy="6.5" r="1.6" /><path d="M1.5 13c0-1.9 1.8-3.2 4-3.2s4 1.3 4 3.2M10 9.9c1.6.2 2.8 1.2 2.8 3.1" /></>,
+  stop: <rect x="4" y="4" width="8" height="8" rx="1" />,
+};
+
+export function Icon({
+  name,
+  className = "h-4 w-4",
+  strokeWidth = 1.5,
+}: {
+  name: IconName;
+  className?: string;
+  strokeWidth?: number;
+}) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      className={`shrink-0 ${className}`}
+    >
+      {ICON_PATHS[name]}
+    </svg>
+  );
+}
+
+export function Kbd({ children }: { children: ReactNode }) {
+  return (
+    <kbd className="mono inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-[4px] border border-[var(--border)] bg-[var(--surface-2)] px-1 text-[10px] leading-none text-[var(--faint)]">
+      {children}
+    </kbd>
+  );
+}
+
+/** Agent identity: the chosen face when one exists, initials otherwise.
+ *  Always paired with a text name nearby, never the only identifier. */
+export function AgentAvatar({
+  name,
+  face,
+  size = 28,
+  status,
+}: {
+  name: string;
+  face?: BotFaceSpec | null;
+  size?: number;
+  status?: string;
+}) {
+  if (face) return <BotFace face={face} size={size} status={status} />;
+  const initials = name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("");
+  return (
+    <span
+      className="inline-flex shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface-2)] font-medium text-[var(--muted)]"
+      style={{ width: size, height: size, fontSize: Math.max(9, size * 0.36) }}
+      title={name}
+      aria-hidden
+    >
+      {initials || "?"}
+    </span>
+  );
+}
+
+/** A single inline fact. Use the label as the unit, not a decorative icon. */
+export function InlineStat({
+  value,
+  label,
+  tone = "neutral",
+}: {
+  value: ReactNode;
+  label: string;
+  tone?: "neutral" | "ok" | "warn" | "bad";
+}) {
+  const color =
+    tone === "bad"
+      ? "text-[var(--danger)]"
+      : tone === "warn"
+        ? "text-[var(--warn)]"
+        : tone === "ok"
+          ? "text-[var(--success)]"
+          : "text-[var(--text)]";
+  return (
+    <span className="inline-flex items-baseline gap-1.5">
+      <span className={`text-step-0 font-semibold tabular-nums ${color}`}>{value}</span>
+      <span className="text-step--1 text-[var(--muted)]">{label}</span>
+    </span>
+  );
+}
+
+/** Consistent toolbar above lists and tables. It is a flex row, not a card. */
+export function Toolbar({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return (
+    <div className={`mb-3 flex flex-wrap items-center gap-2 ${className}`}>{children}</div>
+  );
 }

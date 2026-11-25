@@ -127,6 +127,17 @@ class Teammate(BaseModel):
     goals: str = ""
     wisdom: str = ""
     persona_version: int = 0
+    # Grok-bot-like profile/builder fields
+    tagline: str = ""
+    voice_style: str = ""
+    boundaries: str = ""
+    starter_prompts: list[str] = Field(default_factory=list)
+    greeting: str = ""
+    behavior_tuning: dict[str, Any] = Field(default_factory=dict)
+    presence_mode: str = "active"  # active | passive | away
+    autonomy_policy: dict[str, Any] = Field(default_factory=dict)
+    autonomy_level: str = "ask_first"  # ask_first | act_and_report | act_silently
+    paused: bool = False
 
 
 class MemoryTier:
@@ -216,6 +227,21 @@ class BoardMessage(BaseModel):
     to_teammate_id: str | None = None  # direct message to one teammate (null = board feed)
     content: str
     kind: str = "message"  # message | handoff | notice | delegation
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+class Routine(BaseModel):
+    """A proactive routine/trigger for a teammate (Grok-bot-like autonomy)."""
+    id: str
+    teammate_id: str
+    project_id: str
+    name: str
+    prompt: str
+    interval_s: int = 3600
+    cron: str = ""
+    enabled: bool = True
+    kind: str = "watch"  # watch | task | message | on_task_done | on_mention
+    last_run_at: str = ""
     created_at: datetime = Field(default_factory=_utcnow)
 
 

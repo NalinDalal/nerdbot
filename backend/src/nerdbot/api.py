@@ -366,12 +366,33 @@ def create_app() -> FastAPI:
                 name="nerdbot-executor",
             )
             _executor_thread.start()
+
+        # Proactive teammate routines (Grok-bot-like autonomy). Enabled by default;
+        # set NERDBOT_ROUTINES=0 to disable.
+        _routine_stop = threading.Event()
+        _routine_thread: threading.Thread | None = None
+        if os.environ.get("NERDBOT_ROUTINES", "1") == "1":
+            from . import routines as routines_mod
+            _routine_thread = threading.Thread(
+                target=routines_mod.sweep_loop,
+                kwargs={
+                    "interval_s": float(os.environ.get("NERDBOT_ROUTINES_INTERVAL_S", "60.0")),
+                    "db_path": _db_path(),
+                    "stop_event": _routine_stop,
+                },
+                daemon=True,
+                name="nerdbot-routines",
+            )
+            _routine_thread.start()
         try:
             yield
         finally:
             _executor_stop.set()
+            _routine_stop.set()
             if _executor_thread is not None:
                 _executor_thread.join(timeout=5.0)
+            if _routine_thread is not None:
+                _routine_thread.join(timeout=5.0)
             terminal_mod.close_all()
 
     app = FastAPI(title="NerdBot Workspace", lifespan=lifespan)
@@ -537,6 +558,16 @@ def create_app() -> FastAPI:
             fallback_provider_id=body.fallback_provider_id,
             fallback_model=body.fallback_model,
             face=face,
+            tagline=body.tagline or "",
+            voice_style=body.voice_style or "",
+            boundaries=body.boundaries or "",
+            starter_prompts=list(body.starter_prompts or []),
+            greeting=body.greeting or "",
+            behavior_tuning=dict(body.behavior_tuning or {}),
+            presence_mode=body.presence_mode or "active",
+            autonomy_policy=dict(body.autonomy_policy or {}),
+            autonomy_level=body.autonomy_level or "ask_first",
+            paused=bool(body.paused) if body.paused is not None else False,
             acting=acting,
         )
         return _teammate_payload(conn, mate)
@@ -760,6 +791,16 @@ def create_app() -> FastAPI:
             "goals": body.get("goals"),
             "wisdom": body.get("wisdom"),
             "persona_version": body.get("persona_version"),
+            **({"tagline": body.get("tagline")} if "tagline" in body else {}),
+            **({"voice_style": body.get("voice_style")} if "voice_style" in body else {}),
+            **({"boundaries": body.get("boundaries")} if "boundaries" in body else {}),
+            **({"starter_prompts": body.get("starter_prompts")} if "starter_prompts" in body else {}),
+            **({"greeting": body.get("greeting")} if "greeting" in body else {}),
+            **({"behavior_tuning": body.get("behavior_tuning")} if "behavior_tuning" in body else {}),
+            **({"presence_mode": body.get("presence_mode")} if "presence_mode" in body else {}),
+            **({"autonomy_policy": body.get("autonomy_policy")} if "autonomy_policy" in body else {}),
+            **({"autonomy_level": body.get("autonomy_level")} if "autonomy_level" in body else {}),
+            **({"paused": body.get("paused")} if "paused" in body else {}),
         }
         if body.get("face") is not None:
             updates["face"] = _validated_face(body.get("face"))
@@ -2384,9 +2425,15 @@ def create_app() -> FastAPI:
                 status_code=400,
                 detail="a live workspace belongs to the project, not this task",
             )
-        removed = workspace_mgr.cleanup_workspace(_data_dir(), task_id)
-        store.record_event(conn, task.project_id, "workspace", task_id, "workspace.cleaned")
-        return {"removed": removed}
+        actor = workspace_mgr.WorkspaceActor(
+            kind="user", id=principal, project_id=task.project_id
+        )
+        res = workspace_mgr.do(
+            actor, "checkout_delete", task_id, conn=conn, data_dir=_data_dir()
+        )
+        if not res.ok:
+            raise HTTPException(status_code=400, detail=res.error)
+        return {"removed": bool((res.data or {}).get("removed", False))}
 
     @app.post("/tasks/{task_id}/workspace")
     def ensure_task_workspace(
@@ -2404,17 +2451,21 @@ def create_app() -> FastAPI:
                 status_code=400,
                 detail="this task runs in the live workspace; there is no checkout to seed",
             )
-        try:
-            path, branch = orchestrator.ensure_task_workspace(
-                conn,
-                task_id,
-                data_dir=_data_dir(),
-                seed_from=body.get("seed_from"),
-                base_branch=body.get("base_branch"),
-            )
-        except (KeyError, ValueError, RuntimeError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"path": path, "branch": branch}
+        actor = workspace_mgr.WorkspaceActor(
+            kind="user", id=principal, project_id=task.project_id
+        )
+        res = workspace_mgr.do(
+            actor,
+            "checkout_create",
+            task_id,
+            conn=conn,
+            data_dir=_data_dir(),
+            seed_from=body.get("seed_from"),
+            base_branch=body.get("base_branch"),
+        )
+        if not res.ok:
+            raise HTTPException(status_code=400, detail=res.error)
+        return {"path": (res.data or {}).get("path", ""), "branch": (res.data or {}).get("branch", "")}
 
     @app.post("/tasks/{task_id}/reviews")
     def submit_task_review(
@@ -3025,10 +3076,12 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=410, detail=str(exc)) from exc
 
         resume: dict[str, Any] | None = None
+        is_workspace = str(approval.action or "").startswith("workspace.") or str(approval.tool_name or "").startswith("workspace.")
         if decision in (Decision.APPROVED, Decision.APPROVED_FOREVER):
-            outcome = approval_flow.resume_run(
-                conn, approval.run_id, data_dir=_data_dir()
-            )
+            if is_workspace and not approval.run_id:
+                outcome = approval_flow.resume_standalone_approval(conn, approval, data_dir=_data_dir())
+            else:
+                outcome = approval_flow.resume_run(conn, approval.run_id, data_dir=_data_dir())
             resume = {
                 "outcome": outcome.outcome,
                 "output": outcome.output,
@@ -3039,7 +3092,10 @@ def create_app() -> FastAPI:
                 "performed": outcome.performed,
             }
         else:
-            outcome = approval_flow.close_rejected_action(conn, approval)
+            if is_workspace and not approval.run_id:
+                outcome = approval_flow.close_standalone_rejected(conn, approval)
+            else:
+                outcome = approval_flow.close_rejected_action(conn, approval)
             resume = {
                 "outcome": outcome.outcome,
                 "output": outcome.output,
@@ -3049,6 +3105,15 @@ def create_app() -> FastAPI:
                 "task_status": outcome.task_status,
                 "performed": outcome.performed,
             }
+        # Post workspace approval outcome to the originating thread when available.
+        try:
+            payload = json.loads(approval.tool_arguments or "{}") if str(approval.action or "").startswith("workspace.") else {}
+            tid = str((payload.get("args") or {}).get("thread_id") or payload.get("thread_id") or "")
+            if tid and resume is not None:
+                msg = f"Workspace approval {approval.id} {approval.decision.value}: {resume.get('outcome')} — {resume.get('output','')}"
+                store.append_message(conn, tid, "assistant", msg[:2000], parts=[{"type":"workspace_approval", "approval_id": approval.id, "outcome": resume.get("outcome")}])
+        except Exception:
+            pass
         return {
             **approval.model_dump(mode="json"),
             "resume": resume,
@@ -3910,6 +3975,51 @@ def create_app() -> FastAPI:
         _require_teammate_access(conn, mate, principal)
         ok = store.detach_skill(conn, teammate_id, skill_id)
         return {"detached": ok}
+
+    # -- Teammate routines (proactive/autonomous behavior) -------------------
+
+    @app.get("/teammates/{teammate_id}/routines")
+    def list_teammate_routines(teammate_id: str, conn: sqlite3.Connection = Depends(get_conn), principal: str = Depends(principal_from_header)) -> dict[str, Any]:
+        mate = store.get_teammate(conn, teammate_id)
+        if mate is None: raise HTTPException(status_code=404, detail="teammate not found")
+        _require_teammate_access(conn, mate, principal)
+        return {"routines": [r.model_dump(mode="json") for r in store.list_routines(conn, teammate_id)]}
+
+    @app.post("/teammates/{teammate_id}/routines")
+    def create_teammate_routine(teammate_id: str, body: schemas.RoutineCreate, conn: sqlite3.Connection = Depends(get_conn), principal: str = Depends(principal_from_header)) -> dict[str, Any]:
+        mate = store.get_teammate(conn, teammate_id)
+        if mate is None: raise HTTPException(status_code=404, detail="teammate not found")
+        _require_teammate_access(conn, mate, principal)
+        routine = store.create_routine(
+            conn, teammate_id, mate.project_id,
+            name=body.name or "Routine",
+            prompt=body.prompt or "",
+            interval_s=int(body.interval_s or 3600),
+            enabled=bool(body.enabled) if body.enabled is not None else True,
+            kind=body.kind or "watch",
+            cron=str(body.cron or ""),
+        )
+        return routine.model_dump(mode="json")
+
+    @app.patch("/routines/{routine_id}")
+    def patch_routine(routine_id: str, body: schemas.RoutinePatch, conn: sqlite3.Connection = Depends(get_conn), principal: str = Depends(principal_from_header)) -> dict[str, Any]:
+        routine = store.get_routine(conn, routine_id)
+        if routine is None: raise HTTPException(status_code=404, detail="routine not found")
+        mate = store.get_teammate(conn, routine.teammate_id)
+        if mate is None: raise HTTPException(status_code=404, detail="teammate not found")
+        _require_teammate_access(conn, mate, principal)
+        updated = store.update_routine(conn, routine_id, **body.model_dump(exclude_none=True))
+        return updated.model_dump(mode="json")
+
+    @app.delete("/routines/{routine_id}")
+    def delete_routine_endpoint(routine_id: str, conn: sqlite3.Connection = Depends(get_conn), principal: str = Depends(principal_from_header)) -> dict[str, Any]:
+        routine = store.get_routine(conn, routine_id)
+        if routine is None: raise HTTPException(status_code=404, detail="routine not found")
+        mate = store.get_teammate(conn, routine.teammate_id)
+        if mate is None: raise HTTPException(status_code=404, detail="teammate not found")
+        _require_teammate_access(conn, mate, principal)
+        store.delete_routine(conn, routine_id)
+        return {"deleted": True, "id": routine_id}
 
     # -- Schedules & reminders (Phase 2) --------------------------------------
 
@@ -5349,12 +5459,18 @@ def create_app() -> FastAPI:
         thread, provider, messages, provenance, speaker = _prepare_chat(
             conn, thread_id, content
         )
+        try:
+            from . import routines as _routines
+            _routines.fire_mention_triggers(conn, project_id=thread.project_id, thread_id=thread_id, message=content, mentioner_id=f"user:{principal}")
+        except Exception:
+            pass
         _ = thread
         try:
             mode = str(body.get("mode", "chat") or "chat")
             text, parts = chat_mod.chat_complete_with_tools(
                 provider, messages, conn=conn, project_id=thread.project_id,
-                thread_id=thread.id, mode=mode,
+                thread_id=thread.id, mode=mode, teammate=speaker, data_dir=_data_dir(),
+                memory_used=bool(provenance),
             )
         except Exception as exc:
             raise _chat_error_to_http(exc) from exc
@@ -5394,6 +5510,11 @@ def create_app() -> FastAPI:
         thread, provider, messages, provenance, speaker = _prepare_chat(
             conn, thread_id, content
         )
+        try:
+            from . import routines as _routines
+            _routines.fire_mention_triggers(conn, project_id=thread.project_id, thread_id=thread_id, message=content, mentioner_id=f"user:{principal}")
+        except Exception:
+            pass
         _ = thread
 
         def generate() -> Any:
@@ -5415,6 +5536,7 @@ def create_app() -> FastAPI:
                 for event in chat_mod.chat_stream_with_tools(
                     provider, messages, conn=conn, project_id=thread.project_id,
                     thread_id=thread.id, mode=str(body.get("mode", "chat") or "chat"),
+                    teammate=speaker, data_dir=_data_dir(), memory_used=bool(provenance),
                 ):
                     yield f"data: {_json.dumps(event)}\n\n"
                     if isinstance(event, dict):
@@ -5470,6 +5592,95 @@ def create_app() -> FastAPI:
         store.delete_project(conn, project_id)
         return {"deleted": True}
 
+    @app.get("/workspace/browse")
+    def browse_workspace(
+        path: str = "",
+        _principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """Browse server directories for the workspace picker (Odysseus-style).
+
+        Directories only, admin/owner-authenticated. This is a picker helper;
+        it does not bind a workspace.
+        """
+        return workspace_mgr.browse_workspace_dirs(path)
+
+    @app.get("/workspace/vet")
+    def vet_workspace(
+        path: str = "",
+        _principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """Validate a candidate workspace path before binding."""
+        resolved = workspace_mgr.vet_workspace_candidate(path)
+        return {"ok": resolved is not None, "path": str(resolved) if resolved else None}
+
+    @app.get("/workspace/default")
+    def default_workspace(
+        _principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """Return the explicitly configured default workspace, if any."""
+        resolved = workspace_mgr.default_workspace_path(_data_dir())
+        return {"ok": resolved is not None, "path": resolved}
+
+    @app.get("/projects/{project_id}/workspace/audit")
+    def get_workspace_audit(
+        project_id: str,
+        limit: int = 100,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """List recent workspace gateway audit rows for a project.
+
+        Args:
+            project_id: Project id.
+            limit: Max rows (1-500).
+            conn: DB connection.
+            principal: Authenticated principal.
+
+        Returns:
+            Dict with audit rows.
+        """
+        require_project_owner(conn, project_id, principal)
+        rows = store.list_workspace_audit(conn, project_id, limit=limit)
+        return {"items": rows, "count": len(rows)}
+
+    @app.post("/projects/{project_id}/workspace/revert")
+    def revert_workspace_file(
+        project_id: str,
+        body: dict[str, Any],
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        """Revert a teammate-changed file through the workspace gateway.
+
+        Args:
+            project_id: Project id.
+            body: {path, snapshot_ref|commit, expected_hash?, force?}
+            conn: DB connection.
+            principal: Auth principal.
+
+        Returns:
+            Revert result.
+        """
+        require_project_owner(conn, project_id, principal)
+        actor = workspace_mgr.WorkspaceActor(kind="user", id=principal, project_id=project_id)
+        res = workspace_mgr.do(
+            actor,
+            "revert",
+            str(body.get("path") or ""),
+            conn=conn,
+            data_dir=_data_dir(),
+            snapshot_ref=str(body.get("snapshot_ref") or body.get("commit") or body.get("ref") or ""),
+            expected_hash=body.get("expected_hash"),
+            force=bool(body.get("force", False)),
+        )
+        if not res.ok:
+            if res.denied:
+                raise HTTPException(status_code=403, detail=res.error)
+            if "changed since snapshot" in (res.error or ""):
+                raise HTTPException(status_code=409, detail=res.error)
+            raise HTTPException(status_code=400, detail=res.error)
+        return {"ok": True, **res.data}
+
     @app.get("/projects/{project_id}/workspace")
     def get_project_workspace(
         project_id: str,
@@ -5485,17 +5696,16 @@ def create_app() -> FastAPI:
         project = store.get_project(conn, project_id)
         if project is None:  # pragma: no cover - ownership already checked
             raise HTTPException(status_code=404, detail="project not found")
-        try:
-            root = workspace_mgr.ensure_project_workspace(
-                project, _data_dir(), initialize_git=False
-            )
-        except (OSError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        actor = workspace_mgr.WorkspaceActor(kind="user", id=principal, project_id=project_id)
+        res = workspace_mgr.do(actor, "list", "", conn=conn, data_dir=_data_dir())
+        if not res.ok:
+            raise HTTPException(status_code=400, detail=res.error)
+        root = workspace_mgr.configured_project_root(project, _data_dir())
         meta = workspace_mgr.workspace_meta(root)
         meta["project_id"] = project_id
         meta["attached"] = workspace_mgr.is_owned_by_config(project)
         meta["busy"] = workspace_mgr.workspace_busy(project_id)
-        return meta
+        return {**meta, **(res.data or {})}
 
     @app.post("/projects/{project_id}/workspace/attach")
     def attach_project_workspace(
@@ -5515,14 +5725,12 @@ def create_app() -> FastAPI:
         raw = (body.path or "").strip()
         if not raw:
             raise HTTPException(status_code=400, detail="path is required")
-        root = Path(raw).expanduser()
-        if not root.is_absolute():
-            raise HTTPException(status_code=400, detail="path must be absolute")
-        root = root.resolve()
-        if root == Path(root.anchor):
-            raise HTTPException(status_code=400, detail="refusing to attach a filesystem root")
-        if not root.is_dir():
-            raise HTTPException(status_code=400, detail=f"not a directory: {root}")
+        root = workspace_mgr.vet_workspace_candidate(raw)
+        if root is None:
+            raise HTTPException(
+                status_code=400,
+                detail="workspace path must be an existing non-sensitive absolute directory",
+            )
         previous = dict(project.config)
         config = dict(previous)
         config["workspace_root"] = str(root)
@@ -5552,18 +5760,16 @@ def create_app() -> FastAPI:
         project = store.get_project(conn, project_id)
         if project is None:  # pragma: no cover
             raise HTTPException(status_code=404, detail="project not found")
-        try:
-            root = workspace_mgr.ensure_project_workspace(
-                project, _data_dir(), initialize_git=False
-            )
-        except (OSError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        listing = workspace_mgr.list_workspace_files(root)
+        actor = workspace_mgr.WorkspaceActor(kind="user", id=principal, project_id=project_id)
+        res = workspace_mgr.do(actor, "list", "", conn=conn, data_dir=_data_dir())
+        if not res.ok:
+            raise HTTPException(status_code=400, detail=res.error)
+        root = workspace_mgr.configured_project_root(project, _data_dir())
         meta = workspace_mgr.workspace_meta(root)
         meta["project_id"] = project_id
         meta["attached"] = workspace_mgr.is_owned_by_config(project)
         meta["busy"] = workspace_mgr.workspace_busy(project_id)
-        return {**meta, **listing}
+        return {**meta, **(res.data or {})}
 
     @app.get("/projects/{project_id}/workspace/file")
     def read_project_workspace_file(
@@ -5577,12 +5783,13 @@ def create_app() -> FastAPI:
         if project is None:  # pragma: no cover
             raise HTTPException(status_code=404, detail="project not found")
         root = workspace_mgr.configured_project_root(project, _data_dir())
-        try:
-            return workspace_mgr.read_workspace_text(root, path)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="file not found") from exc
-        except (OSError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        actor = workspace_mgr.WorkspaceActor(kind="user", id=principal, project_id=project_id)
+        res = workspace_mgr.do(actor, "read", path, conn=conn, data_dir=_data_dir())
+        if not res.ok:
+            if "not found" in (res.error or "").lower():
+                raise HTTPException(status_code=404, detail=res.error)
+            raise HTTPException(status_code=400, detail=res.error)
+        return res.data
 
     @app.put("/projects/{project_id}/workspace/file")
     def write_project_workspace_file(
@@ -5599,24 +5806,15 @@ def create_app() -> FastAPI:
             raise HTTPException(
                 status_code=409, detail="a live run is using this workspace"
             )
-        root = workspace_mgr.configured_project_root(project, _data_dir())
-        try:
-            result = workspace_mgr.write_workspace_text(
-                root,
-                body.path or "",
-                body.content or "",
-                expected_mtime=body.expected_mtime,
-            )
-        except workspace_mgr.WorkspaceConflictError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="file not found") from exc
-        except (OSError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        store.record_event(
-            conn, project_id, "workspace", result["path"], "workspace.file.saved"
-        )
-        return result
+        actor = workspace_mgr.WorkspaceActor(kind="user", id=principal, project_id=project_id)
+        res = workspace_mgr.do(actor, "write", body.path or "", conn=conn, data_dir=_data_dir(), content=body.content or "", expected_mtime=body.expected_mtime, expected_hash=body.expected_hash)
+        if not res.ok:
+            if isinstance(res.error, str) and "current sha256=" in res.error:
+                raise HTTPException(status_code=409, detail=res.error)
+            if "not found" in (res.error or "").lower():
+                raise HTTPException(status_code=404, detail=res.error)
+            raise HTTPException(status_code=400, detail=res.error)
+        return res.data
 
     @app.post("/projects/{project_id}/workspace/mkdir")
     def create_project_workspace_dir(
@@ -5626,18 +5824,13 @@ def create_app() -> FastAPI:
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
         require_project_owner(conn, project_id, principal)
-        project = store.get_project(conn, project_id)
-        if project is None:  # pragma: no cover
-            raise HTTPException(status_code=404, detail="project not found")
         if workspace_mgr.workspace_busy(project_id):
             raise HTTPException(status_code=409, detail="a live run is using this workspace")
-        root = workspace_mgr.configured_project_root(project, _data_dir())
-        try:
-            result = workspace_mgr.create_workspace_dir(root, body.path or "")
-        except (OSError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        store.record_event(conn, project_id, "workspace", result["path"], "workspace.dir.created")
-        return result
+        actor = workspace_mgr.WorkspaceActor(kind="user", id=principal, project_id=project_id)
+        res = workspace_mgr.do(actor, "mkdir", body.path or "", conn=conn, data_dir=_data_dir())
+        if not res.ok:
+            raise HTTPException(status_code=400, detail=res.error)
+        return res.data
 
     @app.delete("/projects/{project_id}/workspace/path")
     def delete_project_workspace_path(
@@ -5647,20 +5840,15 @@ def create_app() -> FastAPI:
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
         require_project_owner(conn, project_id, principal)
-        project = store.get_project(conn, project_id)
-        if project is None:  # pragma: no cover
-            raise HTTPException(status_code=404, detail="project not found")
         if workspace_mgr.workspace_busy(project_id):
             raise HTTPException(status_code=409, detail="a live run is using this workspace")
-        root = workspace_mgr.configured_project_root(project, _data_dir())
-        try:
-            result = workspace_mgr.delete_workspace_path(root, body.path or "")
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except (OSError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        store.record_event(conn, project_id, "workspace", result["path"], "workspace.path.deleted")
-        return result
+        actor = workspace_mgr.WorkspaceActor(kind="user", id=principal, project_id=project_id)
+        res = workspace_mgr.do(actor, "delete", body.path or "", conn=conn, data_dir=_data_dir())
+        if not res.ok:
+            if "not found" in (res.error or "").lower():
+                raise HTTPException(status_code=404, detail=res.error)
+            raise HTTPException(status_code=400, detail=res.error)
+        return res.data
 
     @app.post("/projects/{project_id}/workspace/rename")
     def rename_project_workspace_path(
@@ -5670,22 +5858,15 @@ def create_app() -> FastAPI:
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
         require_project_owner(conn, project_id, principal)
-        project = store.get_project(conn, project_id)
-        if project is None:  # pragma: no cover
-            raise HTTPException(status_code=404, detail="project not found")
         if workspace_mgr.workspace_busy(project_id):
             raise HTTPException(status_code=409, detail="a live run is using this workspace")
-        root = workspace_mgr.configured_project_root(project, _data_dir())
-        try:
-            result = workspace_mgr.rename_workspace_path(
-                root, body.from_path or "", body.to_path or ""
-            )
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except (OSError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        store.record_event(conn, project_id, "workspace", result["to"], "workspace.path.renamed")
-        return result
+        actor = workspace_mgr.WorkspaceActor(kind="user", id=principal, project_id=project_id)
+        res = workspace_mgr.do(actor, "rename", body.from_path or "", conn=conn, data_dir=_data_dir(), to=body.to_path or "")
+        if not res.ok:
+            if "not found" in (res.error or "").lower():
+                raise HTTPException(status_code=404, detail=res.error)
+            raise HTTPException(status_code=400, detail=res.error)
+        return res.data
 
     @app.get("/projects/{project_id}/workspace/git/status")
     def get_project_workspace_git_status(
@@ -5694,17 +5875,12 @@ def create_app() -> FastAPI:
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
         require_project_owner(conn, project_id, principal)
-        project = store.get_project(conn, project_id)
-        if project is None:  # pragma: no cover
-            raise HTTPException(status_code=404, detail="project not found")
-        root = workspace_mgr.configured_project_root(project, _data_dir())
-        meta = workspace_mgr.workspace_meta(root)
-        return {
-            "git": bool(meta.get("git")),
-            "branch": meta.get("branch", ""),
-            "dirty": bool(meta.get("dirty")),
-            "changes": meta.get("changes", []),
-        }
+        actor = workspace_mgr.WorkspaceActor(kind="user", id=principal, project_id=project_id)
+        res = workspace_mgr.do(actor, "git_status", "", conn=conn, data_dir=_data_dir())
+        if not res.ok:
+            raise HTTPException(status_code=400, detail=res.error)
+        d = res.data
+        return {"git": bool(d.get("git")), "branch": d.get("branch",""), "dirty": bool(d.get("changes")), "changes": d.get("changes", [])}
 
     @app.get("/projects/{project_id}/workspace/git/log")
     def get_project_workspace_git_log(
@@ -5714,15 +5890,15 @@ def create_app() -> FastAPI:
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
         require_project_owner(conn, project_id, principal)
-        project = store.get_project(conn, project_id)
-        if project is None:  # pragma: no cover
-            raise HTTPException(status_code=404, detail="project not found")
-        root = workspace_mgr.configured_project_root(project, _data_dir())
-        try:
-            commits = workspace_mgr.git_log(root, limit=limit)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"commits": commits, "branch": workspace_mgr.current_branch(root) if workspace_mgr.is_git_repo(root) else ""}
+        actor = workspace_mgr.WorkspaceActor(kind="user", id=principal, project_id=project_id)
+        res = workspace_mgr.do(actor, "git_log", "", conn=conn, data_dir=_data_dir(), limit=limit)
+        if not res.ok:
+            raise HTTPException(status_code=400, detail=res.error)
+        commits = res.data.get("commits", [])
+        # branch from status for convenience
+        st = workspace_mgr.do(actor, "git_status", "", conn=conn, data_dir=_data_dir())
+        branch = (st.data or {}).get("branch", "") if st.ok else ""
+        return {"commits": commits, "branch": branch}
 
     @app.post("/projects/{project_id}/workspace/git/commit")
     def commit_project_workspace_changes(
@@ -5732,19 +5908,13 @@ def create_app() -> FastAPI:
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
         require_project_owner(conn, project_id, principal)
-        project = store.get_project(conn, project_id)
-        if project is None:  # pragma: no cover
-            raise HTTPException(status_code=404, detail="project not found")
         if workspace_mgr.workspace_busy(project_id):
             raise HTTPException(status_code=409, detail="a live run is using this workspace")
-        root = workspace_mgr.configured_project_root(project, _data_dir())
-        try:
-            result = workspace_mgr.git_commit_all(root, body.message or "")
-        except (ValueError, RuntimeError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if result.get("committed"):
-            store.record_event(conn, project_id, "workspace", project_id, "workspace.git.committed")
-        return result
+        actor = workspace_mgr.WorkspaceActor(kind="user", id=principal, project_id=project_id)
+        res = workspace_mgr.do(actor, "git_commit", "", conn=conn, data_dir=_data_dir(), message=body.message or "")
+        if not res.ok:
+            raise HTTPException(status_code=400, detail=res.error)
+        return res.data
 
     @app.post("/projects/{project_id}/workspace/git/rollback-uncommitted")
     def rollback_project_workspace_uncommitted(
@@ -5753,18 +5923,13 @@ def create_app() -> FastAPI:
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
         require_project_owner(conn, project_id, principal)
-        project = store.get_project(conn, project_id)
-        if project is None:  # pragma: no cover
-            raise HTTPException(status_code=404, detail="project not found")
         if workspace_mgr.workspace_busy(project_id):
             raise HTTPException(status_code=409, detail="a live run is using this workspace")
-        root = workspace_mgr.configured_project_root(project, _data_dir())
-        try:
-            result = workspace_mgr.git_discard_uncommitted(root)
-        except (ValueError, RuntimeError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        store.record_event(conn, project_id, "workspace", project_id, "workspace.git.rolled_back_uncommitted")
-        return result
+        actor = workspace_mgr.WorkspaceActor(kind="user", id=principal, project_id=project_id)
+        res = workspace_mgr.do(actor, "git_rollback", "", conn=conn, data_dir=_data_dir())
+        if not res.ok:
+            raise HTTPException(status_code=400, detail=res.error)
+        return res.data
 
 
     @app.post("/projects/{project_id}/workspace/command")
@@ -5774,38 +5939,26 @@ def create_app() -> FastAPI:
         conn: sqlite3.Connection = Depends(get_conn),
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
+        """Run a command in the project workspace through the gateway."""
         require_project_owner(conn, project_id, principal)
-        project = store.get_project(conn, project_id)
-        if project is None:  # pragma: no cover
-            raise HTTPException(status_code=404, detail="project not found")
         command = (body.command or "").strip()
         if not command:
             raise HTTPException(status_code=400, detail="command is required")
         if workspace_mgr.workspace_busy(project_id):
             raise HTTPException(status_code=409, detail="a live run is using this workspace")
-        root = workspace_mgr.configured_project_root(project, _data_dir())
-        timeout_s = float(body.timeout_s or 60.0)
-        timeout_s = max(1.0, min(timeout_s, 600.0))
-        try:
-            # Reuse runtime policy checks, env scrubbing, and bounded local execution.
-            result = runtime_mod.LocalRuntimeAdapter().start_run(command, root, timeout_s=timeout_s)
-            status = "completed" if result.exit_code == 0 else "failed"
-            return {
-                "ok": result.exit_code == 0,
-                "status": status,
-                "exit_code": result.exit_code,
-                "output": runtime_mod.scrub_secrets(result.output or ""),
-                "stdout": runtime_mod.scrub_secrets(result.stdout or ""),
-                "stderr": runtime_mod.scrub_secrets(result.stderr or ""),
-            }
-        except runtime_mod.BlockedError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except runtime_mod.RunCancelled as exc:
-            return {"ok": False, "status": "cancelled", "exit_code": -1, "output": str(exc), "stdout": "", "stderr": str(exc)}
-        except runtime_mod.ExecutionError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"command failed: {exc}") from exc
+        timeout_s = max(1.0, min(float(body.timeout_s or 60.0), 600.0))
+        actor = workspace_mgr.WorkspaceActor(kind="user", id=principal, project_id=project_id)
+        res = workspace_mgr.do(actor, "run", "", conn=conn, data_dir=_data_dir(), command=command, timeout_s=timeout_s)
+        if res.denied:
+            raise HTTPException(status_code=403, detail=res.error)
+        if not res.ok:
+            # gateway maps runtime errors into output/error; preserve shape
+            detail = res.error or res.output or "command failed"
+            if "blocked" in detail.lower() or "denied" in detail.lower():
+                raise HTTPException(status_code=403, detail=detail)
+            return {"ok": False, "status": "failed", "exit_code": int((res.data or {}).get("exit_code", -1)), "output": res.output, "stdout": (res.data or {}).get("stdout",""), "stderr": (res.data or {}).get("stderr", detail)}
+        d = res.data or {}
+        return {"ok": True, "status": "completed", "exit_code": int(d.get("exit_code", 0)), "output": res.output, "stdout": d.get("stdout",""), "stderr": d.get("stderr","")}
 
     @app.get("/projects/{project_id}/workspace/diff")
     def get_project_workspace_diff(
@@ -5814,16 +5967,15 @@ def create_app() -> FastAPI:
         principal: str = Depends(principal_from_header),
     ) -> dict[str, Any]:
         require_project_owner(conn, project_id, principal)
-        project = store.get_project(conn, project_id)
-        if project is None:  # pragma: no cover
-            raise HTTPException(status_code=404, detail="project not found")
-        root = workspace_mgr.configured_project_root(project, _data_dir())
-        if not root.is_dir():
-            return {"diff": "", "status": [], "git": False, "exists": False}
+        actor = workspace_mgr.WorkspaceActor(kind="user", id=principal, project_id=project_id)
+        res = workspace_mgr.do(actor, "git_diff", "", conn=conn, data_dir=_data_dir())
+        st = workspace_mgr.do(actor, "git_status", "", conn=conn, data_dir=_data_dir())
+        if not res.ok:
+            raise HTTPException(status_code=400, detail=res.error)
         return {
-            "diff": workspace_mgr.workspace_diff(root),
-            "status": workspace_mgr.git_status_entries(root),
-            "git": workspace_mgr.is_git_repo(root),
+            "diff": (res.data or {}).get("diff", res.output),
+            "status": (st.data or {}).get("changes", []) if st.ok else [],
+            "git": bool((st.data or {}).get("git", False)) if st.ok else False,
             "exists": True,
         }
 
@@ -6002,25 +6154,19 @@ def create_app() -> FastAPI:
         """
         require_project_owner(conn, project_id, principal)
         data_dir = _data_dir()
+        actor = workspace_mgr.WorkspaceActor(kind="user", id=principal, project_id=project_id)
         checkouts: list[dict[str, Any]] = []
         total_files = 0
         for task in store.list_tasks_for_project(conn, project_id):
             root = workspace_mgr.workspace_path_for_task(data_dir, task.id)
             if not root.is_dir():
                 continue
-            files: list[dict[str, Any]] = []
-            for path in sorted(root.rglob("*")):
-                if ".git" in path.parts:
-                    continue
-                if path.is_file():
-                    stat = path.stat()
-                    files.append(
-                        {
-                            "path": str(path.relative_to(root)),
-                            "size": stat.st_size,
-                            "modified": stat.st_mtime,
-                        }
-                    )
+            res = workspace_mgr.do(
+                actor, "list", "", conn=conn, data_dir=data_dir, workspace_root=str(root)
+            )
+            if not res.ok:
+                raise HTTPException(status_code=400, detail=res.error)
+            files: list[dict[str, Any]] = list((res.data or {}).get("files", []))
             if not files:
                 continue
             total_files += len(files)
@@ -6048,20 +6194,15 @@ def create_app() -> FastAPI:
         root = orchestrator.task_workspace_root(conn, task, _data_dir())
         if not root.is_dir():
             return {"files": [], "root": str(root)}
-        files: list[dict[str, Any]] = []
-        for path in sorted(root.rglob("*")):
-            if ".git" in path.parts:
-                continue
-            if path.is_file():
-                stat = path.stat()
-                files.append(
-                    {
-                        "path": str(path.relative_to(root)),
-                        "size": stat.st_size,
-                        "modified": stat.st_mtime,
-                    }
-                )
-        return {"files": files, "root": str(root)}
+        actor = workspace_mgr.WorkspaceActor(
+            kind="user", id=principal, project_id=task.project_id
+        )
+        res = workspace_mgr.do(
+            actor, "list", "", conn=conn, data_dir=_data_dir(), workspace_root=str(root)
+        )
+        if not res.ok:
+            raise HTTPException(status_code=400, detail=res.error)
+        return {"files": list((res.data or {}).get("files", [])), "root": str(root)}
 
     @app.get("/tasks/{task_id}/workspace/file")
     def read_task_workspace_file(
@@ -6075,18 +6216,25 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="task not found")
         require_project_owner(conn, task.project_id, principal)
         root = orchestrator.task_workspace_root(conn, task, _data_dir())
-        target = (root / path).resolve()
-        if target != root and root not in target.parents:
-            raise HTTPException(status_code=400, detail="path escapes workspace")
-        if not target.is_file():
-            raise HTTPException(status_code=404, detail="file not found")
-        if target.stat().st_size > 1_000_000:
+        actor = workspace_mgr.WorkspaceActor(
+            kind="user", id=principal, project_id=task.project_id
+        )
+        res = workspace_mgr.do(
+            actor,
+            "read",
+            path,
+            conn=conn,
+            data_dir=_data_dir(),
+            workspace_root=str(root),
+        )
+        if not res.ok:
+            if "not found" in (res.error or "").lower():
+                raise HTTPException(status_code=404, detail=res.error)
+            raise HTTPException(status_code=400, detail=res.error)
+        data = res.data or {}
+        if int(data.get("size", 0)) > 1_000_000:
             raise HTTPException(status_code=400, detail="file too large to display")
-        try:
-            content = target.read_text(encoding="utf-8")
-        except UnicodeDecodeError as exc:
-            raise HTTPException(status_code=400, detail="file is not text") from exc
-        return {"path": path, "content": content}
+        return {"path": data.get("path", path), "content": data.get("content", "")}
 
     @app.get("/tasks/{task_id}/workspace/diff")
     def task_workspace_diff(
@@ -6101,11 +6249,15 @@ def create_app() -> FastAPI:
         root = orchestrator.task_workspace_root(conn, task, _data_dir())
         if not root.is_dir():
             return {"diff": "", "exists": False}
-        try:
-            diff = workspace_mgr.workspace_diff(root)
-        except Exception as exc:  # git may be absent or repo corrupted
-            raise HTTPException(status_code=400, detail=f"diff failed: {exc}") from exc
-        return {"diff": diff, "exists": True}
+        actor = workspace_mgr.WorkspaceActor(
+            kind="user", id=principal, project_id=task.project_id
+        )
+        res = workspace_mgr.do(
+            actor, "git_diff", "", conn=conn, data_dir=_data_dir(), workspace_root=str(root)
+        )
+        if not res.ok:
+            raise HTTPException(status_code=400, detail=res.error)
+        return {"diff": (res.data or {}).get("diff", res.output), "exists": True}
 
 
 

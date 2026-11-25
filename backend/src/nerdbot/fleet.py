@@ -16,8 +16,8 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from . import gates, store
-from .models import Team, Teammate, TeammateStatus, TeamMember
+from . import gates, runtime, store
+from .models import Decision, TaskStatus, Team, Teammate, TeammateStatus, TeamMember
 
 # Handles are store's business (they must stay unique per project); fleet
 # re-exports the formatter it derives a new teammate's handle from.
@@ -42,6 +42,16 @@ def create_teammate_service(
     fallback_provider_id: str | None = None,
     fallback_model: str | None = None,
     face: dict[str, str] | None = None,
+    tagline: str = "",
+    voice_style: str = "",
+    boundaries: str = "",
+    starter_prompts: list[str] | None = None,
+    greeting: str = "",
+    behavior_tuning: dict[str, Any] | None = None,
+    presence_mode: str = "active",
+    autonomy_policy: dict[str, Any] | None = None,
+    autonomy_level: str = "ask_first",
+    paused: bool = False,
     acting: Teammate | None = None,
 ) -> Teammate:
     if acting is not None:
@@ -89,6 +99,16 @@ def create_teammate_service(
             memory_scope=memory_scope,
             permissions=permissions,
             face=face,
+            tagline=tagline,
+            voice_style=voice_style,
+            boundaries=boundaries,
+            starter_prompts=starter_prompts,
+            greeting=greeting,
+            behavior_tuning=behavior_tuning,
+            presence_mode=presence_mode,
+            autonomy_policy=autonomy_policy,
+            autonomy_level=autonomy_level,
+            paused=paused,
         )
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -180,9 +200,67 @@ def update_teammate_service(
         except (gates.GateDenied, gates.GateApprovalRequired) as exc:
             raise gates.wrap_gate_error(exc) from exc
     try:
-        return store.update_teammate(conn, teammate_id, **updates)
+        updated = store.update_teammate(conn, teammate_id, **updates)
+        if bool(updates.get("paused")) is True:
+            _pause_teammate(conn, updated)
+        return updated
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _pause_teammate(conn: sqlite3.Connection, mate: Teammate) -> None:
+    """Apply pause kill-switch effects for a teammate.
+
+    Cancels queued routine tasks, requests cancellation of in-flight runs,
+    and cancels pending approvals requested by the teammate.
+
+    Args:
+        conn: SQLite connection.
+        mate: Teammate being paused.
+    """
+    # Cancel queued routine tasks owned by teammate
+    try:
+        rows = conn.execute(
+            "SELECT id, status FROM tasks WHERE owner_teammate_id=? AND status IN ('queued','pending','ready')",
+            (mate.id,),
+        ).fetchall()
+        for r in rows:
+            try:
+                store.set_task_status(conn, r["id"], TaskStatus.CANCELLED, "teammate paused")
+            except Exception:
+                pass
+    except Exception:
+        pass
+    # Request cancellation of in-flight runs
+    try:
+        rows = conn.execute(
+            "SELECT r.id FROM runs r JOIN tasks t ON t.id=r.task_id WHERE t.owner_teammate_id=? AND r.status IN ('running','queued','awaiting_approval')",
+            (mate.id,),
+        ).fetchall()
+        for r in rows:
+            try:
+                store.request_run_cancel(conn, r["id"])
+            except Exception:
+                pass
+            try:
+                runtime.request_run_cancel(r["id"])
+            except Exception:
+                pass
+    except Exception:
+        pass
+    # Cancel pending approvals requested by teammate
+    try:
+        rows = conn.execute(
+            "SELECT id FROM approvals WHERE requester=? AND decision='pending'",
+            (mate.id,),
+        ).fetchall()
+        for r in rows:
+            try:
+                store.decide_approval(conn, r["id"], Decision.DENIED)
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 
 def set_teammate_status_service(

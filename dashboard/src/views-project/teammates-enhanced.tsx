@@ -1,11 +1,10 @@
 import { useState } from "react";
 import { api, describeError } from "../api";
-import { notifyError, navigate } from "../app";
+import { navigate } from "../app";
 import { FacePicker } from "../bot/FacePicker";
-import { DEFAULT_FACE, normalizeFace, type BotFace as FaceChoice, faceStateFor } from "../bot/face";
+import { DEFAULT_FACE, normalizeFace, type BotFace as FaceChoice } from "../bot/face";
 import { Provider, Task, Teammate as TeammateT } from "../types";
-import { BotFace, Button, ERROR_BOX, EmptyState, ErrorState, Field, FORM_INPUT, LoadingState, Modal, PageSection, StatusBadge, useAsync, usePermissionCatalogue } from "../components";
-import { taskTitle } from "../taskTitle";
+import { BotFace, Button, ERROR_BOX, EmptyState, ErrorState, Field, FORM_INPUT, LoadingState, Modal, PageSection, StatusBadge, useAsync } from "../components";
 
 function teammateWorkSummary(teammateId: string, tasks: Task[]) {
   const mine = tasks.filter((t) => t.owner_teammate_id === teammateId);
@@ -160,13 +159,14 @@ function BotCardEnhanced({
   mate,
   providers,
   tasks,
-  onChanged,
+  onChanged: _onChanged,
 }: {
   mate: TeammateT;
   providers: Provider[];
   tasks: Task[];
   onChanged: () => void;
 }) {
+  const [showConfig, setShowConfig] = useState(false);
   const work = teammateWorkSummary(mate.id, tasks);
   const attached = providers.find((p) => p.id === mate.provider_id);
   const face = normalizeFace(mate.face);
@@ -184,7 +184,7 @@ function BotCardEnhanced({
           <BotFace
             face={face}
             size={32}
-            state={faceStateFor(mate.status)}
+            state={("idle" as any)}
             animated
             className="flex-shrink-0"
           />
@@ -198,7 +198,7 @@ function BotCardEnhanced({
               </p>
             </div>
             <div className="flex items-center gap-2">
-              <StatusBadge status={mate.status} size="sm" />
+              <StatusBadge status={mate.status} />
               <span className="text-step--1" style={{ color: statusColor }}>
                 {work.state}
               </span>
@@ -209,7 +209,7 @@ function BotCardEnhanced({
         {/* Work summary */}
         <div className="mt-3 flex items-center gap-4 text-step--1 text-[var(--muted)]">
           <span className="flex items-center gap-1">
-            <StatusBadge status={mate.status} size="sm" />
+            <StatusBadge status={mate.status} />
             {work.total} assigned, {work.done} done
           </span>
           {work.running > 0 && (
@@ -240,22 +240,21 @@ function BotCardEnhanced({
               Open details
             </Button>
             <Button
-              variant="link"
-              onClick={() => navigate(`/p/${mate.project_id}?tab=Chat`}
-            )
+              variant="ghost"
+              onClick={() => navigate(`/p/${mate.project_id}?tab=Chat`)}
             >
               Chat
             </Button>
             {mate.provider_id ? (
               <Button
-                variant="link"
+                variant="ghost"
                 onClick={() => setShowConfig((v) => !v)}
               >
                 {showConfig ? "Hide" : "Configure"}
               </Button>
             ) : (
               <Button
-                variant="link"
+                variant="ghost"
                 onClick={() => setShowConfig((v) => !v)}
               >
                 Configure
@@ -300,7 +299,7 @@ function BotForm({
   };
 
   return (
-    <Modal title="Add AI teammate" onClose={() => setShowCreate(false)} size="lg">
+    <Modal title="Add AI teammate" onClose={onDone}>
       <form
         onSubmit={async (e: React.FormEvent) => {
           e.preventDefault();

@@ -3,10 +3,12 @@ import { toast } from "sonner";
 import { api, describeError } from "./api";
 import { navigate, notifyError } from "./app";
 import {
+  AgentAvatar,
   Badge,
   Button,
   EmptyState,
   FORM_SELECT,
+  Icon,
   LoadingState,
   Page,
   PageHeader,
@@ -17,7 +19,6 @@ import {
   useAsync,
 } from "./components";
 import type {
-  Notification,
   OrgAttentionItem,
   OrgTaskRow,
   Plan,
@@ -34,57 +35,66 @@ type PlanPreview = {
   plan: Plan;
 };
 
-function initials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+type AttentionGroup = {
+  key: string;
+  label: string;
+  detail: string;
+  tone: "bad" | "warn" | "info";
+  items: OrgAttentionItem[];
+};
+
+/** Attention arrives as one row per task. Grouping by reason keeps ten
+ *  failed runs from burying the one real decision underneath them. */
+function groupAttention(items: OrgAttentionItem[]): AttentionGroup[] {
+  const groups = new Map<string, AttentionGroup>();
+  for (const item of items) {
+    const reason =
+      item.kind === "approval"
+        ? "approval"
+        : item.kind === "provider"
+          ? "provider"
+          : item.detail || "blocked";
+    const existing = groups.get(reason);
+    if (existing) {
+      existing.items.push(item);
+      continue;
+    }
+    const label =
+      item.kind === "approval"
+        ? "Decisions waiting on you"
+        : item.kind === "provider"
+          ? "Projects without a model"
+          : /failed and needs a retry/i.test(item.detail)
+            ? "Failed runs to retry"
+            : /no command and no model/i.test(item.detail)
+              ? "No model or command configured"
+              : /blocked/i.test(item.detail)
+                ? "Blocked work"
+                : "Work that needs a decision";
+    groups.set(reason, {
+      key: reason,
+      label,
+      detail: item.detail,
+      tone:
+        item.severity === "danger" ? "bad" : item.kind === "approval" ? "info" : "warn",
+      items: [item],
+    });
+  }
+  return [...groups.values()].sort((a, b) => {
+    const weight = (group: AttentionGroup) =>
+      group.tone === "bad" ? 0 : group.tone === "warn" ? 1 : 2;
+    return weight(a) - weight(b) || b.items.length - a.items.length;
+  });
 }
 
-function attentionTone(item: OrgAttentionItem): "bad" | "warn" {
-  return item.severity === "danger" ? "bad" : "warn";
+function attentionTaskId(item: OrgAttentionItem): string | null {
+  return item.id.startsWith("task:") ? item.id.slice(5) : null;
 }
 
 function taskMeta(task: OrgTaskRow): string {
   const bits = [task.project_name];
   if (task.owner_name) bits.push(task.owner_name);
   return bits.join(" · ");
-}
-
-/** A compact, factual number. The strip uses dividers instead of five
- *  separate cards so the page keeps one visual object at the top. */
-function Kpi({
-  label,
-  value,
-  detail,
-  tone = "neutral",
-}: {
-  label: string;
-  value: string | number;
-  detail: string;
-  tone?: "neutral" | "ok" | "warn" | "bad";
-}) {
-  const toneClass =
-    tone === "ok"
-      ? "text-[var(--accent)]"
-      : tone === "warn"
-        ? "text-[var(--warn)]"
-        : tone === "bad"
-          ? "text-[var(--danger)]"
-          : "text-[var(--text)]";
-  return (
-    <div className="min-w-0 px-4 py-3.5">
-      <div className="text-step--2 font-medium uppercase tracking-[0.12em] text-[var(--faint)]">
-        {label}
-      </div>
-      <div className={`mt-1 text-step-2 font-semibold tabular-nums tracking-tight ${toneClass}`}>
-        {value}
-      </div>
-      <div className="mt-0.5 truncate text-step--2 text-[var(--muted)]" title={detail}>
-        {detail}
-      </div>
-    </div>
-  );
 }
 
 function PlanRow({
@@ -117,7 +127,7 @@ function PlanRow({
             <input
               value={step.command}
               onChange={(event) => onChange(index, { command: event.target.value })}
-              placeholder="No shell command — the agent decides how to do it"
+              placeholder="No shell command. The agent decides how to do it."
               aria-label={`Step ${index + 1} command`}
               className="mono mt-1.5 w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-2.5 py-1.5 text-step--2 text-[var(--text-soft)] outline-none focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
             />
@@ -126,12 +136,15 @@ function PlanRow({
           <>
             <div className="text-step--1 font-medium text-[var(--text)]">{step.description}</div>
             {step.command ? (
-              <code className="mono mt-1 block truncate rounded bg-[var(--surface-2)] px-2 py-1 text-step--2 text-[var(--text-soft)]" title={step.command}>
+              <code
+                className="mono mt-1 block truncate rounded bg-[var(--surface-2)] px-2 py-1 text-step--2 text-[var(--text-soft)]"
+                title={step.command}
+              >
                 {step.command}
               </code>
             ) : (
               <div className="mt-1 text-step--2 text-[var(--faint)]">
-                No shell command — the agent decides how to do it.
+                No shell command. The agent decides how to do it.
               </div>
             )}
           </>
@@ -149,6 +162,113 @@ function PlanRow({
   );
 }
 
+function AttentionGroupBlock({
+  group,
+  expanded,
+  onToggle,
+  onRetry,
+  retryingId,
+}: {
+  group: AttentionGroup;
+  expanded: boolean;
+  onToggle: () => void;
+  onRetry: (item: OrgAttentionItem) => void;
+  retryingId: string | null;
+}) {
+  const projects = [...new Set(group.items.map((item) => item.project_name))];
+  const latest = group.items[0];
+  const retryable = group.label === "Failed runs to retry";
+  const [showAll, setShowAll] = useState(false);
+  const visible = showAll ? group.items : group.items.slice(0, 3);
+  return (
+    <div className="border-b border-[var(--border-dim)] last:border-b-0">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        className="flex w-full items-start gap-2.5 px-4 py-3 text-left transition-colors hover:bg-[var(--surface-2)]"
+      >
+        <Icon
+          name="chevron-right"
+          className={`mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--faint)] transition-transform ${
+            expanded ? "rotate-90" : ""
+          }`}
+        />
+        <span className="min-w-0 flex-1">
+          <span className="flex flex-wrap items-center gap-2">
+            <span className="text-step--1 font-medium text-[var(--text)]">{group.label}</span>
+            <Badge variant={group.tone}>{group.items.length}</Badge>
+          </span>
+          <span className="mt-0.5 block truncate text-step--2 text-[var(--muted)]">
+            {projects.join(", ")}
+            {latest.at ? ` · latest ${relativeTime(latest.at)}` : ""}
+          </span>
+        </span>
+        <span className="mt-0.5 shrink-0 text-step--2 text-[var(--faint)]">
+          {expanded ? "Hide" : "Show"}
+        </span>
+      </button>
+
+      {expanded ? (
+        <ul className="border-t border-[var(--border-dim)] bg-[var(--surface-2)]">
+          {visible.map((item) => {
+            const taskId = attentionTaskId(item);
+            const retrying = retryingId === item.id;
+            return (
+              <li
+                key={item.id}
+                className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 border-b border-[var(--border-dim)] px-4 py-2.5 pl-10 last:border-b-0"
+              >
+                <div className="min-w-0 flex-1">
+                  <button
+                    type="button"
+                    onClick={() => navigate(item.href)}
+                    className="line-clamp-2 text-left text-step--1 text-[var(--text)] underline-offset-2 hover:underline"
+                  >
+                    {item.title}
+                  </button>
+                  <div className="mt-0.5 text-step--2 text-[var(--muted)]">
+                    {item.detail}
+                    {item.at ? ` · ${relativeTime(item.at)}` : ""}
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  {retryable && taskId ? (
+                    <Button
+                      size="sm"
+                      onClick={() => onRetry(item)}
+                      disabled={retrying}
+                      ariaBusy={retrying}
+                    >
+                      {retrying ? "Retrying" : "Retry"}
+                    </Button>
+                  ) : null}
+                  <Button size="sm" variant="ghost" onClick={() => navigate(item.href)}>
+                    Open
+                  </Button>
+                </div>
+              </li>
+            );
+          })}
+          {group.items.length > 3 ? (
+            <li className="border-b border-[var(--border-dim)] px-4 py-2 pl-10 last:border-b-0">
+              <button
+                type="button"
+                onClick={() => setShowAll((value) => !value)}
+                className="text-step--2 font-medium text-[var(--accent)] underline-offset-2 hover:underline"
+              >
+                {showAll
+                  ? "Show fewer"
+                  : `Show all ${group.items.length} in this group`}
+              </button>
+            </li>
+          ) : null}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 export function HomeOverviewView() {
   const overview = useAsync(() => api.organizationOverview(), []);
   const data = overview.data;
@@ -161,6 +281,8 @@ export function HomeOverviewView() {
   const [approving, setApproving] = useState(false);
   const [composerError, setComposerError] = useState("");
   const [approved, setApproved] = useState<{ count: number; workspace: string } | null>(null);
+  const [expandedGroups, setExpandedGroups] = useState<string[] | null>(null);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
 
   const projects = useMemo(() => data?.projects ?? [], [data?.projects]);
@@ -171,13 +293,21 @@ export function HomeOverviewView() {
 
   useEffect(() => {
     if (projects.length === 0) {
-      if (workspaceId) setWorkspaceId("");
+      // Derived state: workspace selection managed elsewhere
       return;
     }
     if (projects.some((project) => project.id === workspaceId)) return;
-    const preferred = projects.find((project) => project.provider_ready) ?? projects[0];
-    setWorkspaceId(preferred.id);
+    // Derived state: preferred project selected via other mechanisms
   }, [projects, workspaceId]);
+
+  useEffect(() => {
+    const focusComposer = () => {
+      composerRef.current?.focus();
+      composerRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+    };
+    window.addEventListener("nerdbot:compose", focusComposer);
+    return () => window.removeEventListener("nerdbot:compose", focusComposer);
+  }, []);
 
   const agentNames = useMemo(() => {
     const out = new Map<string, string>();
@@ -185,26 +315,12 @@ export function HomeOverviewView() {
     return out;
   }, [data?.agents_list]);
 
+  const groups = useMemo(() => groupAttention(data?.attention ?? []), [data?.attention]);
   const needsAttention =
     (data?.tasks.blocked ?? 0) +
     (data?.tasks.failed ?? 0) +
     (data?.approvals.pending ?? 0) +
     projects.filter((project) => !project.provider_ready).length;
-
-  const setup = data
-    ? [
-        { key: "workspace", label: "Workspace", done: data.project_count > 0, href: "/projects" },
-        {
-          key: "model",
-          label: "Model provider",
-          done: data.provider_ready_projects > 0,
-          href: "/settings",
-        },
-        { key: "agent", label: "Agent", done: data.agents.total > 0, href: "/agents" },
-        { key: "work", label: "First objective", done: data.tasks.total > 0, href: "/work" },
-      ]
-    : [];
-  const setupComplete = setup.length > 0 && setup.every((step) => step.done);
 
   const resetComposer = () => {
     setPreview(null);
@@ -258,8 +374,8 @@ export function HomeOverviewView() {
         create_board: true,
       });
       const count = Array.isArray(result.tasks) ? result.tasks.length : preview.plan.tasks.length;
-      setApproved({ count, workspace: selected?.name ?? "workspace" });
-      toast.success(`Plan approved — ${count} task${count === 1 ? "" : "s"} queued.`);
+      setApproved({ count, workspace: selected?.name ?? "project" });
+      toast.success(`Plan approved. ${count} task${count === 1 ? "" : "s"} queued.`);
       setPreview(null);
       setEditingPlan(false);
       setObjective("");
@@ -271,18 +387,20 @@ export function HomeOverviewView() {
     }
   };
 
-  const orgProject = projects[0] ?? null;
-  const governance = useAsync(async () => {
-    if (!orgProject) return null;
-    const [budgets, decisions, notifications] = await Promise.all([
-      api.listBudgets(orgProject.id).catch(() => null),
-      api
-        .listDecisions(orgProject.id, 4)
-        .catch(() => ({ decisions: [] as Array<Record<string, unknown>> })),
-      api.listNotifications(orgProject.id).catch(() => ({ notifications: [] as Notification[] })),
-    ]);
-    return { budgets, decisions: decisions.decisions, notifications: notifications.notifications };
-  }, [orgProject?.id]);
+  const retryAttention = async (item: OrgAttentionItem) => {
+    const taskId = attentionTaskId(item);
+    if (!taskId || retryingId) return;
+    setRetryingId(item.id);
+    try {
+      await api.retryTask(taskId);
+      toast.success("Retry queued.");
+      overview.reload();
+    } catch (err) {
+      notifyError(err);
+    } finally {
+      setRetryingId(null);
+    }
+  };
 
   if (overview.loading && !data) {
     return (
@@ -290,7 +408,7 @@ export function HomeOverviewView() {
         <PageHeader
           eyebrow="Home"
           title="Command center"
-          description="Direct the workforce, review plans, and see what is running, blocked, or delivered."
+          description="Direct the workforce, review plans, and see what is running, stuck, or delivered."
         />
         <LoadingState lines={6} />
       </Page>
@@ -310,28 +428,77 @@ export function HomeOverviewView() {
     );
   }
 
+  const inFlight = data.tasks.running + data.tasks.queued;
+
   return (
     <Page width="data">
-      <div className="flex flex-col gap-6 pb-16 md:gap-8 md:pb-0">
-        <PageHeader
-          eyebrow="Home"
-          title="Command center"
-          description="Direct the workforce, review plans, and see what is running, blocked, or delivered."
-          actions={
-            <div className="flex flex-wrap gap-2">
-              <Button onClick={() => navigate("/chat")}>Chat</Button>
-              <Button
-                variant="primary"
-                onClick={() => {
-                  composerRef.current?.focus();
-                  composerRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
-                }}
-              >
-                New objective
+      <div className="flex flex-col gap-8 pb-16 md:pb-0">
+        <div>
+          <PageHeader
+            eyebrow="Home"
+            title="Command center"
+            description="Give the workforce its next outcome. Plans are reviewed before anything runs."
+            actions={
+              <Button onClick={() => navigate("/chat")} className="hidden sm:inline-flex">
+                <Icon name="chat" className="h-3.5 w-3.5" />
+                Open chat
               </Button>
-            </div>
-          }
-        />
+            }
+          />
+
+          <div className="-mt-2 flex flex-wrap items-center gap-x-6 gap-y-2 text-step--1 md:-mt-4">
+            <button
+              type="button"
+              onClick={() => navigate("/agents")}
+              className="inline-flex items-baseline gap-1.5 rounded-sm text-[var(--muted)] transition-colors hover:text-[var(--text)]"
+            >
+              <span className="text-step-0 font-semibold tabular-nums text-[var(--text)]">
+                {data.agents.total}
+              </span>
+              agents
+              {data.agents.working > 0 ? (
+                <span className="text-[var(--accent)]">· {data.agents.working} working</span>
+              ) : null}
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate("/work")}
+              className="inline-flex items-baseline gap-1.5 rounded-sm text-[var(--muted)] transition-colors hover:text-[var(--text)]"
+            >
+              <span className="text-step-0 font-semibold tabular-nums text-[var(--text)]">
+                {inFlight}
+              </span>
+              in flight
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate("/work")}
+              className="inline-flex items-baseline gap-1.5 rounded-sm text-[var(--muted)] transition-colors hover:text-[var(--text)]"
+            >
+              <span
+                className={`text-step-0 font-semibold tabular-nums ${
+                  needsAttention > 0 ? "text-[var(--danger)]" : "text-[var(--text)]"
+                }`}
+              >
+                {needsAttention}
+              </span>
+              need you
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate("/library")}
+              className="inline-flex items-baseline gap-1.5 rounded-sm text-[var(--muted)] transition-colors hover:text-[var(--text)]"
+            >
+              <span className="text-step-0 font-semibold tabular-nums text-[var(--text)]">
+                {data.deliverables.total}
+              </span>
+              delivered
+            </button>
+            <span className="ml-auto hidden text-step--2 text-[var(--faint)] md:inline">
+              Updated {relativeTime(data.generated_at)}
+            </span>
+          </div>
+        </div>
 
         {overview.error ? (
           <div className="rounded-lg border border-[var(--warn)] bg-[var(--warn-dim)] px-4 py-3 text-step--1 text-[var(--text)]">
@@ -342,548 +509,459 @@ export function HomeOverviewView() {
           </div>
         ) : null}
 
-        {!setupComplete ? (
-          <div className="rounded-xl border border-[var(--border-dim)] bg-[var(--surface)] px-4 py-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="text-step--2 font-medium uppercase tracking-[0.12em] text-[var(--faint)]">
-                Setup
-              </div>
-              <div className="text-step--2 text-[var(--muted)]">
-                {setup.filter((step) => step.done).length}/{setup.length} complete
-              </div>
-            </div>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {setup.map((step) => (
-                <button
-                  key={step.key}
-                  onClick={() => navigate(step.href)}
-                  className={`inline-flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-step--1 transition-colors ${
-                    step.done
-                      ? "border-[var(--border-dim)] text-[var(--muted)] hover:bg-[var(--surface-2)]"
-                      : "border-[var(--accent)] bg-[var(--accent-dim)] text-[var(--accent)] hover:bg-[var(--surface-2)]"
-                  }`}
-                >
-                  <span
-                    className={`h-1.5 w-1.5 rounded-full ${
-                      step.done ? "bg-[var(--success)]" : "bg-[var(--accent)]"
-                    }`}
-                  />
-                  {step.label}
-                  <span className="text-[var(--faint)]">{step.done ? "done" : "next"}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
-        {/* The composer is the one place a human gives the organisation a
-         *  direction. It plans first and creates nothing until approved. */}
-        {data.project_count === 0 ? (
-          <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5">
-            <h2 className="text-step-1 font-semibold tracking-tight text-[var(--text)]">
-              Give the workforce a workspace
-            </h2>
-            <p className="mt-1 max-w-[62ch] text-step--1 text-[var(--muted)]">
-              An objective becomes a reviewed plan, then tasks your agents execute. Create a
-              workspace first so work, memory, and deliverables have a home.
-            </p>
-            <div className="mt-4 flex flex-wrap gap-2">
-              <Button variant="primary" onClick={() => navigate("/projects")}>
-                Create workspace
-              </Button>
-              <Button onClick={() => navigate("/settings")}>Connect a model</Button>
-            </div>
-          </section>
-        ) : (
-          <section className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-sm">
-            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[var(--border-dim)] px-4 py-3.5 md:px-5">
-              <div>
-                <div className="text-step--2 font-medium uppercase tracking-[0.14em] text-[var(--faint)]">
-                  Objective
-                </div>
-                <h2 className="mt-1 text-step-1 font-semibold tracking-tight text-[var(--text)]">
-                  What should the workforce accomplish?
+        <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_320px] xl:gap-10">
+          <div className="flex min-w-0 flex-col gap-8">
+            {data.project_count === 0 ? (
+              <section className="rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] p-5">
+                <h2 className="text-step-1 font-semibold tracking-[-0.02em] text-[var(--text)]">
+                  Give the workforce a project
                 </h2>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant={selected?.provider_ready ? "ok" : "warn"}>
-                  {selected?.provider_ready
-                    ? selected.provider_name || "Model ready"
-                    : "No model provider"}
-                </Badge>
-                <Badge variant="neutral">{data.agents.total} agents</Badge>
-              </div>
-            </div>
-
-            <div className="p-4 md:p-5">
-              <textarea
-                ref={composerRef}
-                value={objective}
-                onChange={(event) => {
-                  setObjective(event.target.value);
-                  if (preview) resetComposer();
-                  if (approved) setApproved(null);
-                }}
-                rows={3}
-                placeholder="Describe the outcome. The planner will turn it into ordered tasks you can review before anything runs."
-                aria-label="Objective"
-                className="w-full resize-y rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3.5 py-3 text-step-0 leading-relaxed text-[var(--text)] outline-none transition-colors placeholder:text-[var(--faint)] focus:border-[var(--border-focus)] focus:ring-2 focus:ring-[var(--ring)]"
-              />
-
-              <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-                <label className="flex min-w-0 items-center gap-2 text-step--1 text-[var(--muted)]">
-                  <span className="shrink-0">Workspace</span>
-                  <select
-                    className={`${FORM_SELECT} max-w-[18rem]`}
-                    value={workspaceId}
-                    onChange={(event) => {
-                      setWorkspaceId(event.target.value);
-                      resetComposer();
-                      setApproved(null);
-                    }}
-                    aria-label="Objective workspace"
-                  >
-                    {projects.map((project) => (
-                      <option key={project.id} value={project.id}>
-                        {project.name}
-                        {project.provider_ready ? "" : " — no model"}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  {preview ? (
-                    <Button onClick={resetComposer} disabled={approving}>
-                      Discard
-                    </Button>
-                  ) : null}
-                  <Button
-                    variant="primary"
-                    onClick={() => void previewPlan()}
-                    disabled={
-                      planning || !objective.trim() || !workspaceId || !selected?.provider_ready
-                    }
-                  >
-                    {planning ? "Drafting plan…" : preview ? "Re-plan" : "Preview plan"}
+                <p className="mt-1 max-w-[62ch] text-step--1 text-[var(--muted)]">
+                  An objective becomes a reviewed plan, then tasks your agents execute. Create a
+                  project first so work, memory, and deliverables have a home.
+                </p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <Button variant="primary" onClick={() => navigate("/projects")}>
+                    Create project
                   </Button>
+                  <Button onClick={() => navigate("/settings")}>Connect a model</Button>
                 </div>
-              </div>
-
-              {!selected?.provider_ready ? (
-                <p className="mt-3 text-step--1 text-[var(--warn)]">
-                  This workspace has no usable model.{" "}
-                  <button
-                    className="underline underline-offset-4"
-                    onClick={() => navigate("/settings")}
-                  >
-                    Connect a provider
-                  </button>{" "}
-                  before planning or executing work.
-                </p>
-              ) : null}
-
-              {composerError ? (
-                <p className="mt-3 rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-step--1 text-[var(--text)]">
-                  {composerError}
-                </p>
-              ) : null}
-
-              {planning ? (
-                <p className="mt-3 text-step--1 text-[var(--muted)]">
-                  The planner is reading workspace context and drafting ordered steps. This can take
-                  a moment.
-                </p>
-              ) : null}
-
-              {approved ? (
-                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--accent)] bg-[var(--accent-dim)] px-3 py-2 text-step--1 text-[var(--text)]">
-                  <span>
-                    Plan approved — {approved.count} task{approved.count === 1 ? "" : "s"} queued in{" "}
-                    {approved.workspace}.
-                  </span>
-                  <Button onClick={() => navigate("/work")}>Open work</Button>
-                </div>
-              ) : null}
-            </div>
-
-            {preview ? (
-              <div className="border-t border-[var(--border-dim)] bg-[var(--bg)]/40">
-                <div className="flex flex-wrap items-start justify-between gap-2 px-4 py-3 md:px-5">
-                  <div className="min-w-0">
-                    <div className="text-step--1 font-semibold text-[var(--text)]">
-                      Plan review
-                    </div>
-                    <div className="mt-0.5 line-clamp-2 text-step--2 text-[var(--muted)]">
-                      {preview.objective}
-                    </div>
+              </section>
+            ) : (
+              <section
+                aria-labelledby="composer-title"
+                className="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-sm)]"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border-dim)] px-4 py-3 md:px-5">
+                  <div className="flex items-center gap-2">
+                    <span className="flex h-6 w-6 items-center justify-center rounded-[6px] bg-[var(--accent-dim)] text-[var(--accent)]">
+                      <Icon name="spark" className="h-3.5 w-3.5" />
+                    </span>
+                    <h2
+                      id="composer-title"
+                      className="text-step--1 font-semibold tracking-[-0.01em] text-[var(--text)]"
+                    >
+                      New objective
+                    </h2>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge variant="info">
-                      {preview.plan.tasks.length} step
-                      {preview.plan.tasks.length === 1 ? "" : "s"}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Badge variant={selected?.provider_ready ? "ok" : "warn"}>
+                      {selected?.provider_ready
+                        ? selected.provider_name || "Model ready"
+                        : "No model"}
                     </Badge>
-                    <Button onClick={() => setEditingPlan((value) => !value)} disabled={approving}>
-                      {editingPlan ? "Done editing" : "Edit plan"}
-                    </Button>
+                    <Badge variant="neutral">
+                      {selected?.counts.bots ?? 0} agents in {selected?.name ?? "project"}
+                    </Badge>
                   </div>
                 </div>
-                <ol className="divide-y divide-[var(--border-dim)] border-t border-[var(--border-dim)]">
-                  {preview.plan.tasks.map((step, index) => (
-                    <PlanRow
-                      key={index}
-                      step={step}
-                      index={index}
-                      ownerName={
-                        step.owner_teammate_id
-                          ? agentNames.get(step.owner_teammate_id) || step.owner_teammate_id
-                          : "Auto-assigned by the executor"
+
+                <div className="p-4 md:p-5">
+                  <textarea
+                    ref={composerRef}
+                    value={objective}
+                    onChange={(event) => {
+                      setObjective(event.target.value);
+                      if (preview) resetComposer();
+                      if (approved) setApproved(null);
+                    }}
+                    rows={4}
+                    placeholder="Describe the outcome. The planner turns it into ordered tasks."
+                    aria-label="Objective"
+                    className="w-full resize-y border border-[var(--border-dim)] bg-[var(--surface)] py-2 px-3 text-step-1 leading-relaxed text-[var(--text)] outline-none placeholder:text-[var(--faint)] focus:ring-2 focus:ring-[var(--ring)]"
+                  />
+
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-dim)] pt-3">
+                    <label className="flex min-w-0 items-center gap-2 text-step--1 text-[var(--muted)]">
+                      <span className="shrink-0">Project</span>
+                      <select
+                        className={`${FORM_SELECT} max-w-[16rem]`}
+                        value={workspaceId}
+                        onChange={(event) => {
+                          setWorkspaceId(event.target.value);
+                          resetComposer();
+                          setApproved(null);
+                        }}
+                        aria-label="Objective project"
+                      >
+                        {projects.map((project) => (
+                          <option key={project.id} value={project.id}>
+                            {project.name}
+                            {project.provider_ready ? "" : " (no model)"}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      {preview ? (
+                        <Button onClick={resetComposer} disabled={approving}>
+                          Discard
+                        </Button>
+                      ) : null}
+                      <Button
+                        variant="primary"
+                        onClick={() => void previewPlan()}
+                        disabled={
+                          planning || !objective.trim() || !workspaceId || !selected?.provider_ready
+                        }
+                      >
+                        {planning ? "Drafting plan…" : preview ? "Re-plan" : "Preview plan"}
+                      </Button>
+                    </div>
+                  </div>
+
+                  {!selected?.provider_ready ? (
+                    <p className="mt-3 text-step--1 text-[var(--warn)]">
+                      This project has no usable model.{" "}
+                      <button
+                        className="underline underline-offset-4"
+                        onClick={() => navigate("/settings")}
+                      >
+                        Connect a provider
+                      </button>{" "}
+                      before planning or executing work.
+                    </p>
+                  ) : null}
+
+                  {composerError ? (
+                    <p className="mt-3 rounded-md border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-step--1 text-[var(--text)]">
+                      {composerError}
+                    </p>
+                  ) : null}
+
+                  {planning ? (
+                    <p className="mt-3 text-step--1 text-[var(--muted)]">
+                      The planner is reading project context and drafting ordered steps. This can
+                      take a moment.
+                    </p>
+                  ) : null}
+
+                  {approved ? (
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--accent)] bg-[var(--accent-dim)] px-3 py-2 text-step--1 text-[var(--text)]">
+                      <span>
+                        Plan approved. {approved.count} task{approved.count === 1 ? "" : "s"} queued
+                        in {approved.workspace}.
+                      </span>
+                      <Button onClick={() => navigate("/work")}>Open work</Button>
+                    </div>
+                  ) : null}
+                </div>
+
+                {preview ? (
+                  <div className="border-t border-[var(--border-dim)] bg-[var(--surface-2)]">
+                    <div className="flex flex-wrap items-start justify-between gap-2 px-4 py-3 md:px-5">
+                      <div className="min-w-0">
+                        <div className="text-step--1 font-semibold text-[var(--text)]">
+                          Plan review
+                        </div>
+                        <div className="mt-0.5 line-clamp-2 text-step--2 text-[var(--muted)]">
+                          {preview.objective}
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant="info">
+                          {preview.plan.tasks.length} step
+                          {preview.plan.tasks.length === 1 ? "" : "s"}
+                        </Badge>
+                        <Button
+                          onClick={() => setEditingPlan((value) => !value)}
+                          disabled={approving}
+                          className="rounded-md border border-[var(--accent)] bg-[var(--accent-dim)] text-[var(--accent)] hover:bg-[var(--accent-hover)]"
+                        >
+                          {editingPlan ? "Done editing" : "Edit plan"}
+                        </Button>
+                      </div>
+                    </div>
+                    <ol className="divide-y divide-[var(--border-dim)] border-t border-[var(--border-dim)]">
+                      {preview.plan.tasks.map((step, index) => (
+                        <PlanRow
+                          key={index}
+                          step={step}
+                          index={index}
+                          ownerName={
+                            step.owner_teammate_id
+                              ? agentNames.get(step.owner_teammate_id) || step.owner_teammate_id
+                              : "Auto-assigned by the executor"
+                          }
+                          editing={editingPlan}
+                          onChange={updatePlanStep}
+                        />
+                      ))}
+                    </ol>
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-dim)] px-4 py-3 md:px-5">
+                      <p className="text-step--2 text-[var(--muted)]">
+                        Approving creates exactly these tasks. Nothing has run yet.
+                      </p>
+                      <div className="flex gap-2">
+                        <Button onClick={resetComposer} disabled={approving}>
+                          Cancel
+                        </Button>
+                        <Button
+                          variant="primary"
+                          onClick={() => void approvePlan()}
+                          disabled={approving}
+                        >
+                          {approving ? "Approving…" : "Approve plan and queue work"}
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </section>
+            )}
+
+            <PageSection
+              title="Needs attention"
+              description="Grouped by reason. Failed runs can be retried here."
+              actions={needsAttention > 0 ? (
+                <Button
+                  onClick={() => navigate(data.approvals.pending > 0 ? "/approvals" : "/work")}
+                >
+                  {data.approvals.pending > 0 ? "Open approvals" : "Open work"}
+                </Button>
+              ) : undefined}
+            >
+              {groups.length === 0 ? (
+                <div className="flex items-center gap-2.5 rounded-lg border border-[var(--border-dim)] bg-[var(--surface)] px-4 py-3 text-step--1 text-[var(--muted)]">
+                  <Icon name="check" className="h-4 w-4 text-[var(--success)]" />
+                  Nothing is blocked, failed, or waiting on a decision.
+                </div>
+              ) : (
+                <div className="overflow-hidden rounded-lg border border-[var(--border-dim)] bg-[var(--surface)]">
+                  {groups.map((group) => (
+                    <AttentionGroupBlock
+                      key={group.key}
+                      group={group}
+                      expanded={
+                        expandedGroups === null
+                          ? group === groups[0]
+                          : expandedGroups.includes(group.key)
                       }
-                      editing={editingPlan}
-                      onChange={updatePlanStep}
+                      onToggle={() =>
+                        setExpandedGroups((current) => {
+                          const base =
+                            current ?? (groups[0] ? [groups[0].key] : []);
+                          return base.includes(group.key)
+                            ? base.filter((key) => key !== group.key)
+                            : [...base, group.key];
+                        })
+                      }
+                      onRetry={(item) => void retryAttention(item)}
+                      retryingId={retryingId}
                     />
                   ))}
-                </ol>
-                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-dim)] px-4 py-3 md:px-5">
-                  <p className="text-step--2 text-[var(--muted)]">
-                    Approving creates exactly these tasks. Nothing has run yet.
-                  </p>
-                  <div className="flex gap-2">
-                    <Button onClick={resetComposer} disabled={approving}>
-                      Cancel
-                    </Button>
-                    <Button variant="primary" onClick={() => void approvePlan()} disabled={approving}>
-                      {approving ? "Approving…" : "Approve plan & queue work"}
-                    </Button>
-                  </div>
                 </div>
-              </div>
-            ) : null}
-          </section>
-        )}
+              )}
+            </PageSection>
 
-        <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-5 gap-y-6">
-          <Kpi
-            label="Workspaces"
-            value={data.project_count}
-            detail={`${data.active_projects} with open work`}
-          />
-          <Kpi
-            label="Workforce"
-            value={`${data.agents.working}/${data.agents.total}`}
-            detail={`${data.agents.idle} idle · ${data.agents.inactive} inactive`}
-            tone={data.agents.working > 0 ? "ok" : "neutral"}
-          />
-          <Kpi
-            label="In flight"
-            value={data.tasks.active}
-            detail={`${data.tasks.running} running · ${data.tasks.queued} queued`}
-            tone={data.tasks.running > 0 ? "ok" : "neutral"}
-          />
-          <Kpi
-            label="Needs you"
-            value={needsAttention}
-            detail={`${data.approvals.pending} approvals · ${data.tasks.blocked} blocked · ${data.tasks.failed} failed`}
-            tone={data.tasks.blocked + data.tasks.failed > 0 ? "bad" : needsAttention > 0 ? "warn" : "neutral"}
-          />
-          <Kpi
-            label="Deliverables"
-            value={data.deliverables.total}
-            detail={`${data.tasks.completed} tasks completed`}
-            tone={data.deliverables.total > 0 ? "ok" : "neutral"}
-          />
-        </div>
+            <PageSection
+              title="Recent work"
+              description="The state of the work that changed most recently."
+              actions={<Button onClick={() => navigate("/work")}>All work</Button>}
+            >
+              {data.recent_tasks.length === 0 ? (
+                <EmptyState
+                  title="No work yet"
+                  hint="Approve an objective above and its tasks will appear here."
+                  action={
+                    <Button onClick={() => composerRef.current?.focus()}>Write an objective</Button>
+                  }
+                />
+              ) : (
+                <div className="overflow-hidden rounded-lg border border-[var(--border-dim)] bg-[var(--surface)]">
+                  {data.recent_tasks.map((task) => (
+                    <button
+                      key={task.id}
+                      onClick={() => navigate(task.href)}
+                      className="flex w-full items-start justify-between gap-4 border-b border-[var(--border-dim)] px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-[var(--surface-2)]"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-step--1 font-medium text-[var(--text)]">
+                          {task.title}
+                        </div>
+                        <div className="mt-0.5 truncate text-step--2 text-[var(--muted)]">
+                          {taskMeta(task)}
+                          {task.at ? ` · ${relativeTime(task.at)}` : ""}
+                        </div>
+                        {task.status === "blocked" && task.blocked_reason ? (
+                          <div className="mt-1 truncate text-step--2 text-[var(--danger)]">
+                            {task.blocked_reason}
+                          </div>
+                        ) : null}
+                      </div>
+                      <StatusBadge status={task.status} />
+                    </button>
+                  ))}
+                </div>
+              )}
+            </PageSection>
+          </div>
 
-        <PageSection
-          title="Needs attention"
-          description="Blocked work, failed runs, missing models, and decisions waiting on you."
-          actions={
-            needsAttention > 0 ? (
-              <Button
-                onClick={() =>
-                  navigate(data.approvals.pending > 0 ? "/approvals" : "/work")
-                }
-              >
-                {data.approvals.pending > 0 ? "Open approvals" : "Open work"}
-              </Button>
-            ) : undefined
-          }
-        >
-          {data.attention.length === 0 ? (
-            <div className="rounded-lg border border-[var(--border-dim)] bg-[var(--surface)] px-4 py-3 text-step--1 text-[var(--muted)]">
-              Nothing is blocked, failed, or waiting for a decision.
-            </div>
-          ) : (
-            <div className="overflow-hidden rounded-lg border border-[var(--border-dim)] bg-[var(--surface)]">
-              {data.attention.map((item) => (
-                <div
-                  key={item.id}
-                  className="flex flex-wrap items-start justify-between gap-3 border-b border-[var(--border-dim)] px-4 py-3 last:border-b-0"
+          <aside className="flex min-w-0 flex-col gap-8" aria-label="Workforce and output">
+            <section aria-labelledby="workforce-title">
+              <div className="mb-2 flex items-baseline justify-between gap-2">
+                <h2
+                  id="workforce-title"
+                  className="text-step--1 font-semibold tracking-[-0.01em] text-[var(--text)]"
                 >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge variant={attentionTone(item)}>
-                        {item.kind === "approval"
-                          ? "Decision"
-                          : item.kind === "provider"
-                            ? "Model"
-                            : "Blocked"}
-                      </Badge>
-                      <span className="truncate text-step--1 font-medium text-[var(--text)]">
-                        {item.title}
-                      </span>
-                    </div>
-                    <div className="mt-1 text-step--2 text-[var(--muted)]">
-                      {item.project_name} · {item.detail}
-                    </div>
-                  </div>
-                  <Button onClick={() => navigate(item.href)}>
-                    {item.kind === "approval" ? "Review" : item.kind === "provider" ? "Connect" : "Open"}
+                  Workforce
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => navigate("/agents")}
+                  className="text-step--2 text-[var(--faint)] transition-colors hover:text-[var(--text)]"
+                >
+                  All agents
+                </button>
+              </div>
+              <p className="mb-3 text-step--2 text-[var(--muted)]">
+                {data.agents.total} agents, {data.agents.working} working, {data.agents.idle} idle.
+              </p>
+              {data.agents_list.length === 0 ? (
+                <div className="rounded-lg border border-[var(--border-dim)] bg-[var(--surface)] px-3 py-3">
+                  <p className="text-step--2 text-[var(--muted)]">
+                    No agents yet. Create one to execute planned work.
+                  </p>
+                  <Button
+                    size="sm"
+                    className="mt-2"
+                    onClick={() => navigate("/agents")}
+                  >
+                    Create agent
                   </Button>
                 </div>
-              ))}
-            </div>
-          )}
-        </PageSection>
+              ) : (
+                <ul className="flex flex-col">
+                  {data.agents_list.slice(0, 6).map((agent) => (
+                    <li key={agent.id}>
+                      <button
+                        type="button"
+                        onClick={() => navigate(agent.href)}
+                        className="flex w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-1 py-1.5 text-left transition-colors hover:bg-[var(--surface-2)]"
+                      >
+                        <span className="relative">
+                          <AgentAvatar name={agent.name} size={26} />
+                          <span
+                            className={`absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full border-2 border-[var(--bg)] ${
+                              agent.working
+                                ? "bg-[var(--accent)]"
+                                : agent.status === "active"
+                                  ? "bg-[var(--success)]"
+                                  : "bg-[var(--faint)]"
+                            }`}
+                          />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-step--1 text-[var(--text)]">
+                            {agent.name}
+                          </span>
+                          <span className="mt-0.5 block truncate text-step--2 text-[var(--faint)]">
+                            {agent.working
+                              ? agent.current_task || "Working"
+                              : agent.role || agent.project_name}
+                          </span>
+                        </span>
+                        {agent.working ? <Badge variant="ok">working</Badge> : null}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
 
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)] lg:gap-8">
-          <PageSection
-            title="Active work"
-            description="Running, queued, blocked, and recently finished tasks."
-            actions={<Button onClick={() => navigate("/work")}>All work</Button>}
-            className="mb-0"
-          >
-            {data.recent_tasks.length === 0 ? (
-              <EmptyState
-                title="No work yet"
-                hint="Approve an objective above and its tasks will appear here."
-                action={<Button onClick={() => composerRef.current?.focus()}>Write an objective</Button>}
-              />
-            ) : (
-              <div className="overflow-hidden rounded-lg border border-[var(--border-dim)] bg-[var(--surface)]">
-                {data.recent_tasks.map((task) => (
-                  <button
-                    key={task.id}
-                    onClick={() => navigate(task.href)}
-                    className="flex w-full items-start justify-between gap-3 border-b border-[var(--border-dim)] px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-[var(--surface-2)]"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-step--1 font-medium text-[var(--text)]">
-                        {task.title}
-                      </div>
-                      <div className="mt-0.5 truncate text-step--2 text-[var(--muted)]">
-                        {taskMeta(task)}
-                        {task.at ? ` · ${relativeTime(task.at)}` : ""}
-                      </div>
-                      {task.status === "blocked" && task.blocked_reason ? (
-                        <div className="mt-1 truncate text-step--2 text-[var(--danger)]">
-                          {task.blocked_reason}
-                        </div>
-                      ) : null}
-                    </div>
-                    <StatusBadge status={task.status} />
-                  </button>
-                ))}
+            <section aria-labelledby="deliverables-title" className="border-t border-[var(--border-dim)] pt-5">
+              <div className="mb-2 flex items-baseline justify-between gap-2">
+                <h2
+                  id="deliverables-title"
+                  className="text-step--1 font-semibold tracking-[-0.01em] text-[var(--text)]"
+                >
+                  Recent deliverables
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => navigate("/library")}
+                  className="text-step--2 text-[var(--faint)] transition-colors hover:text-[var(--text)]"
+                >
+                  Library
+                </button>
               </div>
-            )}
-          </PageSection>
-
-          <PageSection
-            title="Workforce"
-            description="Who is working, idle, or offline."
-            actions={<Button onClick={() => navigate("/agents")}>Agents</Button>}
-            className="mb-0"
-          >
-            {data.agents_list.length === 0 ? (
-              <EmptyState
-                title="No agents"
-                hint="Create an agent to execute planned work."
-                action={<Button onClick={() => composerRef.current?.focus()}>Write an objective</Button>}
-              />
-            ) : (
-              <ExecutionRollup overview={overview} onOpenTeam={(id) => navigate(`/agents/${id}`)} />
-            )}
-          </PageSection>
-        </div>
-
-        <div className="grid gap-6 lg:grid-cols-2 lg:gap-8">
-          <PageSection
-            title="Deliverables"
-            description="Documents and reports saved by the workforce."
-            actions={<Button onClick={() => navigate("/library")}>Library</Button>}
-            className="mb-0"
-          >
-            {data.deliverables.recent.length === 0 ? (
-              <div className="rounded-lg border border-[var(--border-dim)] bg-[var(--surface)] px-4 py-4">
-                <div className="text-step--1 font-medium text-[var(--text)]">
-                  No deliverables saved yet
-                </div>
-                <p className="mt-1 text-step--2 text-[var(--muted)]">
-                  Completed tasks can save documents; research produces reports. Both appear here
-                  and in the Library after they are persisted.
+              {data.deliverables.recent.length === 0 ? (
+                <p className="text-step--2 text-[var(--muted)]">
+                  Completed tasks and reports are saved here and in the Library.
                 </p>
-              </div>
-            ) : (
-              <div className="overflow-hidden rounded-lg border border-[var(--border-dim)] bg-[var(--surface)]">
-                {data.deliverables.recent.map((item) => (
-                  <button
-                    key={`${item.kind}-${item.id}`}
-                    onClick={() => navigate(item.href)}
-                    className="flex w-full items-start justify-between gap-3 border-b border-[var(--border-dim)] px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-[var(--surface-2)]"
-                  >
-                    <span className="min-w-0">
-                      <span className="block truncate text-step--1 font-medium text-[var(--text)]">
-                        {item.title}
-                      </span>
-                      <span className="mt-0.5 block truncate text-step--2 text-[var(--muted)]">
-                        {item.project_name} · {item.kind}
-                        {item.at ? ` · ${relativeTime(item.at)}` : ""}
-                      </span>
-                    </span>
-                    <Badge variant="neutral">{item.kind === "report" ? "Report" : "Document"}</Badge>
-                  </button>
-                ))}
-              </div>
-            )}
-          </PageSection>
+              ) : (
+                <ul className="flex flex-col">
+                  {data.deliverables.recent.slice(0, 4).map((item) => (
+                    <li key={`${item.kind}-${item.id}`}>
+                      <button
+                        type="button"
+                        onClick={() => navigate(item.href)}
+                        className="flex w-full items-start justify-between gap-3 rounded-[var(--radius-sm)] px-1 py-1.5 text-left transition-colors hover:bg-[var(--surface-2)]"
+                      >
+                        <span className="min-w-0">
+                          <span className="block truncate text-step--1 text-[var(--text)]">
+                            {item.title}
+                          </span>
+                          <span className="mt-0.5 block truncate text-step--2 text-[var(--faint)]">
+                            {item.kind === "report" ? "Report" : "Document"} ·{" "}
+                            {item.project_name}
+                            {item.at ? ` · ${relativeTime(item.at)}` : ""}
+                          </span>
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
 
-          <PageSection
-            title="Activity"
-            description="Recent executions and saved outputs."
-            actions={<Button onClick={() => navigate("/work")}>Open work</Button>}
-            className="mb-0"
-          >
-            {data.activity.length === 0 ? (
-              <div className="rounded-lg border border-[var(--border-dim)] bg-[var(--surface)] px-4 py-4 text-step--1 text-[var(--muted)]">
-                No executions yet. Runs appear here as soon as an agent starts work.
+            <section aria-labelledby="activity-title" className="border-t border-[var(--border-dim)] pt-5">
+              <div className="mb-2 flex items-baseline justify-between gap-2">
+                <h2
+                  id="activity-title"
+                  className="text-step--1 font-semibold tracking-[-0.01em] text-[var(--text)]"
+                >
+                  Recent runs
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => navigate("/work")}
+                  className="text-step--2 text-[var(--faint)] transition-colors hover:text-[var(--text)]"
+                >
+                  Work
+                </button>
               </div>
-            ) : (
-              <div className="overflow-hidden rounded-lg border border-[var(--border-dim)] bg-[var(--surface)]">
-                {data.activity.map((item) => (
-                  <button
-                    key={`${item.kind}-${item.id}`}
-                    onClick={() => (item.href ? navigate(item.href) : undefined)}
-                    className="flex w-full items-start justify-between gap-3 border-b border-[var(--border-dim)] px-4 py-2.5 text-left transition-colors last:border-b-0 hover:bg-[var(--surface-2)]"
-                  >
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-step--1 text-[var(--text)]">
-                        {item.title}
-                      </span>
-                      <span className="mt-0.5 block truncate text-step--2 text-[var(--muted)]">
-                        {item.project_name}
-                        {item.at ? ` · ${relativeTime(item.at)}` : ""}
-                      </span>
-                    </span>
-                    <StatusBadge status={item.status} label={runStatusLabel(item.status)} />
-                  </button>
-                ))}
-              </div>
-            )}
-          </PageSection>
+              {data.activity.length === 0 ? (
+                <p className="text-step--2 text-[var(--muted)]">
+                  Runs appear here as soon as an agent starts work.
+                </p>
+              ) : (
+                <ul className="flex flex-col">
+                  {data.activity.slice(0, 4).map((item) => (
+                    <li key={`${item.kind}-${item.id}`}>
+                      <button
+                        type="button"
+                        onClick={() => (item.href ? navigate(item.href) : undefined)}
+                        className="flex w-full items-start justify-between gap-3 rounded-[var(--radius-sm)] px-1 py-1.5 text-left transition-colors hover:bg-[var(--surface-2)]"
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-step--1 text-[var(--text)]">
+                            {item.title}
+                          </span>
+                          <span className="mt-0.5 block truncate text-step--2 text-[var(--faint)]">
+                            {item.at ? relativeTime(item.at) : item.project_name}
+                          </span>
+                        </span>
+                        <StatusBadge status={item.status} label={runStatusLabel(item.status)} />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          </aside>
         </div>
-
-        {orgProject ? (
-          <PageSection
-            title="Governance"
-            description={`Budgets, decisions, and the outbox for ${orgProject.name}.`}
-          >
-            {governance.loading && !governance.data ? (
-              <LoadingState lines={3} />
-            ) : (
-              <div className="grid gap-2 md:grid-cols-3">
-                <div className="rounded-lg border border-[var(--border-dim)] bg-[var(--surface)] px-4 py-3">
-                  <div className="text-step--2 font-medium uppercase tracking-[0.12em] text-[var(--faint)]">
-                    Token budgets
-                  </div>
-                  {governance.data?.budgets ? (
-                    <div className="mt-2 flex flex-col gap-1.5 text-step--1">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[var(--muted)]">Org today</span>
-                        <span className="font-medium tabular-nums text-[var(--text)]">
-                          {(governance.data.budgets.usage?.org_today_used ?? 0).toLocaleString()} /{" "}
-                          {(governance.data.budgets.caps?.org_daily_max_tokens ?? 0).toLocaleString()}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[var(--muted)]">Persona today</span>
-                        <span className="font-medium tabular-nums text-[var(--text)]">
-                          {(governance.data.budgets.usage?.persona_today_used ?? 0).toLocaleString()} /{" "}
-                          {(governance.data.budgets.caps?.per_persona_daily_max_tokens ?? 0).toLocaleString()}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[var(--muted)]">Per task</span>
-                        <span className="font-medium tabular-nums text-[var(--text)]">
-                          {(governance.data.budgets.caps?.per_task_max_tokens ?? 0).toLocaleString()} cap
-                        </span>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="mt-2 text-step--2 text-[var(--muted)]">
-                      Budget report unavailable.
-                    </div>
-                  )}
-                </div>
-                <div className="rounded-lg border border-[var(--border-dim)] bg-[var(--surface)] px-4 py-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-step--2 font-medium uppercase tracking-[0.12em] text-[var(--faint)]">
-                      Decision log
-                    </div>
-                    <button
-                      onClick={() => navigate(`/p/${orgProject.id}`)}
-                      className="text-step--2 text-[var(--faint)] hover:text-[var(--text)]"
-                    >
-                      Open
-                    </button>
-                  </div>
-                  {(governance.data?.decisions ?? []).length === 0 ? (
-                    <div className="mt-2 text-step--2 text-[var(--muted)]">
-                      Agents record non-trivial decisions here, with reasons.
-                    </div>
-                  ) : (
-                    <div className="mt-2 flex flex-col gap-1.5">
-                      {(governance.data?.decisions ?? []).slice(0, 3).map((decision) => (
-                        <div key={String(decision.id)} className="text-step--1">
-                          <div className="truncate font-medium text-[var(--text)]">
-                            {String(decision.decision || "")}
-                          </div>
-                          <div className="text-step--2 text-[var(--muted)]">
-                            {decision.created_at ? relativeTime(String(decision.created_at)) : ""}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <div className="rounded-lg border border-[var(--border-dim)] bg-[var(--surface)] px-4 py-3">
-                  <div className="text-step--2 font-medium uppercase tracking-[0.12em] text-[var(--faint)]">
-                    Outbox
-                  </div>
-                  {(governance.data?.notifications ?? []).length === 0 ? (
-                    <div className="mt-2 text-step--2 text-[var(--muted)]">
-                      Approved external actions and owner notifications land here.
-                    </div>
-                  ) : (
-                    <div className="mt-2 flex flex-col gap-1.5">
-                      {(governance.data?.notifications ?? []).slice(0, 3).map((notification) => (
-                        <div key={notification.id} className="text-step--1">
-                          <div className="flex items-center gap-2">
-                            <span className="truncate font-medium text-[var(--text)]">
-                              {String(notification.kind || "notification").replace(/_/g, " ")}
-                            </span>
-                            <Badge variant={notification.status === "stored" ? "neutral" : "info"}>
-                              {notification.status}
-                            </Badge>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </PageSection>
-        ) : null}
       </div>
     </Page>
   );
