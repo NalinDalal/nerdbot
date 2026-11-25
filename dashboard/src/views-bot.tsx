@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { toast } from "sonner";
 import { ApiError, api } from "./api";
 import { describeError, navigate, notifyError } from "./app";
@@ -46,30 +46,33 @@ function TeammateMemorySection({ teammateId }: { teammateId: string }) {
   const [error, setError] = useState<string | null>(null);
   const limit = 20;
 
-  const reload = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await api.listMemory(scope, {
-        q: q || undefined,
-        tier: tier || undefined,
-        pinned: pinnedOnly || undefined,
-        limit,
-        offset: page * limit,
-      });
-      setData({ entries: res.entries || [], total: res.total ?? (res.entries || []).length });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  };
+  const reload = useCallback(
+    async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await api.listMemory(scope, {
+          q: q || undefined,
+          tier: tier || undefined,
+          pinned: pinnedOnly || undefined,
+          limit,
+          offset: page * limit,
+        });
+        setData({ entries: res.entries || [], total: res.total ?? (res.entries || []).length });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setLoading(false);
+      }
+    },
+    [scope, q, tier, pinnedOnly, page, limit],
+  );
 
-  useEffect(() => { void reload(); }, [teammateId, q, tier, pinnedOnly, page]);
+  useEffect(() => { void reload(); }, [teammateId, q, tier, pinnedOnly, page, reload]);
   useEffect(() => { setPage(0); }, [q, tier, pinnedOnly, teammateId]);
 
   const act = async (fn: () => Promise<unknown>) => {
-    try { await fn(); await reload(); } catch (err) { notifyError(err); }
+    try { await fn(); } catch (err) { notifyError(err); }
   };
 
   const entries = data?.entries ?? [];
@@ -86,7 +89,7 @@ function TeammateMemorySection({ teammateId }: { teammateId: string }) {
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <Button variant="primary" onClick={() => setShowWrite(true)}>Remember something</Button>
         <Button onClick={() => void reload()}>Refresh</Button>
-        <Button variant="ghost" onClick={() => void act(() => api.pruneMemory(scope, { keep: 200 }))}>Retention prune</Button>
+        <Button variant="ghost" onClick={() => { void act(() => api.pruneMemory(scope, { keep: 200 })); reload(); }}>Retention prune</Button>
         <input className={`${FORM_INPUT} max-w-xs`} placeholder="Search memories" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search teammate memories" />
         <select className={FORM_SELECT} value={tier} onChange={(e) => setTier(e.target.value)} aria-label="Tier filter">
           <option value="">All tiers</option>
@@ -196,6 +199,7 @@ export function BotDetailView({
   const skills = useAsync(() => api.teammateSkills(teammateId), [teammateId]);
   const allSkills = useAsync(() => api.listSkills({ limit: 100 }), [teammateId]);
   const boards = useAsync(() => api.listBoards(), [teammateId]);
+  const routines = useAsync(() => api.listRoutines(teammateId).then((r) => r.routines || []), [teammateId]);
   /* Resolve the model name rather than printing "model connected": the owner
      needs to know which model a bot will think with. */
   const mateProjectId = all.data?.teammates.find((m) => m.id === teammateId)?.project_id;
@@ -222,6 +226,13 @@ export function BotDetailView({
   const [editProviderId, setEditProviderId] = useState("");
   const [editMemoryScope, setEditMemoryScope] = useState("project");
   const [editPerms, setEditPerms] = useState<string[]>([]);
+  const [editTagline, setEditTagline] = useState("");
+  const [editVoiceStyle, setEditVoiceStyle] = useState("");
+  const [editBoundaries, setEditBoundaries] = useState("");
+  const [editStarterPrompts, setEditStarterPrompts] = useState("");
+  const [editGreeting, setEditGreeting] = useState("");
+  const [editPresenceMode, setEditPresenceMode] = useState("active");
+  const [editAutonomyPolicy, setEditAutonomyPolicy] = useState("{}");
   const [editBusy, setEditBusy] = useState(false);
   const [confirmStatus, setConfirmStatus] = useState<"disable" | "archive" | null>(null);
   const [statusBusy, setStatusBusy] = useState(false);
@@ -235,6 +246,13 @@ export function BotDetailView({
     setEditProviderId(mate.provider_id ?? "");
     setEditMemoryScope(mate.memory_scope || "project");
     setEditPerms(mate.permissions ?? []);
+    setEditTagline(mate.tagline ?? "");
+    setEditVoiceStyle(mate.voice_style ?? "");
+    setEditBoundaries(mate.boundaries ?? "");
+    setEditStarterPrompts((mate.starter_prompts ?? []).join("\n"));
+    setEditGreeting(mate.greeting ?? "");
+    setEditPresenceMode(mate.presence_mode || "active");
+    setEditAutonomyPolicy(JSON.stringify(mate.autonomy_policy ?? {}, null, 2));
     setShowEdit(true);
   };
 
@@ -242,6 +260,8 @@ export function BotDetailView({
     e.preventDefault();
     setEditBusy(true);
     try {
+      let autonomyPolicy: Record<string, unknown> = {};
+      try { autonomyPolicy = JSON.parse(editAutonomyPolicy || "{}"); } catch { throw new Error("Autonomy policy must be valid JSON"); }
       await api.patchTeammate(teammateId, {
         persona: editPersona.trim(),
         name: editName.trim(),
@@ -249,10 +269,17 @@ export function BotDetailView({
         provider_id: editProviderId || null,
         memory_scope: editMemoryScope,
         permissions: editPerms,
+        tagline: editTagline.trim(),
+        voice_style: editVoiceStyle.trim(),
+        boundaries: editBoundaries.trim(),
+        starter_prompts: editStarterPrompts.split("\n").map((s) => s.trim()).filter(Boolean),
+        greeting: editGreeting.trim(),
+        presence_mode: editPresenceMode,
+        autonomy_policy: autonomyPolicy,
       });
       setShowEdit(false);
       all.reload();
-      toast.success("Teammate updated.");
+      toast.success("Agent updated.");
     } catch (err) {
       notifyError(err);
     } finally {
@@ -272,8 +299,16 @@ export function BotDetailView({
         permissions: mate.permissions,
         provider_id: mate.provider_id,
         face: mate.face,
+        tagline: mate.tagline,
+        voice_style: mate.voice_style,
+        boundaries: mate.boundaries,
+        starter_prompts: mate.starter_prompts,
+        greeting: mate.greeting,
+        behavior_tuning: mate.behavior_tuning,
+        presence_mode: mate.presence_mode,
+        autonomy_policy: mate.autonomy_policy,
       });
-      toast.success("Teammate duplicated.");
+      toast.success("Agent duplicated.");
       navigate(`/bot/${copy.id}`);
     } catch (err) {
       notifyError(err);
@@ -288,7 +323,7 @@ export function BotDetailView({
       else await api.archiveTeammate(teammateId);
       setConfirmStatus(null);
       all.reload();
-      toast.success(confirmStatus === "disable" ? "Teammate disabled." : "Teammate archived.");
+      toast.success(confirmStatus === "disable" ? "Agent disabled." : "Agent archived.");
     } catch (err) {
       notifyError(err);
     } finally {
@@ -360,6 +395,13 @@ export function BotDetailView({
     }
   };
 
+  /** Summary stats for the header */
+  const runningTasks = taskList.filter((t) => t.status === "running").length;
+  const pendingTasks = taskList.filter((t) => !["done", "failed", "cancelled"].includes(t.status)).length;
+  const completedTasks = taskList.filter((t) => t.status === "done").length;
+  const successfulRuns = runList.filter((r) => r.outcome?.outcome === "carried_out").length;
+  const failedRuns = runList.filter((r) => r.exit_code !== 0 && r.exit_code !== null).length;
+
   return (
     <Page>
       <div className="mb-8">
@@ -382,38 +424,44 @@ export function BotDetailView({
           />
           <div className="min-w-0 flex-1">
             <div className="mb-1 text-step--2 uppercase tracking-[0.16em] text-[var(--faint)]">
-              <a href="/bots" className="hover:text-[var(--text)]">
-                Teammates
+              <a href="/agents" className="hover:text-[var(--text)]">
+                Agents
               </a>{" "}
-              / Teammate
+              / Agent
             </div>
             <h1 className="text-step-1 font-semibold tracking-tight text-[var(--text)]">
               {mate.name || mate.persona || "Unnamed teammate"}
             </h1>
-            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-step--1 text-[var(--muted)]">
+            <div className="mt-2 flex flex-wrap items-center gap-2">
               <StatusDot
                 status={mate.status}
                 label={mate.status}
                 pulse={mate.status === "running"}
               />
+              <Badge variant="secondary" pill>
+                {modelName || (mate.provider_id ? "Model connected" : "No model")}
+              </Badge>
+              <span aria-hidden>·</span>
               <span>
-                {openCount} open task{openCount === 1 ? "" : "s"}
+                {completedTasks} completed · {runningTasks} running · {pendingTasks} pending
               </span>
               <span aria-hidden>·</span>
-              <span>{runList.length} runs</span>
-              <span aria-hidden>·</span>
-              <a href={`/p/${mate.project_id}`} className="hover:text-[var(--text)] hover:underline">
-                Project
-              </a>
-              <span aria-hidden>·</span>
-              <span>{modelName || (mate.provider_id ? "Model connected" : "No model connected")}</span>
+              <span>{successfulRuns} successful · {failedRuns} failed</span>
+            </div>
+            <div className="mt-2 flex items-center gap-2 text-step--1 text-[var(--muted)]">
+              <span>{mate.memory_scope} memory scope</span>
+              {mate.provider_id && (
+                <Badge variant="link" size="sm" onClick={() => navigate(`/p/${mate.project_id}`)}>
+                  Go to project
+                </Badge>
+              )}
             </div>
             {runList.length > 0 && (
               <div className="mt-2 text-step--1 text-[var(--muted)]">
                 <span className="font-medium text-[var(--text)]">Working on:</span>
                 {runList.slice(0, 3).map((run, i) => (
                   <span key={i} className="mr-1 text-step--2 tooltip">
-                    <span className="truncate max-w-[120px]">{run.task?.description?.trim() || run.id.substring(0, 20)}</span>
+                    <span className="truncate max-w-[120px]">{(run as any).task?.description?.trim() || run.id.substring(0, 20)}</span>
                     <span className="text-[var(--faint)] text-xs">•</span>
                   </span>
                 ))}
@@ -498,6 +546,24 @@ export function BotDetailView({
         ))}
       </div>
 
+      {(section === "overview" || section === "configuration") && (
+        <section className="mb-6 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <div className="text-step--2 uppercase tracking-[0.14em] text-[var(--faint)]">Character profile</div>
+              <p className="mt-1 text-step--1 text-[var(--muted)]">{mate.tagline || "A Grok-bot-like teammate with its own voice, boundaries, and presence."}</p>
+            </div>
+            <Badge variant={mate.presence_mode === "active" ? "info" : "neutral"}>{mate.presence_mode || "active"}</Badge>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div><div className="text-step--2 text-[var(--faint)]">Voice / style</div><div className="text-step--1 text-[var(--text-soft)] whitespace-pre-wrap">{mate.voice_style || "Not set"}</div></div>
+            <div><div className="text-step--2 text-[var(--faint)]">Greeting</div><div className="text-step--1 text-[var(--text-soft)] whitespace-pre-wrap">{mate.greeting || "Not set"}</div></div>
+            <div className="sm:col-span-2"><div className="text-step--2 text-[var(--faint)]">Boundaries</div><div className="text-step--1 text-[var(--text-soft)] whitespace-pre-wrap">{mate.boundaries || "Not set"}</div></div>
+            <div className="sm:col-span-2"><div className="text-step--2 text-[var(--faint)]">Starter prompts</div><div className="flex flex-wrap gap-2 mt-1">{(mate.starter_prompts?.length ? mate.starter_prompts : ["No starter prompts yet"]).map((p, i) => <span key={i} className="rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1 text-step--2 text-[var(--text-soft)]">{p}</span>)}</div></div>
+          </div>
+        </section>
+      )}
+
       {(section === "overview" || section === "configuration") && mate.instructions ? (
         <details className="mb-6 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
           <summary className="cursor-pointer text-step--1 font-medium text-[var(--text-soft)]">
@@ -518,15 +584,15 @@ export function BotDetailView({
           <div className="mt-3 space-y-3 text-step-0 text-[var(--text-soft)]">
             <div>
               <div className="text-step--2 uppercase tracking-[0.14em] text-[var(--faint)]">Soul</div>
-              <p className="whitespace-pre-wrap">{persona.data.soul || "—"}</p>
+              <p className="whitespace-pre-wrap">{persona.data.soul || ""}</p>
             </div>
             <div>
               <div className="text-step--2 uppercase tracking-[0.14em] text-[var(--faint)]">Goals</div>
-              <p className="whitespace-pre-wrap">{persona.data.goals || "—"}</p>
+              <p className="whitespace-pre-wrap">{persona.data.goals || ""}</p>
             </div>
             <div>
               <div className="text-step--2 uppercase tracking-[0.14em] text-[var(--faint)]">Wisdom</div>
-              <p className="whitespace-pre-wrap">{persona.data.wisdom || "—"}</p>
+              <p className="whitespace-pre-wrap">{persona.data.wisdom || ""}</p>
             </div>
             <div className="text-step--2 text-[var(--faint)]">version {persona.data.version}</div>
           </div>
@@ -664,6 +730,42 @@ export function BotDetailView({
       </section>
       )}
 
+      {(section === "work" || section === "overview") && (
+      <section className="mb-6">
+        <div className="mb-2 flex items-center justify-between">
+          <SectionLabel>Routines / proactive watch</SectionLabel>
+          <Button variant="primary" onClick={async () => {
+            const name = prompt("Routine name", "Watch project");
+            if (!name) return;
+            const promptText = prompt("What should this bot watch or do?", "Check for important updates and report back.");
+            if (!promptText) return;
+            try {
+              await api.createRoutine(teammateId, { name, prompt: promptText, interval_s: 3600, enabled: true, kind: "watch" });
+              routines.reload();
+              toast.success("Routine created");
+            } catch (err) { notifyError(err); }
+          }}>Add routine</Button>
+        </div>
+        {routines.loading ? <LoadingState lines={2} /> : routines.error ? <ErrorState error={routines.error} onRetry={() => void routines.reload()} /> : (routines.data || []).length === 0 ? (
+          <EmptyState title="No routines" hint="Add a watch/routine so this bot can act proactively on an interval." />
+        ) : (
+          <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
+            {(routines.data || []).map((rt, i) => (
+              <div key={rt.id} className={`flex flex-wrap items-center gap-3 px-4 py-3 ${i > 0 ? "border-t border-[var(--border-dim)]" : ""}`}>
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium text-[var(--text)]">{rt.name}</div>
+                  <div className="text-step--2 text-[var(--muted)] truncate">{rt.prompt}</div>
+                  <div className="text-step--2 text-[var(--faint)]">{rt.kind} · every {rt.interval_s}s · {rt.enabled ? "enabled" : "disabled"}</div>
+                </div>
+                <Button onClick={async () => { try { await api.patchRoutine(rt.id, { enabled: !rt.enabled }); routines.reload(); } catch (e) { notifyError(e); } }}>{rt.enabled ? "Disable" : "Enable"}</Button>
+                <Button variant="danger" onClick={async () => { if (!confirm("Delete routine?")) return; try { await api.deleteRoutine(rt.id); routines.reload(); } catch (e) { notifyError(e); } }}>Delete</Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+      )}
+
       {/* Runs */}
       {(section === "activity" || section === "overview") && (
       <section className="mb-6">
@@ -685,7 +787,7 @@ export function BotDetailView({
                 >
                   {taskList.find((t) => t.id === r.task_id)?.description?.trim() || "Task"}
                 </button>
-                <span className="mono text-step--2 text-[var(--faint)]">exit {r.exit_code ?? "—"}</span>
+                <span className="mono text-step--2 text-[var(--faint)]">exit {r.exit_code ?? ""}</span>
                 <span className="mono text-step--2 text-[var(--faint)]">
                   {Number(r.duration_s ?? 0).toFixed(1)}s
                 </span>
@@ -804,6 +906,31 @@ export function BotDetailView({
                 className={`${FORM_INPUT} resize-y`}
               />
             </Field>
+            <Field label="Tagline">
+              <input value={editTagline} onChange={(e) => setEditTagline(e.target.value)} placeholder="Short character summary" className={FORM_INPUT} />
+            </Field>
+            <Field label="Voice / style">
+              <input value={editVoiceStyle} onChange={(e) => setEditVoiceStyle(e.target.value)} placeholder="e.g. direct, witty, calm, technical" className={FORM_INPUT} />
+            </Field>
+            <Field label="Greeting">
+              <textarea value={editGreeting} onChange={(e) => setEditGreeting(e.target.value)} rows={2} className={`${FORM_INPUT} resize-y`} placeholder="What this bot says when a chat starts" />
+            </Field>
+            <Field label="Boundaries">
+              <textarea value={editBoundaries} onChange={(e) => setEditBoundaries(e.target.value)} rows={3} className={`${FORM_INPUT} resize-y`} placeholder="Things this bot should not do or should be careful about" />
+            </Field>
+            <Field label="Starter prompts (one per line)">
+              <textarea value={editStarterPrompts} onChange={(e) => setEditStarterPrompts(e.target.value)} rows={4} className={`${FORM_INPUT} resize-y`} placeholder="What can you help with?\nReview my current tasks\nWatch this project for issues" />
+            </Field>
+            <Field label="Presence">
+              <select value={editPresenceMode} onChange={(e) => setEditPresenceMode(e.target.value)} className={FORM_INPUT}>
+                <option value="active">Active (always-on character)</option>
+                <option value="passive">Passive (responds when addressed)</option>
+                <option value="away">Away</option>
+              </select>
+            </Field>
+            <Field label="Autonomy policy (JSON)">
+              <textarea value={editAutonomyPolicy} onChange={(e) => setEditAutonomyPolicy(e.target.value)} rows={4} className={`${FORM_INPUT} resize-y font-mono text-step--2`} placeholder='{"can_watch": true, "triggers": []}' />
+            </Field>
             <Field label="Model provider">
               <select
                 value={editProviderId}
@@ -824,7 +951,7 @@ export function BotDetailView({
                 onChange={(e) => setEditMemoryScope(e.target.value)}
                 className={FORM_INPUT}
               >
-                <option value="project">Project (shared with the workspace)</option>
+                <option value="project">Project (shared across tasks)</option>
                 <option value="private">Private (this teammate only)</option>
               </select>
             </Field>
@@ -1388,15 +1515,23 @@ export function BotsView() {
     };
   });
 
+  const order = (row: (typeof rows)[number]) =>
+    row.liveStatus === "running" ? 0 : row.blocked ? 1 : row.mate.status === "active" ? 2 : 3;
+  rows.sort(
+    (a, b) =>
+      order(a) - order(b) ||
+      (a.mate.name || a.mate.persona || "").localeCompare(b.mate.name || b.mate.persona || ""),
+  );
+
   const steps = ["identity", "face", "model", "permissions", "memory", "review"] as const;
   const stepIndex = steps.indexOf(step);
 
   return (
-    <Page>
+    <Page width="data">
       <PageHeader
         eyebrow="Agents"
         title="Agents"
-        description="Create and manage AI agents for your workspaces. Each agent can have a role, model, skills, permissions, and memory."
+        description="Create and manage AI agents across projects. Each agent can have a role, model, skills, permissions, and memory."
         actions={
           <>
             <Button variant="primary" onClick={() => setShowCreate(true)}>
@@ -1407,9 +1542,20 @@ export function BotsView() {
         }
       />
 
-      <div className="mb-5 flex flex-wrap items-center gap-1.5">
-        <Badge variant={mates.length > 0 ? "info" : "neutral"}>{mates.length} teammate{mates.length === 1 ? "" : "s"}</Badge>
-        <Badge variant={busyBots > 0 ? "ok" : "neutral"}>{busyBots} working now</Badge>
+      <div className="-mt-2 mb-5 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-step--1 text-[var(--muted)]">
+        <span>
+          <span className="font-semibold tabular-nums text-[var(--text)]">{mates.length}</span>{" "}
+          agents
+        </span>
+        <span>
+          <span className="font-semibold tabular-nums text-[var(--text)]">{busyBots}</span> working
+        </span>
+        <span>
+          <span className="font-semibold tabular-nums text-[var(--text)]">
+            {mates.filter((mate) => mate.status !== "active").length}
+          </span>{" "}
+          inactive
+        </span>
       </div>
 
       {showCreate ? (
@@ -1438,7 +1584,7 @@ export function BotsView() {
                     }}
                     className={FORM_INPUT}
                   >
-                    <option value="">(none — start blank)</option>
+                    <option value="">(none, start blank)</option>
                     {ROLE_TEMPLATES.map((t) => (
                       <option key={t.id} value={t.id}>
                         {t.label}
@@ -1449,7 +1595,7 @@ export function BotsView() {
                     Prefills the persona and instructions. You can edit everything after.
                   </p>
                 </Field>
-                <Field label="Project (workspace)">
+                <Field label="Project">
                   <select
                     value={pid}
                     onChange={(e) => setPid(e.target.value)}
@@ -1459,7 +1605,7 @@ export function BotsView() {
                     <option value="">(select project)</option>
                     {projList.map((p) => (
                       <option key={p.id} value={p.id}>
-                        {p.repository || "workspace"}
+                        {p.repository || "Untitled project"}
                       </option>
                     ))}
                   </select>
@@ -1595,7 +1741,7 @@ export function BotsView() {
                   <option value="private">Private (this bot only)</option>
                 </select>
                 <p className="text-step--1 text-[var(--faint)]">
-                  Project scope shares memory with other bots and tasks in the workspace. Private
+                  Project scope shares memory with other agents and tasks in the project. Private
                   keeps it to this bot alone.
                 </p>
               </Field>
@@ -1675,8 +1821,8 @@ export function BotsView() {
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Find a teammate"
-              aria-label="Search teammates"
+              placeholder="Find an agent"
+              aria-label="Search agents"
               className={`${FORM_INPUT} min-w-52 flex-1 sm:max-w-xs`}
             />
             <select
@@ -1684,7 +1830,7 @@ export function BotsView() {
               onChange={(e) =>
                 setStatusFilter(e.target.value as "all" | "active" | "disabled" | "archived")
               }
-              aria-label="Filter teammates by status"
+              aria-label="Filter agents by status"
               className={`${FORM_INPUT} sm:w-44`}
             >
               <option value="all">All statuses</option>
@@ -1699,7 +1845,7 @@ export function BotsView() {
 
           {rows.length === 0 ? (
             <EmptyState
-              title="No teammates match"
+              title="No agents match"
               hint="Try a different name or status."
               action={<Button onClick={() => { setQuery(""); setStatusFilter("all"); }}>Clear filters</Button>}
             />
@@ -1707,11 +1853,11 @@ export function BotsView() {
 
           {/* Phones get cards: a 720px table is a horizontal scroll, not a
               directory. The same facts appear in the table on md+. */}
-          <div className="grid gap-2 md:hidden">
+          <div className="grid grid-cols-1 gap-2 md:hidden">
             {rows.map(({ mate, tasks, latest, liveStatus, provider, blocked }) => (
               <div
                 key={mate.id}
-                className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3"
+                className="min-w-0 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3"
               >
                 <div className="flex items-start justify-between gap-3">
                   <BotChip
@@ -1738,7 +1884,7 @@ export function BotsView() {
                 </div>
                 {latest ? (
                   <button
-                    className="mt-2 flex w-full items-start justify-between gap-2 rounded-lg bg-[var(--surface-2)] px-2.5 py-2 text-left"
+                    className="mt-2 flex w-full min-w-0 items-start justify-between gap-2 overflow-hidden rounded-lg bg-[var(--surface-2)] px-2.5 py-2 text-left"
                     onClick={() => openTask(latest.project_id, latest.id)}
                   >
                     <span className="min-w-0">
@@ -1776,10 +1922,10 @@ export function BotsView() {
             <table className="w-full table-fixed">
               <thead>
                 <tr>
-                  <th className={`${TABLE_TH} w-[27%]`}>Teammate</th>
+                  <th className={`${TABLE_TH} w-[27%]`}>Agent</th>
                   <th className={`${TABLE_TH} w-[5.5rem]`}>State</th>
                   <th className={`${TABLE_TH} w-[10rem]`}>Model</th>
-                  <th className={TABLE_TH}>Work</th>
+                  <th className={TABLE_TH}>Current work</th>
                   <th className={`${TABLE_TH} w-[8rem]`}><span className="sr-only">Actions</span></th>
                 </tr>
               </thead>

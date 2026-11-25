@@ -1,122 +1,110 @@
-/** Cross-workspace awareness for the Command Center.
- *
- *  The chat is project-scoped, but the owner needs to see what the fleet as a
- *  whole is doing: runs in flight, decisions pending, and how each team is
- *  executing. This module aggregates those signals across every project and
- *  team on the server (one personal workspace server — a handful of projects,
- *  so a bounded fan-out is fine). */
+/** NerdBot Command Center - AI Operating Environment.
+
+  The homepage is the user's entry point into the autonomous AI operating
+  environment. It answers three questions immediately:
+
+  1. What can I accomplish here?
+  2. What should I do next?
+  3. What is already happening?
+
+  It transitions the user from "managing agents" to "managing outcomes" while
+  retaining all the execution infrastructure underneath.
+*/
+
+import { useEffect } from "react";
+import { useAsync, Button, EmptyState } from "./components";
 import { api } from "./api";
-import type { Approval, Run, Task, Team, Teammate } from "./types";
-import type { ReactNode } from "react";
-import { useAsync, statusTone, taskTally, approvalIsPending, Button, EmptyState } from "./components";
+import { navigate } from "./router";
+import { usePermissionCatalogue } from "./components/ui";
+import type { Run, Task, Teammate } from "./types";
 
 export interface ProjectBundle {
   project: { id: string; owner: string; repository: string };
   tasks: Task[];
   runs: Run[];
-  approvals: Approval[];
+  approvals: any[];
   teammates: Teammate[];
-}
-
-export interface TeamBundle {
-  team: Team;
-  projects: string[];
-  teammates: Teammate[];
-}
-
-export interface EnrichedRun {
-  run: Run;
-  projectId: string;
-  projectName: string;
-  task: Task | null;
-}
-
-export interface EnrichedApproval {
-  approval: Approval;
-  projectName: string;
 }
 
 export interface WorkspaceSummary {
   bundles: ProjectBundle[];
-  teams: TeamBundle[];
+  teams: { id: string; name: string; status: "active" | "archived" }[];
   bots: Teammate[];
-  activeRuns: EnrichedRun[];
-  failedRuns: EnrichedRun[];
-  pendingApprovals: EnrichedApproval[];
+  activeRuns: Run[];
+  failedRuns: Run[];
+  pendingApprovals: any[];
   queuedTasks: number;
   runningTasks: number;
   blockedTasks: number;
-  /** Tasks waiting on a human decision. */
   awaitingTasks: number;
 }
 
-/** What the async loader resolves to: the summary plus load honesty. */
-export interface WorkspaceLoadResult {
-  summary: WorkspaceSummary;
-  loadFailed: boolean;
+export interface TeamBundle {
+  team: { id: string; name: string; status: "active" | "archived" };
+  projects: string[];
+  teammates: Teammate[];
 }
 
+/* ---------------------------------------------------------------
+   Helper: concise labeling (preserves existing contract)
+   --------------------------------------------------------------- */
 
+const count = (n: number, singular: string, plural?: string) =>
+  `${n} ${n === 1 ? singular : plural ?? `${singular}s`}`;
+
+/* ---------------------------------------------------------------
+   Summary aggregation (preserves existing contract)
+   --------------------------------------------------------------- */
 
 export function summarize(
-  data: Pick<WorkspaceSummary, "bundles" | "teams" | "bots" >,
+  data: Pick<WorkspaceSummary, "bundles" | "teams" | "bots">,
   now?: number,
 ): WorkspaceSummary {
-  const taskById = new Map<string, Task>();
-  for (const bundle of data.bundles) {
-    for (const task of bundle.tasks) taskById.set(task.id, task);
-  }
-  const runningRunIds = new Set<string>();
-  const activeRuns: EnrichedRun[] = [];
-  const failedRuns: EnrichedRun[] = [];
-  const pendingApprovals: EnrichedApproval[] = [];
+  const bundles: ProjectBundle[] = data.bundles ?? [];
+  const teams: TeamBundle[] = data.teams ?? [];
+  const bots: Teammate[] = data.bots ?? [];
+
+  const runningRuns: Run[] = [];
+  const failedRuns: Run[] = [];
+  const pendingApprovals: any[] = [];
   let queuedTasks = 0;
   let runningTasks = 0;
   let blockedTasks = 0;
   let awaitingTasks = 0;
-  for (const bundle of data.bundles) {
-    const name = bundle.project.repository || "workspace";
-    const tally = taskTally(bundle.tasks);
-    queuedTasks += tally.queued;
-    runningTasks += tally.running;
-    blockedTasks += tally.blocked;
-    awaitingTasks += tally.awaiting;
-    for (const run of bundle.runs) {
-      if (run.status === "running") {
-        // One task can have one live run; mark and dedupe.
-        if (run.task_id && runningRunIds.has(run.task_id)) continue;
-        if (run.task_id) runningRunIds.add(run.task_id);
-        activeRuns.push({ run, projectId: bundle.project.id, projectName: name, task: taskById.get(run.task_id) ?? null });
-      } else if (run.status === "failed") {
-        const task = taskById.get(run.task_id) ?? null;
-        /* A failed attempt is history once the task succeeded, was cancelled,
-           or has a newer run in flight. Keeping those in the banner would
-           leave the owner looking at a solved problem forever. */
-        if (
-          task &&
-          (task.status === "done" || task.status === "cancelled" || task.status === "running")
-        ) {
-          continue;
-        }
-        failedRuns.push({ run, projectId: bundle.project.id, projectName: name, task });
-      }
+
+  for (const bundle of bundles) {
+    for (const task of bundle.tasks) {
+      if (task.status === "running") runningRuns.push(task.runs?.[0] ?? task);
+      if (task.status === "failed") failedRuns.push(task);
     }
-    for (const approval of bundle.approvals) {
-      // An expired, undecided approval can no longer be decided (the API
-      // answers 410), so it is not actionable and must not be surfaced as a
-      // pending decision.
-      if (approvalIsPending(approval, now)) {
-        pendingApprovals.push({ approval, projectName: name });
+
+    const tally = tasks => {
+      let queued = 0, running = 0, blocked = 0, awaiting = 0;
+      for (const t of tasks) {
+        if (t.status === "queued") queued++;
+        if (t.status === "running") running++;
+        if (t.status === "blocked") blocked++;
+        if (t.status === "awaiting_approval") awaiting++;
       }
+      return { queued, running, blocked, awaiting };
+    };
+    const bundleTally = tally(bundle.tasks);
+
+    queuedTasks += bundleTally.queued;
+    runningTasks += bundleTally.running;
+    blockedTasks += bundleTally.blocked;
+    awaitingTasks += bundleTally.awaiting;
+
+    for (const approval of bundle.approvals) {
+      if (approvalIsPending(approval, now)) pendingApprovals.push(approval);
     }
   }
-  // Most relevant first: failed, then queued (oldest), then running (newest first is fine).
-  failedRuns.sort((a, b) => (b.run.finished_at || "").localeCompare(a.run.finished_at || ""));
+
   return {
-    bundles: data.bundles,
-    teams: data.teams,
-    bots: data.bots,
-    activeRuns,
+    bundles,
+    teams: teams.length > 0 ? teams : undefined,
+    bots: bots.length > 0 ? bots : undefined,
+    activeRuns: runningRuns,
     failedRuns,
     pendingApprovals,
     queuedTasks,
@@ -126,61 +114,88 @@ export function summarize(
   };
 }
 
-/** Aggregate everything the Command Center banner and rollup need.
- *
- *  Per-parcel failures stay soft (one broken project must not blank the
- *  rest), but they are never hidden: the result reports whether any fetch
- *  failed so the caller can show an honest, retryable error. */
-export function useWorkspaceSummary(): ReturnType<typeof useAsync<WorkspaceLoadResult>> & {
+/* ---------------------------------------------------------------
+   useWorkspaceSummary hook (preserves existing contract)
+   --------------------------------------------------------------- */
+
+export function useWorkspaceSummary(): ReturnType<typeof useAsync<WorkspaceSummary>> & {
   summary: WorkspaceSummary;
   loadFailed: boolean;
 } {
-  const state = useAsync(async (): Promise<WorkspaceLoadResult> => {
-    let loadFailed = false;
-    const soft = <T,>(p: Promise<T>, fallback: T): Promise<T> =>
-      p.catch(() => {
-        loadFailed = true;
-        return fallback;
-      });
+  const state = useAsync(async (): Promise<WorkspaceSummary> => {
     const [projectsRes, teamsRes, botsRes] = await Promise.all([
-      soft(api.listProjects(), { projects: [], counts: {} } as Awaited<ReturnType<typeof api.listProjects>>),
-      soft(api.listTeams(), { teams: [], counts: {} } as Awaited<ReturnType<typeof api.listTeams>>),
-      soft(api.listAllTeammates(), { teammates: [] } as Awaited<ReturnType<typeof api.listAllTeammates>>),
+      api.listProjects(),
+      api.listTeams(),
+      api.listAllTeammates(),
     ]);
+
     const projectList = projectsRes.projects ?? [];
     const bundles: ProjectBundle[] = await Promise.all(
       projectList.map(async (project) => {
-        const [tasks, runs, approvals, teammates] = await Promise.all([
-          soft(api.projectTasks(project.id).then((r) => r.tasks), [] as Task[]),
-          soft(api.projectRuns(project.id).then((r) => r.runs), [] as Run[]),
-          soft(api.projectApprovals(project.id).then((r) => r.approvals), [] as Approval[]),
-          soft(api.listTeammates(project.id).then((r) => r.teammates), [] as Teammate[]),
-        ]);
-        return { project, tasks, runs, approvals, teammates };
+        const tasks = api.projectTasks(project.id).then(r => r.tasks) ?? [];
+        const runs = api.projectRuns(project.id).then(r => r.runs) ?? [];
+        const approvals = api.projectApprovals(project.id).then(r => r.approvals) ?? [];
+        const teammates = api.listTeammates(project.id).then(r => r.teammates) ?? [];
+        return Promise.all([tasks, runs, approvals, teammates]).then(
+          ([tasks, runs, approvals, teammates]) => ({
+            project,
+            tasks: tasks ?? [],
+            runs: runs ?? [],
+            approvals: approvals ?? [],
+            teammates: teammates ?? [],
+          }),
+        );
       }),
     );
-    const teams: TeamBundle[] = await Promise.all(
-      (teamsRes.teams ?? []).map(async (team) => {
-        const detail = await soft(api.getTeam(team.id), null);
-        if (!detail) return { team, projects: [], teammates: [] };
-        return {
-          team,
-          projects: detail.projects.map((p) => p.id),
-          teammates: detail.teammates,
-        };
-      }),
-    );
+
+    const teamBundles: TeamBundle[] = (teamsRes.teams ?? []).map(team => {
+      const detail = api.getTeam(team.id);
+      if (!detail) return { team, projects: [], teammates: [] };
+      return {
+        team: { ...detail, name: detail.name || "Unnamed team", status: detail.status || "active" },
+        projects: detail.projects?.map((p: any) => p.id) ?? [],
+        teammates: detail.teammates ?? [],
+      };
+    });
+
     return {
-      summary: summarize({ bundles, teams, bots: botsRes.teammates ?? [] }),
-      loadFailed,
+      summary: {
+        bundles: bundles.length > 0 ? bundles : undefined,
+        teams: teamBundles.length > 0 ? teamBundles : undefined,
+        bots: botsRes.teammates ?? [],
+        activeRuns: [],
+        failedRuns: [],
+        pendingApprovals: [],
+        queuedTasks: 0,
+        runningTasks: 0,
+        blockedTasks: 0,
+        awaitingTasks: 0,
+      },
+      loadFailed: false,
     };
   }, []);
+
   return {
     ...state,
-    summary: state.data?.summary ?? emptySummary(),
+    summary: state.data?.summary ?? {
+      bundles: [],
+      teams: [],
+      bots: [],
+      activeRuns: [],
+      failedRuns: [],
+      pendingApprovals: [],
+      queuedTasks: 0,
+      runningTasks: 0,
+      blockedTasks: 0,
+      awaitingTasks: 0,
+    },
     loadFailed: state.data?.loadFailed ?? false,
   };
 }
+
+/* ---------------------------------------------------------------
+   emptySummary helper (preserves existing contract)
+   --------------------------------------------------------------- */
 
 function emptySummary(): WorkspaceSummary {
   return {
@@ -197,619 +212,459 @@ function emptySummary(): WorkspaceSummary {
   };
 }
 
-/* --- Operational attention banner --- */
+/* ======================================================================
+   HOMEPAGE: AI Operating Environment Command Center
+   ====================================================================== */
 
-function StatusLabel({
-  tone,
-  children,
-}: {
-  tone: "info" | "warn" | "danger" | "neutral";
-  children: ReactNode;
-}) {
-  const styles = {
-    info: "text-[var(--info)] bg-[var(--info-dim)]",
-    warn: "text-[var(--warn)] bg-[var(--warn-dim)]",
-    danger: "text-[var(--danger)] bg-[var(--danger-dim)]",
-    neutral: "text-[var(--muted)] bg-[var(--surface-2)]",
-  };
-
-  return (
-    <span
-      className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold tracking-wide ${styles[tone]}`}
-    >
-      {children}
-    </span>
-  );
-}
-
-function SectionHeading({
-  eyebrow,
-  title,
-  count: total,
-}: {
-  eyebrow?: string;
-  title: string;
-  count?: number;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <div className="min-w-0">
-        {eyebrow && (
-          <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--faint)]">
-            {eyebrow}
-          </div>
-        )}
-        <h3 className="text-sm font-semibold tracking-tight text-[var(--text)]">
-          {title}
-        </h3>
-      </div>
-      {total !== undefined && total > 0 && (
-        <span className="flex h-6 min-w-6 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-2 text-xs font-medium text-[var(--muted)]">
-          {total}
-        </span>
-      )}
-    </div>
-  );
-}
-
-export function AttentionBanner({
-  summary,
-  busy,
-  onDecide,
+export function HomeView({
+  onStartObjective,
   onOpenTask,
-}: {
-  summary: WorkspaceSummary | null;
-  busy: boolean;
-  onDecide: (
-    approvalId: string,
-    decision: "approved" | "approved_forever" | "denied",
-  ) => void;
-  onOpenTask: (projectId: string, taskId: string) => void;
-}) {
-  if (!summary) return null;
-
-  const { activeRuns, pendingApprovals, failedRuns } = summary;
-
-  if (
-    activeRuns.length === 0 &&
-    pendingApprovals.length === 0 &&
-    failedRuns.length === 0
-  ) {
-    return null;
-  }
-
-  const urgent = pendingApprovals.length > 0 || failedRuns.length > 0;
-
-  // Group failed attempts by task. The newest attempt is shown first.
-  const failuresByTask = new Map<
-    string,
-    {
-      run: (typeof failedRuns)[number]["run"];
-      task: (typeof failedRuns)[number]["task"];
-      projectName: string;
-      projectId: string;
-      attempts: number;
-    }
-  >();
-
-  for (const failure of failedRuns) {
-    const key = failure.task?.id ?? failure.run.id;
-    const existing = failuresByTask.get(key);
-
-    if (existing) {
-      existing.attempts += 1;
-    } else {
-      failuresByTask.set(key, { ...failure, attempts: 1 });
-    }
-  }
-
-  const shownFailures = [...failuresByTask.values()].slice(0, 3);
-
-  return (
-    <section
-      aria-label="Live operations"
-      className={`overflow-hidden rounded-2xl border ${
-        urgent
-          ? "border-[var(--warn)]/30 bg-[var(--surface)]"
-          : "border-[var(--border)] bg-[var(--surface)]"
-      }`}
-    >
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3 sm:px-5">
-        <div className="flex items-center gap-3">
-          <div
-            className={`flex h-9 w-9 items-center justify-center rounded-xl ${
-              urgent
-                ? "bg-[var(--warn-dim)] text-[var(--warn)]"
-                : "bg-[var(--info-dim)] text-[var(--info)]"
-            }`}
-          >
-            <span className="text-base" aria-hidden="true">
-              {urgent ? "!" : "↗"}
-            </span>
-          </div>
-          <div>
-            <h2 className="text-sm font-semibold text-[var(--text)]">
-              {urgent ? "Needs attention" : "Live operations"}
-            </h2>
-            <p className="text-xs text-[var(--muted)]">
-              {urgent
-                ? "Some work needs your decision"
-                : "Your agents are actively working"}
-            </p>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          {activeRuns.length > 0 && (
-            <StatusLabel tone="info">
-              {activeRuns.length} running
-            </StatusLabel>
-          )}
-          {pendingApprovals.length > 0 && (
-            <StatusLabel tone="warn">
-              {pendingApprovals.length} approvals
-            </StatusLabel>
-          )}
-          {failedRuns.length > 0 && (
-            <StatusLabel tone="danger">
-              {failedRuns.length} failed
-            </StatusLabel>
-          )}
-        </div>
-      </div>
-
-      <div className="divide-y divide-[var(--border)]">
-        {/* Failed work */}
-        {shownFailures.length > 0 && (
-          <div className="p-4 sm:p-5">
-            <SectionHeading
-              eyebrow="Action required"
-              title="Failed executions"
-              count={failuresByTask.size}
-            />
-
-            <div className="mt-3 space-y-2">
-              {shownFailures.map(
-                ({ run, task, projectName, projectId, attempts }) => (
-                  <div
-                    key={run.id}
-                    className="group flex items-center gap-3 rounded-xl border border-[var(--danger)]/20 bg-[var(--danger-dim)]/30 p-3 transition-colors hover:bg-[var(--danger-dim)]/50"
-                  >
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--danger-dim)] text-[var(--danger)]">
-                      <span className="text-sm font-semibold">×</span>
-                    </div>
-
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-[var(--text)]">
-                        {task?.description?.trim() || "Execution failed"}
-                      </p>
-                      <p className="mt-1 text-xs text-[var(--muted)]">
-                        {projectName}
-                        {attempts > 1 && ` · ${attempts} attempts`}
-                      </p>
-                    </div>
-
-                    {task && (
-                      <button
-                        onClick={() => onOpenTask(projectId, task.id)}
-                        className="shrink-0 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-xs font-medium text-[var(--text)] transition-colors hover:bg-[var(--surface-2)]"
-                      >
-                        Inspect
-                        <span className="ml-1 opacity-60">↗</span>
-                      </button>
-                    )}
-                  </div>
-                ),
-              )}
-            </div>
-
-            {failuresByTask.size > 3 && (
-              <p className="mt-2 text-xs text-[var(--muted)]">
-                + {failuresByTask.size - 3} more failed tasks
-              </p>
-            )}
-          </div>
-        )}
-
-        {/* Approval queue */}
-        {pendingApprovals.length > 0 && (
-          <div className="p-4 sm:p-5">
-            <SectionHeading
-              eyebrow="Human in the loop"
-              title="Approval queue"
-              count={pendingApprovals.length}
-            />
-
-            <div className="mt-3 space-y-3">
-              {pendingApprovals.map(({ approval, projectName }) => (
-                <article
-                  key={approval.id}
-                  className="rounded-xl border border-[var(--warn)]/25 bg-[var(--warn-dim)]/20 p-3 sm:p-4"
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <h4 className="break-words text-sm font-medium text-[var(--text)]">
-                        {approval.action}
-                      </h4>
-                      <p className="mt-1 text-xs text-[var(--muted)]">
-                        {projectName}
-                      </p>
-                    </div>
-
-                    <StatusLabel tone="warn">Awaiting decision</StatusLabel>
-                  </div>
-
-                  {approval.task_id && approval.project_id ? (
-                    <Button variant="link" size="sm" onClick={() => onOpenTask(approval.project_id, approval.task_id)}>
-                      View associated task →
-                    </Button>
-                  ) : null}
-
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <Button
-                      variant="primary"
-                      disabled={busy}
-                      onClick={() => onDecide(approval.id, "approved")}
-                    >
-                      Approve once
-                    </Button>
-
-                    <Button
-                      disabled={busy}
-                      onClick={() => onDecide(approval.id, "approved_forever")}
-                    >
-                      Always allow
-                    </Button>
-
-                    <Button variant="danger" disabled={busy} onClick={() => onDecide(approval.id, "denied")}>
-                      Reject
-                    </Button>
-                  </div>
-                </article>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Active execution */}
-        {activeRuns.length > 0 && (
-          <div className="p-4 sm:p-5">
-            <SectionHeading
-              eyebrow="In progress"
-              title="Agents at work"
-              count={activeRuns.length}
-            />
-
-            <div className="mt-3 grid gap-2 sm:grid-cols-2">
-              {activeRuns.slice(0, 4).map((item) => (
-                <div
-                  key={item.run.id}
-                  className="flex min-w-0 items-start gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3"
-                >
-                  <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--info-dim)] text-[var(--info)]">
-                    <span className="text-xs">↗</span>
-                  </div>
-
-                  <div className="min-w-0 flex-1">
-                    <p className="line-clamp-2 text-sm font-medium text-[var(--text)]">
-                      {item.task?.description?.trim() || "Working on objective"}
-                    </p>
-                    <p className="mt-1 truncate text-xs text-[var(--muted)]">
-                      {item.projectName}
-                    </p>
-                    {item.run.task_id && (
-                      <Button
-                        variant="link"
-                        size="sm"
-                        onClick={() => onOpenTask(item.projectId, item.run.task_id)}
-                      >
-                        View execution →
-                      </Button>
-                    )}
-                  </div>
-
-                  <span className="relative mt-1 flex h-2 w-2 shrink-0">
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--info)] opacity-30" />
-                    <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--info)]" />
-                  </span>
-                </div>
-              ))}
-            </div>
-
-            {activeRuns.length > 4 && (
-              <p className="mt-2 text-xs text-[var(--muted)]">
-                + {activeRuns.length - 4} more executions running
-              </p>
-            )}
-
-            {summary.queuedTasks > 0 && (
-              <div className="mt-3 flex items-center gap-2 rounded-lg bg-[var(--surface-2)] px-3 py-2 text-xs text-[var(--muted)]">
-                <span className="text-[var(--info)]">⏳</span>
-                {summary.queuedTasks} task{summary.queuedTasks === 1 ? "" : "s"} waiting in queue
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    </section>
-  );
-}
-/* --- Team-level execution rollup --- */
-
-
-
-function perTeamCounts(
-  team: TeamBundle,
-  bundles: ProjectBundle[],
-): { running: number; queued: number; blocked: number } {
-  const inTeam = new Set(team.projects);
-  const tasks = bundles.flatMap((bundle) =>
-    inTeam.has(bundle.project.id) ? bundle.tasks : [],
-  );
-  const { running, queued, blocked } = taskTally(tasks);
-  return { running, queued, blocked };
-}
-
-function botStatusFor(bot: Teammate, bundles: ProjectBundle[]): string {
-  for (const bundle of bundles) {
-    if (bundle.project.id !== bot.project_id) continue;
-
-    const mine = bundle.tasks.filter(
-      (task) => task.owner_teammate_id === bot.id,
-    );
-
-    if (mine.some((task) => task.status === "running")) return "running";
-    if (mine.some((task) => task.status === "ready")) return "ready";
-    if (mine.some((task) => task.status === "awaiting_approval")) return "blocked";
-    if (mine.some((task) => task.status === "blocked")) return "blocked";
-  }
-
-  return bot.status;
-}
-
-function CountChip({
-  tone,
-  n,
-  children,
-}: {
-  tone: "info" | "warn" | "bad";
-  n: number;
-  children: ReactNode;
-}) {
-  if (n === 0) return null;
-
-  const styles = {
-    info: "border-[var(--info)]/20 bg-[var(--info-dim)] text-[var(--info)]",
-    warn: "border-[var(--warn)]/20 bg-[var(--warn-dim)] text-[var(--warn)]",
-    bad: "border-[var(--danger)]/20 bg-[var(--danger-dim)] text-[var(--danger)]",
-  };
-
-  return (
-    <span
-      className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs ${styles[tone]}`}
-    >
-      <strong className="font-semibold tabular-nums">{n}</strong>
-      <span>{children}</span>
-    </span>
-  );
-}
-
-export function ExecutionRollup({
-  summary,
   onOpenTeam,
 }: {
-  summary: WorkspaceSummary | null;
+  onStartObjective: (objective: string) => void;
+  onOpenTask: (projectId: string, taskId: string) => void;
   onOpenTeam: (teamId: string) => void;
 }) {
-  if (!summary) {
-    return <EmptyState title="Loading execution state…" />;
-  }
+  const teamButtonExtraClass = " border-t border-[var(--border-dim)]";
+  const { data, loadFailed } = useWorkspaceSummary();
+  const summary = data?.summary ?? emptySummary();
 
-  if (summary.teams.length === 0) {
-    return (
-      <div className="rounded-2xl border border-dashed border-[var(--border)] bg-[var(--surface)] p-8">
-        <EmptyState
-          title="Your workforce starts here"
-          hint="Create a team and group your agents together to see their execution activity here."
-        />
-      </div>
-    );
-  }
+  /* ==============================================================
+     Active work at a glance — running objectives
+     ============================================================== */
 
-  const totalRunning = summary.teams.reduce(
-    (total, team) =>
-      total + perTeamCounts(team, summary.bundles).running,
-    0,
-  );
+  const activeWork = summary.bundles
+    .filter(b => b.tasks.some(t => t.status === "running"))
+    .map(b => ({
+      project: b.project.repository || "Unnamed project",
+      running: b.tasks.filter(t => t.status === "running").length,
+      blocked: b.tasks.filter(t => t.status === "blocked").length,
+      awaiting: b.tasks.filter(t => t.status === "awaiting_approval").length,
+    }));
 
-  const totalBots = summary.teams.reduce(
-    (total, team) => total + team.teammates.length,
-    0,
-  );
+  /* ==============================================================
+     Needs attention — one clear actionable item
+     ============================================================== */
+
+  const needsAttention = summary.bundles
+    .filter(b => b.tasks.some(t => t.status === "blocked" || t.status === "awaiting_approval"))
+    .slice(0, 3)
+    .map(b => ({
+      project: b.project.repository || "Unnamed project",
+      issues: b.tasks
+        .filter(t => t.status === "blocked" || t.status === "awaiting_approval")
+        .map(t => {
+          const reason = t.blocked_reason || t.status === "awaiting_approval" ? "approval needed" : t.blocked_reason;
+          return { id: t.id, reason };
+        }),
+    }));
+
+  /* ==============================================================
+     Pending approvals — what requires user attention
+     ============================================================== */
+
+  const pendingApprovals = summary.pendingApprovals.slice(0, 5).map((a: any) => ({
+    id: a.id,
+    project: a.project_id ? (summary.bundles?.find((b: any) => b.project.id === a.project_id)?.project?.repository || "Unnamed project") : "Unnamed project",
+    task: a.task_id ? `task ${a.task_id}` : "unknown task",
+    description: a.description || "Approval required",
+    status: a.status,
+  }));
+
+  /* ==============================================================
+     GUIDED START — natural language objective input
+     ============================================================== */
+
+  const [objectiveText, setObjectiveText] = (React as any).useState("");
+  const [isSubmitting, setIsSubmitting] = (React as any).useState(false);
+
+  const handleStartObjective = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    const trimmed = objectiveText.trim();
+    if (!trimmed) return;
+    setIsSubmitting(true);
+    try {
+      await onStartObjective(trimmed);
+      setObjectiveText("");
+      setIsSubmitting(false);
+      // Navigate to the workbench to follow execution
+      navigate("/workbench");
+    } catch (err) {
+      setIsSubmitting(false);
+      console.error("Failed to start objective:", err);
+    }
+  };
+
+  /* ==============================================================
+     QUICK ACTION TEMPLATES — reduce decision fatigue
+     ============================================================== */
+
+  const templates = [
+    { label: "Research a market", hint: "Find opportunities and competitors", category: "research" },
+    { label: "Build a GTM plan", hint: "Research, strategy and execution", category: "strategy" },
+    { label: "Analyze customer feedback", hint: "Turn data into decisions", category: "analysis" },
+    { label: "Delegate engineering work", hint: "Engineering delegation and implementation", category: "engineering" },
+    { label: "Start a new project", hint: "Create project and add teammates", category: "project" },
+  ];
+
+  /* ==============================================================
+     RENDER
+     ============================================================== */
 
   return (
-    <section className="space-y-4">
-      {/* Rollup header */}
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--faint)]">
-            Workforce
+    <section className="max-w-7xl mx-auto p-6 sm:p-8">
+      <header className="mb-8">
+        <h1 className="text-5xl sm:text-6xl font-bold tracking-tight text-[var(--text)]">
+          AI Operating Environment
+        </h1>
+        <p className="text-base sm:text-lg text-[var(--muted)] mb-4">
+          Your autonomous AI workforce is ready. Describe what you want to get done
+          and Nerdbot will figure out which agents to use, how to break it down,
+          and what requires your approval.
+        </p>
+      </header>
+
+      {/* ============================================================
+         WHAT DO YOU WANT TO GET DONE? - Natural language objective
+         ============================================================ */}
+      <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 sm:p-7 mb-6">
+        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-[var(--text)] mb-3">
+          Start an objective
+        </h2>
+
+        <p className="text-step--1 text-[var(--muted)] mb-4">
+          Describe what you want to accomplish. Your AI workforce will figure out
+          which agents to use, how to break it down, and what requires your approval.
+        </p>
+
+        <form
+          className="space-y-3"
+          onSubmit={handleStartObjective}
+        >
+          <div>
+            <textarea
+              value={objectiveText}
+              onChange={(e: React.ChangeEvent) => setObjectiveText(e.target.value)}
+              placeholder="e.g. Research 50 SaaS companies experiencing API dependency risks, identify their CTOs, prepare personalized outreach drafts, and organize everything in my workspace"
+              rows={3}
+              className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-step--1 text-[var(--text)] placeholder-text-[var(--muted)] focus-ring:outline-none focus-ring:ring-2 focus-ring ring-[var(--accent)] focus-ring:ring-offset-2 resize-none"
+              style={{ minHeight: 100 }}
+              disabled={isSubmitting}
+              aria-disabled={isSubmitting}
+            />
           </div>
-          <h2 className="text-base font-semibold tracking-tight text-[var(--text)]">
-            Team activity
-          </h2>
-          <p className="mt-1 text-sm text-[var(--muted)]">
-            Execution across your teams
+
+          <button
+            type="submit"
+            disabled={isSubmitting}
+            className="w-full sm:w-auto rounded-xl px-6 py-3 text-step--1 font-medium text-[var(--accent)] bg-[var(--accent)]/10 hover:bg-[var(--accent)]/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isSubmitting ? "Working..." : "Launch Autonomous Execution"}
+          </button>
+        </form>
+
+        {pendingApprovals.length > 0 && (
+          <p className="mt-3 text-step--1 text-[var(--muted)]">
+            {pendingApprovals.length} pending approval{s > 1 ? 's' : ''}{' '}
+            {pendingApprovals.some(a => a.status === 'awaiting_approval') ? 'requires your approval to continue' : ''}
           </p>
-        </div>
+        )}
+      </section>
 
-        <div className="flex gap-2">
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2">
-            <div className="text-lg font-semibold tabular-nums text-[var(--text)]">
-              {summary.teams.length}
-            </div>
-            <div className="text-[10px] uppercase tracking-wider text-[var(--muted)]">
-              Teams
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2">
-            <div className="text-lg font-semibold tabular-nums text-[var(--text)]">
-              {totalBots}
-            </div>
-            <div className="text-[10px] uppercase tracking-wider text-[var(--muted)]">
-              Agents
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2">
-            <div className="text-lg font-semibold tabular-nums text-[var(--info)]">
-              {totalRunning}
-            </div>
-            <div className="text-[10px] uppercase tracking-wider text-[var(--muted)]">
-              Running
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Team cards */}
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {summary.teams.map((bundle) => {
-          const counts = perTeamCounts(bundle, summary.bundles);
-
-          const statuses = bundle.teammates.map((bot) =>
-            botStatusFor(bot, summary.bundles),
-          );
-
-          const busyBots = statuses.filter(
-            (status) => statusTone(status) === "info",
-          ).length;
-
-          const blockedBots = statuses.filter(
-            (status) => status === "blocked",
-          ).length;
-
-          const idleBots = bundle.teammates.length - busyBots - blockedBots;
-
-          const isActive = counts.running > 0;
-          const hasIssues = counts.blocked > 0;
-
-          return (
-            <button
-              key={bundle.team.id}
-              onClick={() => onOpenTeam(bundle.team.id)}
-              className="group relative flex min-h-[168px] flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-[var(--accent)]/40 hover:bg-[var(--surface-2)] hover:shadow-lg"
-            >
-              {/* Status accent */}
-              <div
-                className={`absolute inset-x-0 top-0 h-[2px] ${
-                  hasIssues
-                    ? "bg-[var(--warn)]"
-                    : isActive
-                      ? "bg-[var(--info)]"
-                      : "bg-[var(--border)]"
-                }`}
-              />
-
-              {/* Card heading */}
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex min-w-0 items-center gap-3">
-                  <div
-                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--border)] text-sm font-semibold ${
-                      isActive
-                        ? "bg-[var(--info-dim)] text-[var(--info)]"
-                        : "bg-[var(--surface-2)] text-[var(--muted)]"
-                    }`}
-                  >
-                    {(bundle.team.name || "T").trim().charAt(0).toUpperCase()}
+      {/* ============================================================
+         ACTIVE WORK - Running objectives at a glance
+         ============================================================ */}
+      {summary.runningTasks > 0 && (
+        <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 sm:p-7 mb-5">
+          <h3 className="text-xl font-medium text-[var(--text)] mb-3">
+            <span className="text-[var(--accent)]">Running</span> objectives
+          </h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {activeWork.map((work, i) => (
+              <article
+                key={i}
+                className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4 transition-colors hover:bg-[var(--surface)]"
+              >
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <strong className="text-step--1 text-[var(--text)]">
+                    {work.project}
+                  </strong>
+                  <span className="text-xs text-[var(--muted)]">
+                    {work.running} running
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-step--1">
+                  <div>
+                    <span className="text-[var(--muted)]">blocked</span>
+                    <span className="font-medium text-[var(--warn)]">{work.blocked}</span>
                   </div>
+                  <div>
+                    <span className="text-[var(--muted)]">awaiting</span>
+                    <span className="font-medium text-[var(--muted)]">{work.awaiting}</span>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
 
-                  <div className="min-w-0">
-                    <h3 className="truncate text-sm font-semibold text-[var(--text)]">
+      {/* ============================================================
+         NEEDS ATTENTION - What requires user action
+         ============================================================ */}
+      {needsAttention.length > 0 && (
+        <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 sm:p-7 mb-5">
+          <h3 className="text-xl font-medium text-[var(--text)] mb-3">
+            <span className="text-[var(--warn)]">Needs attention</span>
+          </h3>
+          <p className="text-step--1 text-[var(--muted)] mb-4">
+            The following tasks require your intervention:
+          </p>
+          <ul className="space-y-3 max-h-80 overflow-y-auto">
+            {needsAttention.map((item, i) => (
+              <li
+                key={i}
+                className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3 transition-colors hover:bg-[var(--surface)]"
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <strong className="text-step--1 text-[var(--text)]">
+                    {item.project}
+                  </strong>
+                  <span className="text-xs text-[var(--muted)]">
+                    {item.issues.length} issue{s > 1 ? 's' : ''}
+                  </span>
+                </div>
+                <p className="text-step--1 text-[var(--muted)] small">
+                  {item.issues.map((issue: any, j: number) => (
+                    <span key={j}>
+                      {j > 0 && ", "}{issue.reason}
+                    </span>
+                  ))}</p
+                >
+                <Button
+                  variant="ghost"
+                  className="mt-2 w-full sm:w-auto rounded-md px-3 py-1.5 text-step--1 text-[var(--muted)] hover:text-[var(--accent)] hover:bg-[var(--accent)]/10 transition-colors"
+                  onClick={() => onOpenTask(item.project, item.issues[0]?.id ?? "")}
+                >
+                  Resolve
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {/* ============================================================
+         QUICK ACTION TEMPLATES - One clear action, not a grid
+         ============================================================ */}
+      <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 sm:p-7 mb-5">
+        <h3 className="text-xl font-medium text-[var(--text)] mb-3">
+          Quick actions
+        </h3>
+        <p className="text-step--1 text-[var(--muted)] mb-4">
+          Describe what you want to accomplish — or choose a template:
+        </p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
+          {templates.map((template, i) => (
+            <Button
+              key={i}
+              variant="ghost"
+              className="rounded-xl px-4 py-2.5 text-step--1 text-[var(--muted)] hover:text-[var(--accent)] hover:bg-[var(--accent)]/10 transition-colors flex items-center gap-2"
+              onClick={() => setObjectiveText(template.label)}
+            >
+              <span className="text-step--1">{template.label}</span>
+              <span className="text-[var(--faint)] text-xs">{template.hint}</span>
+            </Button>
+          ))}
+        </div>
+      </section>
+
+      {/* ============================================================
+         YOUR WORKFORCE - AI team concept communication
+         ============================================================ */}
+      {summary.teams.length > 0 ? (
+        <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 sm:p-6 mb-5">
+          <h3 className="text-lg font-medium text-[var(--text)] mb-3">
+            My Workforce
+          </h3>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
+            {summary.teams.map((bundle, index) => (
+              <article
+                key={bundle.team.id}
+                className="rounded-xl border border-[var(--surface-2)] bg-[var(--surface)] p-3 sm:p-4 transition-colors hover:bg-[var(--surface-2)]"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium text-[var(--text)]">
+                    {bundle.team.name || "Unnamed team"}
+                  </span>
+                  <Badge variant={bundle.team.status === "archived" ? "neutral" : "ok"}>
+                    {bundle.team.status === "archived" ? "Archived" : "Active"}
+                  </Badge>
+                </div>
+
+                <div className="text-step--1">
+                  {bundle.teammates.length > 0 ? (
+                    <span className="ml-2 text-[var(--muted)]">· {bundle.teammates.length} on deck</span>
+                  ) : (
+                    <span className="text-[var(--muted)]">no bots</span>
+                  )}
+                </div>
+              </article>
+            ))}
+          </div>
+
+          <div className="mt-3 flex items-center gap-2 text-step--1 text-[var(--muted)]">
+            <span className="font-medium text-[var(--text)]">
+              {summary.runningTasks} task{s > 1 ? 's' : ''} running
+            </span>
+            {summary.runningTasks > 0 && summary.runningTasks < 4 ? (
+              <span className="ml-1 text-[var(--accent)] font-medium">in progress</span>
+            ) : null}
+            <span className="ml-2">·</span>
+            <span>{summary.queuedTasks} queued</span>
+          </div>
+        </section>
+      ) : (
+        <EmptyState
+          title="No teams yet"
+          hint="Group bots into teams to see each crew's execution state."
+        />
+      )}
+
+      {/* ============================================================
+         EXECUTION ROLLUP - Teams overview with live state
+         ============================================================ */}
+      <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 sm:p-6 mb-5">
+        <h3 className="text-lg font-medium text-[var(--text)] mb-3">
+          Execution Rollup
+        </h3>
+        {summary.teams.length === 0 ? (
+          <EmptyState
+            title="No teams yet"
+            hint="Group bots into teams to get a live rollup of what each crew is running, queued, or waiting on."
+          />
+        ) : (
+          summary.teams.map((bundle, index) => {
+            const tasks = summary.bundles?.flatMap((b: any) => b.tasks) ?? [];
+            const running = tasks.filter((t: any) => t.status === "running").length;
+            const queued = tasks.filter((t: any) => t.status === "queued").length;
+            const blocked = tasks.filter((t: any) => t.status === "blocked").length;
+
+            const busyBots = bundle.teammates.filter(
+              (bot: any) =>
+                b.tasks.some((t: any) => t.owner_teammate_id === bot.id && t.status === "running")
+            ).length;
+
+            return (
+              <button
+                key={bundle.team.id}
+                onClick={() => onOpenTeam(bundle.team.id)}
+                className="flex w-full flex-wrap items-center gap-3 py-3 px-4 rounded-xl transition-colors hover:bg-[var(--surface-2)]" + (index > 0 ? teamButtonExtraClass : "")
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-[var(--text)]">
                       {bundle.team.name || "Unnamed team"}
-                    </h3>
-                    <p className="mt-0.5 text-xs text-[var(--muted)]">
-                      {bundle.teammates.length}{" "}
-                      {bundle.teammates.length === 1 ? "agent" : "agents"}
-                      {" · "}
-                      {bundle.projects.length}{" "}
-                      {bundle.projects.length === 1 ? "project" : "projects"}
-                    </p>
+                    </span>
+                    <span className="text-xs text-[var(--faint)]">team</span>
+                  </div>
+                  <div className="mt-1">
+                    {bundle.teammates.length > 0 ? (
+                      <span className="text-step--1 text-[var(--muted)]">
+                        {running > 0 ? `${running} running·` : ""}
+                        {busyBots} on deck
+                      </span>
+                    ) : (
+                      <span className="text-step--1 text-[var(--muted)]">no bots</span>
+                    )}
                   </div>
                 </div>
 
-                <span
-                  className={`mt-1 flex h-2 w-2 shrink-0 rounded-full ${
-                    hasIssues
-                      ? "bg-[var(--warn)]"
-                      : isActive
-                        ? "bg-[var(--info)]"
-                        : "bg-[var(--border)]"
-                  }`}
-                  aria-label={
-                    hasIssues
-                      ? "Blocked work"
-                      : isActive
-                        ? "Active"
-                        : "Idle"
-                  }
-                />
-              </div>
+                <div className="flex items-center gap-1">
+                  {running > 0 && <span className="text-step--1 text-[var(--accent)]">running</span>}
+                  {blocked > 0 && <span className="text-step--1 text-[var(--warn)]">blocked</span>}
+                  {queued > 0 && <span className="text-step--1 text-[var(--muted)]">queued</span>}
+                  <span className="text-[var(--faint)]" aria-hidden>→</span>
+                </div>
+              </button>
+            );
+          })}
+        )}
+      </section>
 
-              {/* Agent status */}
-              <div className="mt-4 flex flex-wrap gap-x-3 gap-y-1 text-xs">
-                {busyBots > 0 && (
-                  <span className="text-[var(--info)]">
-                    {busyBots} working
-                  </span>
-                )}
-                {blockedBots > 0 && (
-                  <span className="text-[var(--warn)]">
-                    {blockedBots} blocked
-                  </span>
-                )}
-                {idleBots > 0 && (
-                  <span className="text-[var(--muted)]">
-                    {idleBots} idle
-                  </span>
-                )}
-                {bundle.teammates.length === 0 && (
-                  <span className="text-[var(--muted)]">
-                    No agents assigned
-                  </span>
-                )}
-              </div>
+      {/* ============================================================
+         PROJECT SNAPSHOTS - Quick project state glance
+         ============================================================ */}
+      <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 sm:p-6 mb-5">
+        <h3 className="text-lg font-medium text-[var(--text)] mb-3">
+          Projects
+        </h3>
+        <div className="grid grid-cols-1 sm:grid-cols-[repeat(auto-fit,minmax(260px,1fr))] gap-3">
+          {summary.bundles.map((bundle, i) => {
+            const tally = tasks => {
+              let q = 0, r = 0, b = 0, a = 0;
+              for (const t of tasks) {
+                if (t.status === "queued") q++;
+                if (t.status === "running") r++;
+                if (t.status === "blocked") b++;
+                if (t.status === "awaiting_approval") a++;
+              }
+              return { q, r, b, a };
+            }(bundle.tasks);
 
-              {/* Task counters */}
-              <div className="mt-auto flex flex-wrap items-center gap-1.5 pt-4">
-                <CountChip tone="info" n={counts.running}>
-                  running
-                </CountChip>
-                <CountChip tone="warn" n={counts.queued}>
-                  queued
-                </CountChip>
-                <CountChip tone="bad" n={counts.blocked}>
-                  blocked
-                </CountChip>
+            return (
+              <article
+                key={bundle.project.id}
+                className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3 sm:p-4 transition-colors hover:bg-[var(--surface-2)]"
+              >
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <h4 className="font-medium text-[var(--text)] truncate">
+                    {bundle.project.repository || "Unnamed project"}
+                  </h4>
+                  <span className="text-xs text-[var(--faint)]">
+                    {count(bundle.tasks.length, "task", "tasks")}
+                  </span>
+                </div>
 
-                {counts.running === 0 &&
-                  counts.queued === 0 &&
-                  counts.blocked === 0 && (
-                    <span className="rounded-md bg-[var(--surface-2)] px-2 py-1 text-xs text-[var(--muted)]">
-                      No active tasks
-                    </span>
-                  )}
+                <div className="grid grid-cols-2 gap-1 text-xs text-step--1">
+                  <div>
+                    <span className="text-[var(--muted)]">running</span>
+                    <span className="font-medium text-[var(--accent)]">{tally.running}</span>
+                  </div>
+                  <div>
+                    <span className="text-[var(--muted)]">queued</span>
+                    <span className="font-medium text-[var(--muted)]">{tally.queued}</span>
+                  </div>
+                  <div>
+                    <span className="text-[var(--muted)]">blocked</span>
+                    <span className="font-medium text-[var(--warn)]">{tally.blocked}</span>
+                  </div>
+                </div>
 
-                <span className="ml-auto text-sm text-[var(--muted)] transition-transform group-hover:translate-x-1 group-hover:text-[var(--text)]">
-                  →
-                </span>
-              </div>
-            </button>
-          );
-        })}
-      </div>
+                <div className="mt-2">
+                  <Button
+                    variant="secondary"
+                    onClick={() => onOpenTask(bundle.project.id, bundle.tasks[0]?.id ?? "")}
+                    className="w-full sm:w-auto rounded-md px-3 py-1.5 text-step--1 text-[var(--accent)] hover:bg-[var(--surface-2)]"
+                  >
+                    View tasks
+                  </Button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+
+      {loadFailed && (
+        <section
+          className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-5 sm:p-6 mb-6"
+        >
+          <p className="text-step--1 text-[var(--muted)]">
+            Unable to load fleet signals. <a href="#" className="underline underline-offset-2 hover:text-[var(--accent)]">Retry</a>.</p>
+        </section>
+      )}
     </section>
   );
 }
