@@ -807,6 +807,13 @@ def _execute_chat_tool(
             }[name]
             actor = _ws.WorkspaceActor(kind="teammate", id=getattr(teammate, "id", ""), project_id=project_id, teammate=teammate)
             relpath = str(args.get("path", ".") or ".") if name != "run_command" else ""
+            tainted_now = saw_untrusted
+            if not tainted_now and thread_id:
+                try:
+                    _t = store.get_thread(conn, thread_id)
+                    tainted_now = bool(getattr(_t, "tainted", False)) if _t else False
+                except Exception:
+                    pass
             result = _ws.do(
                 actor,
                 action,
@@ -815,7 +822,7 @@ def _execute_chat_tool(
                 data_dir=data_dir or ".nerdbot-data",
                 command=str(args.get("command", "")),
                 content=str(args.get("content", "")),
-                untrusted=saw_untrusted,
+                untrusted=tainted_now,
                 thread_id=thread_id or "",
             )
             if not result.ok:
