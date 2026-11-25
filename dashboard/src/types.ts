@@ -548,10 +548,6 @@ export interface Health {
   secret_key?: string;
   /** How the server resolves its bearer token: "configured" | "dev" | "closed". */
   auth?: string;
-  /** Only present when auth === "dev": the well-known local dev token, so the
-   *  first browser visit can connect itself instead of forcing the owner to
-   *  retype a value everyone can read in the docs. */
-  dev_token?: string;
 }
 
 export interface TaskView {

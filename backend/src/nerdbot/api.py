@@ -481,15 +481,9 @@ def create_app() -> FastAPI:
             "secret_key": secret_key_state,
             "restarts": restarts,
         }
-        # Auth mode lives here because the dashboard reads it. In the
-        # explicit dev opt-in the bearer token is a well-known constant, so
-        # serving it lets the first browser visit connect itself instead of
-        # making the owner retype a value everyone can read in the docs.
-        # Any other mode says nothing about its token.
-        mode = auth_mod.token_status()
-        response["auth"] = mode
-        if mode == "dev":
-            response["dev_token"] = auth_mod.DEV_DEFAULT_TOKEN
+        # Report auth mode only. Never return bearer tokens or secrets from
+        # an unauthenticated endpoint.
+        response["auth"] = auth_mod.token_status()
         return response
 
     @app.post("/projects")

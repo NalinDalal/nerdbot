@@ -1113,21 +1113,9 @@ export function defaultApiBase(): string {
   return "http://127.0.0.1:8080";
 }
 
-/** The dev server hands back its well-known token so the owner never has to
- *  retype a value everyone can read in the docs. Any other auth mode says
- *  nothing about its token, so a blank field stays a blank field. */
-export function resolveConnectToken(health: unknown, typed: string): string {
-  if (typed) return typed;
-  if (
-    typeof health === "object" &&
-    health !== null &&
-    (health as { auth?: unknown }).auth === "dev" &&
-    typeof (health as { dev_token?: unknown }).dev_token === "string" &&
-    (health as { dev_token?: string }).dev_token
-  ) {
-    return (health as { dev_token: string }).dev_token;
-  }
-  return "";
+/** Do not read tokens from /health; owners must supply their token explicitly. */
+export function resolveConnectToken(_health: unknown, typed: string): string {
+  return typed;
 }
 
 function ConnectScreen({ onConnected }: { onConnected: () => void }) {
@@ -1141,16 +1129,7 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }) {
     setError(null);
     setBusy(true);
     try {
-      // Probe first: in dev mode the server hands back the well-known token so
-      // the owner never has to type it. The probe is best-effort  a failure
-      // here just means the real connect attempt below will surface the error.
-      let tokenToUse = token;
-      try {
-        const health = await api.health();
-        tokenToUse = resolveConnectToken(health, tokenToUse);
-      } catch {
-        // fall through
-      }
+      const tokenToUse = resolveConnectToken(null, token);
       setSession({ baseUrl: baseUrl.replace(/\/+$/, ""), token: tokenToUse });
       const health = await api.health();
       if (health.status !== "ok")
