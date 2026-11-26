@@ -4,7 +4,7 @@ import { api, ApiError, getSession } from "./api";
 import { notifyError, navigate } from "./app";
 import { TeamView } from "./team-view";
 import type { ChatMessage, ChatThread, Plan, Provider, ResearchJob, ResearchJobEvent, Teammate, WorkspaceBrowseResult } from "./types";
-import { useWorkspaceSummary } from "./views-home";
+import { useWorkspaceSummary } from "./useWorkspaceSummary";
 import { Markdown } from "./markdown";
 import { insertMention, mentionHandle, splitMentions } from "./mentions";
 import { executionStages } from "./chatParts";

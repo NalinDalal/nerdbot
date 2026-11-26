@@ -654,43 +654,9 @@ export interface WorkspaceFile {
   modified: number;
 }
 
-export interface WorkspaceChange {
-  status: string;
-  path: string;
-}
-
-/** The live root a project's workbench opens. */
-export interface WorkspaceMeta {
-  project_id?: string;
-  root: string;
-  name: string;
-  exists: boolean;
-  git: boolean;
-  branch: string;
-  dirty: boolean;
-  changes: WorkspaceChange[];
-  file_count: number;
-  truncated: boolean;
-  attached: boolean;
-  busy: boolean;
-}
-
-export interface WorkspaceTree extends WorkspaceMeta {
-  files: WorkspaceFile[];
-  dirs: string[];
-}
-
-export interface WorkspaceFileContent {
-  path: string;
-  content: string;
-  size: number;
-  modified?: number;
-  sha256?: string;
-}
-
 export interface WorkspaceDiff {
   diff: string;
-  status: WorkspaceChange[];
+  status: Array<{ status: string; path: string }>;
   git: boolean;
   exists: boolean;
 }

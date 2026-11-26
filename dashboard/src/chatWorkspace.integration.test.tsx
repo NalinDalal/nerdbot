@@ -56,7 +56,7 @@ vi.mock("./api", () => ({
 vi.mock("./workspace", () => workspace);
 vi.mock("./app", () => ({ navigate, notifyError }));
 vi.mock("sonner", () => ({ toast }));
-vi.mock("./views-home", () => ({ useWorkspaceSummary: () => ({ data: { summary: { bundles: [], activeRuns: [], failedRuns: [], pendingApprovals: [] } }, loading: false, loadFailed: false, reload: vi.fn() }) }));
+vi.mock("./useWorkspaceSummary", () => ({ useWorkspaceSummary: () => ({ data: { summary: { bundles: [], activeRuns: [], failedRuns: [], pendingApprovals: [] } }, loading: false, loadFailed: false, reload: vi.fn() }) }));
 vi.mock("./team-view", () => ({ TeamView: () => <div /> }));
 vi.mock("./markdown", () => ({ Markdown: ({ content }: any) => <div>{content}</div> }));
 

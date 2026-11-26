@@ -244,25 +244,6 @@ button {
   }
 }
 
-/* ===== Terminal chrome (workbench) ===== */
-#workbench-terminal {
-  border: 1px solid var(--border-dim);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-}
-#workbench-terminal .xterm-focus-glow {
-  display: none !important;
-}
-#workbench-terminal .xterm .xterm-scrollbar-state {
-  background: transparent !important;
-}
-#workbench-terminal .xterm .xterm-scrollbar .xterm-scrollbar-area {
-  opacity: 0.45 !important;
-}
-#workbench-terminal .xterm .xterm-scrollbar .xterm-scrollbar-area:not(:hover) {
-  transition: background-color 200ms ease;
-}
-
 /* ===== Shared easing helpers ===== */
 @keyframes nerdbot-shimmer {
   0% {

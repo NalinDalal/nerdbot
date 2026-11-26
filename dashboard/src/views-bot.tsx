@@ -245,7 +245,7 @@ export function BotDetailView({
   const [testDraft, setTestDraft] = useState("");
   const [testBusy, setTestBusy] = useState(false);
   const [testWorkspace, setTestWorkspace] = useState<string>("");
-  useEffect(() => { const m = (all.data as any)?.teammates?.find((x: any) => x.id === teammateId); if (section === "test" && m) api.projectWorkspace(m.project_id).then((ws: any) => setTestWorkspace(ws.root || "")).catch(() => {}); }, [section, teammateId, all.data]);
+  useEffect(() => { const m = (all.data as any)?.teammates?.find((x: any) => x.id === teammateId); if (section === "test" && m) api.defaultWorkspace().then((ws: any) => setTestWorkspace(ws.path || "")).catch(() => {}); }, [section, teammateId, all.data]);
 
   const openEditor = () => {
     if (!mate) return;

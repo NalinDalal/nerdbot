@@ -50,9 +50,6 @@ import type {
   WorkspaceDefaultResult,
   WorkspaceDiff,
   WorkspaceFile,
-  WorkspaceFileContent,
-  WorkspaceMeta,
-  WorkspaceTree,
   WorkspaceVetResult,
 } from "./types";
 
@@ -393,24 +390,10 @@ export const api = {
   deleteWorkspace: (taskId: string) =>
     req<{ removed: boolean }>(`/tasks/${taskId}/workspace`, { method: "DELETE" }),
   ensureWorkspace: (taskId: string) => post<{ path: string; branch: string }>(`/tasks/${taskId}/workspace`, {}),
-  /** The live project workspace (not a per-task checkout). */
-  projectWorkspace: (projectId: string) =>
-    req<WorkspaceMeta>(`/projects/${projectId}/workspace`),
-  projectWorkspaceTree: (projectId: string) =>
-    req<WorkspaceTree>(`/projects/${projectId}/workspace/tree`),
-  projectWorkspaceFile: (projectId: string, path: string) =>
-    req<WorkspaceFileContent>(
-      `/projects/${projectId}/workspace/file?path=${encodeURIComponent(path)}`,
-    ),
   saveProjectWorkspaceFile: (projectId: string, path: string, content: string, expectedHash?: string) =>
     req<{ path: string; size: number; sha256?: string; modified?: number }>(`/projects/${projectId}/workspace/file`, {
       method: "PUT",
       body: { path, content, ...(expectedHash ? { expected_hash: expectedHash } : {}) },
-    }),
-  attachProjectWorkspace: (projectId: string, path: string, initializeGit = false) =>
-    post<WorkspaceMeta>(`/projects/${projectId}/workspace/attach`, {
-      path,
-      initialize_git: initializeGit,
     }),
   browseWorkspace: (path = "") =>
     req<WorkspaceBrowseResult>(`/workspace/browse?path=${encodeURIComponent(path)}`),
