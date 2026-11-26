@@ -820,6 +820,29 @@ def _record_approval_checkpoints(
     ctx.pending_approvals.extend(approvals)
 
 
+def _tool_action(name: str, args: dict[str, Any]) -> str | None:
+    if name in _EXTERNAL_TOOL_TO_PERMISSION:
+        return _EXTERNAL_TOOL_TO_PERMISSION[name]
+    if name in TOOL_PERMISSIONS:
+        return TOOL_PERMISSIONS[name]
+    if name in AMBIENT_TOOLS:
+        # Ambient tools are reads/own-inbox/own-delegation decisions; map to closest permission scope.
+        ambient = {
+            "inspect_workspace": "ambient.workspace.read",
+            "list_workspace_files": "ambient.workspace.read",
+            "read_workspace_file": "ambient.workspace.read",
+            "search_workspace": "ambient.workspace.read",
+            "list_tasks": "ambient.task.read",
+            "get_task": "ambient.task.read",
+            "read_messages": "ambient.inbox.read",
+            "read_memory": "ambient.memory.read",
+            "respond_to_delegation": "ambient.delegation.respond",
+            "list_providers": "ambient.provider.read",
+        }
+        return ambient.get(name)
+    return None
+
+
 def execute_app_tool(
     ctx: AgentContext,
     name: str,
@@ -830,31 +853,111 @@ def execute_app_tool(
     workspace_path: str | None = None,
     transport: Any = None,
     raise_on_denial: bool = False,
+    approval: Any = None,
+    run_owner: str | None = None,
 ) -> str:
     """Execute one app tool call for the acting identity in ``ctx``.
 
-    Returns bounded, human/model-readable text. Gate denials and required
-    approvals are returned as normal results (never exceptions) so the model
-    can report them to the user.
-
-    ``raise_on_denial`` is for the resume path: there, a denial is not
-    something to report to a model but a reason the action did not happen,
-    and it must not be mistaken for a success.
+    Protected execution is enforced at this boundary immediately before dispatch.
+    Denied / approval-required decisions do not execute the tool.
     """
+    from . import execution_policy
+
+    try:
+        mate = _resolve_actor(ctx)
+    except gates.GateDenied as exc:
+        claimed = ctx.teammate
+        action = _tool_action(name, arguments) or name
+        try:
+            store.record_execution_policy_decision(
+                ctx.conn,
+                project_id=ctx.task.project_id,
+                task_id=ctx.task.id,
+                run_id=run_id or ctx.run_id,
+                teammate_id=(claimed.id if claimed else ""),
+                action=action,
+                decision="DENY",
+                reason_code="actor_invalid",
+            )
+        except Exception:
+            pass
+        if raise_on_denial:
+            raise
+        return f"permission denied: {exc}"
+
+    action = _tool_action(name, arguments)
+    if action is None:
+        try:
+            store.record_execution_policy_decision(
+                ctx.conn,
+                project_id=ctx.task.project_id,
+                task_id=ctx.task.id,
+                run_id=run_id or ctx.run_id,
+                teammate_id=mate.id,
+                action=name,
+                decision="DENY",
+                reason_code="unknown_tool",
+            )
+        except Exception as exc:
+            msg = f"permission denied: audit persistence failed: {exc}"
+            if raise_on_denial:
+                raise gates.GateDenied(msg)
+            return msg
+        return f"unknown tool: {name}"
+
+    owner = run_owner or ctx.run_owner or None
+    try:
+        decision = execution_policy.enforce_tool_execution(
+            ctx.conn,
+            action=action,
+            teammate_id=mate.id,
+            project_id=ctx.task.project_id,
+            task_id=ctx.task.id,
+            run_id=run_id or ctx.run_id,
+            approval=approval,
+            run_owner=owner,
+        )
+    except PermissionError as exc:
+        if raise_on_denial:
+            raise gates.GateDenied(str(exc))
+        return f"permission denied: {exc}"
+
+    if decision.decision == "REQUIRE_APPROVAL":
+        payload = {k: v for k, v in arguments.items() if isinstance(v, (str, int, float, bool, list, dict, type(None)))}
+        try:
+            gates.require(
+                ctx.conn,
+                mate,
+                action,
+                payload=payload,
+                run_id=run_id or ctx.run_id,
+                task_id=ctx.task.id,
+            )
+        except gates.GateApprovalRequired as exc:
+            if not raise_on_denial:
+                _record_approval_checkpoints(ctx, exc.approvals, name, arguments)
+            if raise_on_denial:
+                raise
+            return _approval_result(exc)
+        except gates.GateDenied as exc:
+            if raise_on_denial:
+                raise
+            return f"permission denied: {exc}"
+    elif not decision.allowed:
+        msg = f"permission denied: {decision.reason_code}"
+        if raise_on_denial:
+            raise gates.GateDenied(msg)
+        return msg
+
     try:
         return _dispatch(ctx, name, arguments, data_dir, run_id, workspace_path, transport)
     except HTTPException as exc:
         return f"tool error (HTTP {exc.status_code}): {exc.detail}"
     except gates.GateDenied as exc:
-        # Gate denials are results, not crashes: the model must be able to
-        # report them to the user instead of failing the whole run.
         if raise_on_denial:
             raise
         return f"permission denied: {exc}"
     except gates.GateApprovalRequired as exc:
-        # Record the exact ask on the approval row so the owner's decision can
-        # carry it out, and let the run park instead of finishing: the bot did
-        # not complete its work, it is waiting on a human.
         if not raise_on_denial:
             _record_approval_checkpoints(ctx, exc.approvals, name, arguments)
         if raise_on_denial:

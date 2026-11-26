@@ -241,6 +241,7 @@ def schedule_run(
     ctx = agent_context_mod.build(conn, task, owner)
     ctx.data_dir = data_dir
     ctx.run_id = run.id
+    ctx.run_owner = run_owner
     ctx.system_message += dependency_context(conn, task)
 
     if not dependencies_satisfied(conn, task):

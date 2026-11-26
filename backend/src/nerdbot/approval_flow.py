@@ -155,6 +155,8 @@ def _execute_checkpoint(
         return "refused", "this action is already being carried out; it was not performed twice"
 
     try:
+        run = store.get_run(conn, approval.run_id)
+        run_owner = run.lease_owner if run is not None else None
         result = app_tools.execute_app_tool(
             ctx,
             approval.tool_name,
@@ -163,6 +165,8 @@ def _execute_checkpoint(
             run_id=approval.run_id,
             workspace_path=task.workspace_path or None,
             raise_on_denial=True,
+            approval=approval,
+            run_owner=run_owner,
         )
     except gates.GateDenied as exc:
         store.record_approval_resume_result(conn, approval.id, f"refused: {exc}")

@@ -207,6 +207,19 @@ CREATE TABLE IF NOT EXISTS workspace_audit (
   args_summary TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_workspace_audit_project ON workspace_audit(project_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS execution_policy_audit (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL DEFAULT '',
+  task_id TEXT NOT NULL DEFAULT '',
+  run_id TEXT NOT NULL DEFAULT '',
+  teammate_id TEXT NOT NULL DEFAULT '',
+  action TEXT NOT NULL DEFAULT '',
+  decision TEXT NOT NULL DEFAULT '',
+  reason_code TEXT NOT NULL DEFAULT '',
+  approval_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_execution_policy_audit_project ON execution_policy_audit(project_id, created_at DESC);
 CREATE TABLE IF NOT EXISTS owner_settings (
   owner TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, updated_at TEXT NOT NULL,
   PRIMARY KEY (owner, key)
@@ -897,6 +910,8 @@ _PHASE39_COLUMNS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
+_PHASE40_COLUMNS: dict[str, list[tuple[str, str]]] = {}
+
 
 _PHASE20_COLUMNS: dict[str, list[tuple[str, str]]] = {
     # Bot persona files (ai-teammates model): a bot's identity, its active
@@ -932,7 +947,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
                   _PHASE25_COLUMNS, _PHASE26_COLUMNS, _PHASE27_COLUMNS, _PHASE28_COLUMNS,
                   _PHASE29_COLUMNS, _PHASE30_COLUMNS, _PHASE31_COLUMNS, _PHASE32_COLUMNS,
                   _PHASE33_COLUMNS, _PHASE34_COLUMNS, _PHASE35_COLUMNS, _PHASE36_COLUMNS, _PHASE37_COLUMNS,
-                  _PHASE38_COLUMNS, _PHASE39_COLUMNS):
+                  _PHASE38_COLUMNS, _PHASE39_COLUMNS, _PHASE40_COLUMNS):
         for table, columns in phase.items():
             phases.setdefault(table, []).extend(columns)
     for table, columns in phases.items():
@@ -3491,7 +3506,7 @@ def list_messages_for_teammate(
             raise KeyError(f"unknown board {board_id}")
         rows = conn.execute(
             "SELECT * FROM board_messages WHERE to_teammate_id = ? AND board_id = ?"
-            " ORDER BY rowid DESC LIMIT ?",
+            " ORDER BY created_at DESC LIMIT ?",
             (teammate_id, board_id, limit),
         ).fetchall()
     else:
@@ -8098,3 +8113,36 @@ def list_workspace_audit(conn: sqlite3.Connection, project_id: str, limit: int =
         (project_id, max(1, min(int(limit), 500))),
     ).fetchall()
     return [dict(row) for row in rows]
+
+# ---------------------------------------------------------------------------
+# Execution-boundary policy audit (Nerdbot 2.0 slice)
+# ---------------------------------------------------------------------------
+
+def record_execution_policy_decision(
+    conn: sqlite3.Connection,
+    *,
+    project_id: str,
+    task_id: str = "",
+    run_id: str = "",
+    teammate_id: str = "",
+    action: str,
+    decision: str,
+    reason_code: str,
+    approval_id: str = "",
+) -> str:
+    aid = new_id("epa")
+    conn.execute(
+        "INSERT INTO execution_policy_audit (id, project_id, task_id, run_id, teammate_id, action, decision, reason_code, approval_id, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (aid, project_id, task_id, run_id, teammate_id, action, decision, reason_code, approval_id, _now_iso()),
+    )
+    conn.commit()
+    return aid
+
+
+def list_execution_policy_audit(conn: sqlite3.Connection, project_id: str, limit: int = 200) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM execution_policy_audit WHERE project_id=? ORDER BY created_at DESC LIMIT ?",
+        (project_id, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
