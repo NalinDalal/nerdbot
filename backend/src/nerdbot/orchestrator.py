@@ -14,6 +14,7 @@ import contextlib
 import hashlib
 import json
 import sqlite3
+import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -228,8 +229,8 @@ def schedule_run(
     store.record_event(conn, task.project_id, "run", run.id, f"run.provider.{adapter.name}")
     # Persist the queued -> running transition BEFORE executing so a crash
     # leaves a recoverable non-terminal state instead of silent ambiguity.
-    store.mark_run_running(conn, run.id)
-    run.status = RunStatus.RUNNING
+    run_owner = f"worker:{os.getpid()}:{run.id}"
+    run = store.mark_run_running(conn, run.id, owner=run_owner)
     store.set_task_status(conn, task_id, TaskStatus.RUNNING)
 
     # Assemble the full agent context (identity, memory, inbox, delegations)
@@ -243,7 +244,7 @@ def schedule_run(
     ctx.system_message += dependency_context(conn, task)
 
     if not dependencies_satisfied(conn, task):
-        store.finish_run(conn, run.id, RunStatus.BLOCKED, None, "dependencies not satisfied")
+        store.finish_run(conn, run.id, RunStatus.BLOCKED, None, "dependencies not satisfied", owner=run_owner)
         run.status = RunStatus.BLOCKED
         run.output_excerpt = "dependencies not satisfied"
         store.set_task_status(conn, task_id, TaskStatus.BLOCKED, "dependencies not satisfied")
@@ -253,7 +254,7 @@ def schedule_run(
         ws = prepare_task_workspace(conn, task, data_dir)
     except (ValueError, OSError, RuntimeError) as exc:
         reason = f"workspace unavailable: {exc}"
-        store.finish_run(conn, run.id, RunStatus.BLOCKED, None, reason)
+        store.finish_run(conn, run.id, RunStatus.BLOCKED, None, reason, owner=run_owner)
         run.status = RunStatus.BLOCKED
         run.output_excerpt = reason
         store.set_task_status(conn, task_id, TaskStatus.BLOCKED, reason)
@@ -280,7 +281,7 @@ def schedule_run(
     if task.workspace_mode == "workspace":
         if not workspace.acquire_workspace_lock(task.project_id):
             reason = "workspace is busy with another live run"
-            store.finish_run(conn, run.id, RunStatus.BLOCKED, None, reason)
+            store.finish_run(conn, run.id, RunStatus.BLOCKED, None, reason, owner=run_owner)
             run.status = RunStatus.BLOCKED
             run.output_excerpt = reason
             store.set_task_status(conn, task_id, TaskStatus.BLOCKED, reason)
@@ -294,19 +295,64 @@ def schedule_run(
     cancel = CancelToken()
     runtime_mod.register_run(run.id, cancel)
     if store.run_cancel_requested(conn, run.id):
-        # A cancel that arrived before this run registered itself still
-        # applies: the request is durable, and it is honoured here.
         cancel.cancel()
+    lease_stop = threading.Event()
+    lease_lost = threading.Event()
+
+    def _heartbeat() -> None:
+        interval = max(1.0, min(15.0, timeout_s / 3.0))
+        while not lease_stop.wait(interval):
+            try:
+                ok = store.renew_run_lease(conn, run.id, owner=run_owner, lease_s=max(30.0, timeout_s))
+            except Exception:
+                ok = False
+            if not ok:
+                lease_lost.set()
+                cancel.cancel()
+                return
+
     emit_event(conn, run.id, "run", "executing")
+    result_holder: dict[str, Any] = {}
+    error_holder: dict[str, BaseException] = {}
+
+    def _run() -> None:
+        try:
+            result_holder["result"] = active.start_run(
+                task.command, ws, timeout_s=timeout_s, context=ctx, cancel=cancel
+            )
+        except BaseException as exc:  # propagate after main-thread lease checks
+            error_holder["exc"] = exc
+
+    worker = threading.Thread(target=_run, name=f"run-exec-{run.id}", daemon=True)
+    worker.start()
+    hb_interval = max(1.0, min(15.0, timeout_s / 3.0))
+    next_hb = time.monotonic() + hb_interval
     try:
-        result = active.start_run(
-            task.command, ws, timeout_s=timeout_s, context=ctx, cancel=cancel
-        )
+        while worker.is_alive():
+            worker.join(timeout=0.2)
+            if lease_lost.is_set():
+                break
+            if time.monotonic() >= next_hb:
+                try:
+                    ok = store.renew_run_lease(conn, run.id, owner=run_owner, lease_s=max(30.0, timeout_s))
+                except Exception:
+                    ok = False
+                if not ok:
+                    lease_lost.set()
+                    cancel.cancel()
+                    break
+                next_hb = time.monotonic() + hb_interval
+        worker.join(timeout=1.0)
+        if lease_lost.is_set():
+            raise ExecutionError("run lease lost during execution")
+        if "exc" in error_holder:
+            raise error_holder["exc"]
+        result = result_holder["result"]
     except RunCancelled as exc:
         emit_event(conn, run.id, "cancelled", str(exc))
-        return (run, None, _finish_cancelled(conn, run, task, exc, ws, data_dir, started))
+        return (run, None, _finish_cancelled(conn, run, task, exc, ws, data_dir, started, owner=run_owner))
     except BlockedError as exc:
-        store.finish_run(conn, run.id, RunStatus.BLOCKED, None, f"blocked: {exc.reason}")
+        store.finish_run(conn, run.id, RunStatus.BLOCKED, None, f"blocked: {exc.reason}", owner=run_owner)
         run.status = RunStatus.BLOCKED
         run.output_excerpt = f"blocked: {exc.reason}"
         store.set_task_status(conn, task_id, TaskStatus.BLOCKED, str(exc.reason))
@@ -326,7 +372,7 @@ def schedule_run(
             duration_s=time.monotonic() - started,
             passed=False,
         )
-        store.finish_run(conn, run.id, RunStatus.FAILED, None, str(exc))
+        store.finish_run(conn, run.id, RunStatus.FAILED, None, str(exc), owner=run_owner)
         run.status = RunStatus.FAILED
         run.output_excerpt = str(exc)
         store.set_task_status(conn, task_id, TaskStatus.FAILED)
@@ -335,7 +381,7 @@ def schedule_run(
         return run, None, failed
     except Exception as exc:  # explicit failure, never silent success
         message = f"unexpected runtime error: {type(exc).__name__}: {exc}"
-        store.finish_run(conn, run.id, RunStatus.FAILED, None, message)
+        store.finish_run(conn, run.id, RunStatus.FAILED, None, message, owner=run_owner)
         run.status = RunStatus.FAILED
         run.output_excerpt = message
         store.set_task_status(conn, task_id, TaskStatus.FAILED)
@@ -346,6 +392,10 @@ def schedule_run(
         runtime_mod.unregister_run(run.id)
         if live_lock:
             workspace.release_workspace_lock(task.project_id)
+        if lease_lost.is_set():
+            # Ownership lost: recovery owns the run. Do not finalize or mutate task.
+            run.output_excerpt = "run lease lost; recovery will reconcile"
+            return run, None, None
 
     # The turn asked for something only the owner can allow. The run is
     # WAITING, not finished: it must not report a success while the request
@@ -377,6 +427,7 @@ def schedule_run(
             stdout=result.stdout,
             stderr=result.stderr,
             duration_s=duration_s,
+            owner=run_owner,
         )
         run.status = RunStatus.FAILED
         run.exit_code = result.exit_code
@@ -398,16 +449,21 @@ def schedule_run(
             passed=False,
         )
         return run, result, artifact_id
-    store.finish_run(
-        conn,
-        run.id,
-        RunStatus.SUCCEEDED if ok else RunStatus.FAILED,
-        result.exit_code,
-        frame_untrusted(result.output),
-        stdout=result.stdout,
-        stderr=result.stderr,
-        duration_s=duration_s,
-    )
+    try:
+        store.finish_run(
+            conn,
+            run.id,
+            RunStatus.SUCCEEDED if ok else RunStatus.FAILED,
+            result.exit_code,
+            frame_untrusted(result.output),
+            stdout=result.stdout,
+            stderr=result.stderr,
+            duration_s=duration_s,
+            owner=run_owner,
+        )
+    except store.InvalidTransitionError as exc:
+        run.output_excerpt = f"run finalization rejected: {exc}"
+        return run, result, None
     run.status = RunStatus.SUCCEEDED if ok else RunStatus.FAILED
     run.exit_code = result.exit_code
     run.output_excerpt = frame_untrusted(result.output)[:4000]
@@ -465,7 +521,7 @@ def _park_on_approval(
         f"waiting for your approval of {action}"
         f" — {len(pending)} request(s) pending"
     )
-    store.mark_run_awaiting_approval(conn, run.id, reason)
+    store.mark_run_awaiting_approval(conn, run.id, reason, owner=run_owner)
     run.status = RunStatus.AWAITING_APPROVAL
     run.output_excerpt = reason
     store.set_task_status(conn, task.id, TaskStatus.AWAITING_APPROVAL, reason)
@@ -489,6 +545,8 @@ def _finish_cancelled(
     ws: Path,
     data_dir: str,
     started: float,
+    *,
+    owner: str | None = None,
 ) -> str:
     """Record a cancelled run: stopped on request, not a success and not a
     failure of the work itself.
@@ -508,6 +566,7 @@ def _finish_cancelled(
         stdout=exc.stdout,
         stderr=exc.stderr,
         duration_s=duration_s,
+        owner=run_owner,
     )
     run.status = RunStatus.CANCELLED
     run.output_excerpt = note
@@ -674,39 +733,54 @@ def retry_task(
 def recover_incomplete_runs(conn: sqlite3.Connection) -> list[str]:
     """Recover runs left non-terminal and reclaim stale task-claim leases.
 
-    - ``queued`` runs are left untouched: they never started and stay startable.
-    - ``running`` runs can never complete after their process died: they are
-      moved to ``stopped`` with an explicit recovery note. No new runs are
-      created, so completed runs are never duplicated.
-    - Owning tasks left in ``running`` with no active run return to
-      ``pending`` so they can be explicitly rescheduled.
-    - ``ready`` tasks with expired/missing claim lease and no active run are
-      reclaimed to ``pending`` with owner cleared. Active leases are never
-      reclaimed to avoid duplicate execution.
+    - ``queued`` runs untouched.
+    - ``running`` runs recovered only when lease is expired/missing; valid leases are never reclaimed.
+    - Recovery claims expired runs atomically (CAS on status+lease_owner+lease_expires_at) so concurrent recoveries cannot duplicate.
+    - Tasks with no active runs reconciled to terminal/pending as before.
+    - ``ready`` tasks with stale claim lease and no active run reclaimed to pending.
 
-    Returns the ids of runs moved to ``stopped``.
+    Returns ids of runs moved to ``stopped``.
     """
+    now = datetime.now(UTC)
+    now_iso = now.isoformat()
     rows = conn.execute(
-        "SELECT * FROM runs WHERE status = ?", (RunStatus.RUNNING.value,)
+        "SELECT id, task_id, lease_owner, lease_expires_at, exit_code, output_excerpt FROM runs WHERE status=?",
+        (RunStatus.RUNNING.value,),
     ).fetchall()
     recovered: list[str] = []
     for row in rows:
-        run_id = row["id"]
-        note = (row["output_excerpt"] or "") + "\n[recovered: process ended before completion]"
-        store.finish_run(conn, run_id, RunStatus.STOPPED, row["exit_code"], note.strip())
-        recovered.append(run_id)
+        lease_raw = row["lease_expires_at"]
+        lease_expired = True
+        if lease_raw:
+            try:
+                lease_expired = datetime.fromisoformat(lease_raw) <= now
+            except Exception:
+                lease_expired = True
+        if not lease_expired:
+            continue
+        note = (row["output_excerpt"] or "") + "\n[recovered: run lease expired]"
+        cur = conn.execute(
+            "UPDATE runs SET status=?, finished_at=?, output_excerpt=?, lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL"
+            " WHERE id=? AND status=? AND (lease_expires_at IS NULL OR lease_expires_at <= ?)",
+            (
+                RunStatus.STOPPED.value,
+                now_iso,
+                note.strip()[:4000],
+                row["id"],
+                RunStatus.RUNNING.value,
+                now_iso,
+            ),
+        )
+        conn.commit()
+        if cur.rowcount != 1:
+            continue
+        recovered.append(row["id"])
+        store.record_event(conn, "", "run", row["id"], "run.recovered.lease_expired")
         task = store.get_task(conn, row["task_id"])
         if task is not None and task.status == TaskStatus.RUNNING:
-            active = [
-                r
-                for r in store.list_runs_for_task(conn, task.id)
-                if r.status not in store.TERMINAL_RUN_STATUSES
-            ]
+            active = [r for r in store.list_runs_for_task(conn, task.id) if r.status not in store.TERMINAL_RUN_STATUSES]
             if not active:
-                terminal_runs = [
-                    r for r in store.list_runs_for_task(conn, task.id)
-                    if r.status in store.TERMINAL_RUN_STATUSES
-                ]
+                terminal_runs = [r for r in store.list_runs_for_task(conn, task.id) if r.status in store.TERMINAL_RUN_STATUSES]
                 if terminal_runs:
                     last = max(terminal_runs, key=lambda r: r.started_at or "")
                     if last.status == RunStatus.SUCCEEDED:
@@ -716,21 +790,21 @@ def recover_incomplete_runs(conn: sqlite3.Connection) -> list[str]:
                     elif last.status == RunStatus.BLOCKED:
                         store.set_task_status(conn, task.id, TaskStatus.BLOCKED)
                     else:
-                        # STOPPED (crash recovery) -> pending, recoverable
                         store.set_task_status(conn, task.id, TaskStatus.PENDING)
+                        conn.execute("UPDATE tasks SET owner_teammate_id=NULL, claimed_at=NULL, claim_lease_expires_at=NULL WHERE id=?", (task.id,))
+                        conn.commit()
                 else:
                     store.set_task_status(conn, task.id, TaskStatus.PENDING)
+                    conn.execute("UPDATE tasks SET owner_teammate_id=NULL, claimed_at=NULL, claim_lease_expires_at=NULL WHERE id=?", (task.id,))
+                    conn.commit()
     # Reconcile tasks stuck in RUNNING with no non-terminal run.
-    for row in conn.execute(
-        "SELECT id FROM tasks WHERE status = ?", (TaskStatus.RUNNING.value,)
-    ).fetchall():
+    for row in conn.execute("SELECT id FROM tasks WHERE status = ?", (TaskStatus.RUNNING.value,)).fetchall():
         tid = row["id"]
-        active = [
-            r for r in store.list_runs_for_task(conn, tid)
-            if r.status not in store.TERMINAL_RUN_STATUSES
-        ]
+        active = [r for r in store.list_runs_for_task(conn, tid) if r.status not in store.TERMINAL_RUN_STATUSES]
         if not active:
             store.set_task_status(conn, tid, TaskStatus.PENDING)
+            conn.execute("UPDATE tasks SET owner_teammate_id=NULL, claimed_at=NULL, claim_lease_expires_at=NULL WHERE id=?", (tid,))
+            conn.commit()
     # Reclaim stale READY claims (worker crashed before execution started).
     now = datetime.now(UTC)
     ready_rows = conn.execute(

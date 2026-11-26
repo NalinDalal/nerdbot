@@ -14,7 +14,7 @@ import re
 import sqlite3
 import uuid
 from collections.abc import Iterator
-from datetime import UTC, datetime, timedelta, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -888,6 +888,15 @@ _PHASE38_COLUMNS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
+_PHASE39_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    # Durable execution-run lease/heartbeat for safe recovery.
+    "runs": [
+        ("lease_owner", "TEXT"),
+        ("lease_expires_at", "TEXT"),
+        ("heartbeat_at", "TEXT"),
+    ],
+}
+
 
 _PHASE20_COLUMNS: dict[str, list[tuple[str, str]]] = {
     # Bot persona files (ai-teammates model): a bot's identity, its active
@@ -923,7 +932,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
                   _PHASE25_COLUMNS, _PHASE26_COLUMNS, _PHASE27_COLUMNS, _PHASE28_COLUMNS,
                   _PHASE29_COLUMNS, _PHASE30_COLUMNS, _PHASE31_COLUMNS, _PHASE32_COLUMNS,
                   _PHASE33_COLUMNS, _PHASE34_COLUMNS, _PHASE35_COLUMNS, _PHASE36_COLUMNS, _PHASE37_COLUMNS,
-                  _PHASE38_COLUMNS):
+                  _PHASE38_COLUMNS, _PHASE39_COLUMNS):
         for table, columns in phase.items():
             phases.setdefault(table, []).extend(columns)
     for table, columns in phases.items():
@@ -3592,6 +3601,8 @@ def list_run_events(
 
 def _run_from_row(r: sqlite3.Row) -> Run:
     keys = r.keys()
+    lease_expires_at = datetime.fromisoformat(r["lease_expires_at"]) if "lease_expires_at" in keys and r["lease_expires_at"] else None
+    heartbeat_at = datetime.fromisoformat(r["heartbeat_at"]) if "heartbeat_at" in keys and r["heartbeat_at"] else None
     return Run(
         id=r["id"],
         task_id=r["task_id"],
@@ -3610,6 +3621,9 @@ def _run_from_row(r: sqlite3.Row) -> Run:
         cancel_requested=bool(r["cancel_requested"]) if "cancel_requested" in keys else False,
         container_id=r["container_id"] if "container_id" in keys and r["container_id"] else "",
         resource_limits=__import__("json").loads(r["resource_limits"]) if "resource_limits" in keys and r["resource_limits"] else {},
+        lease_owner=r["lease_owner"] if "lease_owner" in keys and r["lease_owner"] else None,
+        lease_expires_at=lease_expires_at,
+        heartbeat_at=heartbeat_at,
     )
 
 
@@ -3636,19 +3650,61 @@ def list_runs_for_project(conn: sqlite3.Connection, project_id: str) -> list[Run
     return [_run_from_row(r) for r in rows]
 
 
-def mark_run_running(conn: sqlite3.Connection, run_id: str) -> Run:
+RUN_LEASE_S = 120.0
+
+
+def _utc_iso(dt: datetime | None = None) -> str:
+    return (dt or datetime.now(UTC)).isoformat()
+
+
+def mark_run_running(
+    conn: sqlite3.Connection,
+    run_id: str,
+    owner: str | None = None,
+    lease_s: float = RUN_LEASE_S,
+) -> Run:
     run = get_run(conn, run_id)
     if run is None:
         raise KeyError(f"unknown run {run_id}")
     if run.status != RunStatus.QUEUED:
         raise InvalidTransitionError(f"run {run_id}: {run.status.value} -> running")
-    conn.execute("UPDATE runs SET status = ? WHERE id = ?", (RunStatus.RUNNING.value, run_id))
+    if lease_s <= 0:
+        raise ValueError("lease_s must be positive")
+    lease_owner = owner or f"worker:{os.getpid()}"
+    now = datetime.now(UTC)
+    lease_expires_at = (now + timedelta(seconds=lease_s)).isoformat()
+    cur = conn.execute(
+        "UPDATE runs SET status=?, lease_owner=?, lease_expires_at=?, heartbeat_at=? WHERE id=? AND status=?",
+        (RunStatus.RUNNING.value, lease_owner, lease_expires_at, now.isoformat(), run_id, RunStatus.QUEUED.value),
+    )
     conn.commit()
-    run.status = RunStatus.RUNNING
+    if cur.rowcount != 1:
+        latest = get_run(conn, run_id)
+        if latest is None:
+            raise KeyError(f"unknown run {run_id}")
+        raise InvalidTransitionError(f"run {run_id}: {latest.status.value} -> running")
     task = get_task(conn, run.task_id)
     if task is not None:
         record_event(conn, task.project_id, "run", run_id, "run.status.running")
-    return run
+    refreshed = get_run(conn, run_id)
+    assert refreshed is not None
+    return refreshed
+
+
+def renew_run_lease(
+    conn: sqlite3.Connection, run_id: str, *, owner: str, lease_s: float = RUN_LEASE_S
+) -> bool:
+    if lease_s <= 0:
+        return False
+    now = datetime.now(UTC)
+    lease_expires_at = (now + timedelta(seconds=lease_s)).isoformat()
+    cur = conn.execute(
+        "UPDATE runs SET lease_expires_at=?, heartbeat_at=?"
+        " WHERE id=? AND status=? AND lease_owner=? AND (lease_expires_at IS NULL OR lease_expires_at > ?)",
+        (lease_expires_at, now.isoformat(), run_id, RunStatus.RUNNING.value, owner, now.isoformat()),
+    )
+    conn.commit()
+    return cur.rowcount == 1
 
 
 def finish_run(
@@ -3660,6 +3716,8 @@ def finish_run(
     stdout: str = "",
     stderr: str = "",
     duration_s: float = 0.0,
+    *,
+    owner: str | None = None,
 ) -> None:
     run = get_run(conn, run_id)
     if run is None:
@@ -3668,35 +3726,59 @@ def finish_run(
         raise TerminalRunError(f"run {run_id} is already terminal ({run.status.value})")
     if status not in RUN_TRANSITIONS[run.status]:
         raise InvalidTransitionError(f"run {run_id}: {run.status.value} -> {status.value}")
-    conn.execute(
-        "UPDATE runs SET status = ?, finished_at = ?, exit_code = ?, output_excerpt = ?,"
-        " stdout = ?, stderr = ?, duration_s = ? WHERE id = ?",
-        (
-            status.value,
-            _now_iso(),
-            exit_code,
-            output_excerpt[:4000],
-            stdout[-8000:],
-            stderr[-8000:],
-            duration_s,
-            run_id,
-        ),
-    )
-    conn.commit()
+    if run.status == RunStatus.RUNNING and run.lease_owner:
+        if owner != run.lease_owner:
+            raise InvalidTransitionError(f"run {run_id}: owner {owner!r} does not hold lease")
+    now_iso = _now_iso()
+    if run.status == RunStatus.RUNNING and run.lease_owner:
+        cur = conn.execute(
+            "UPDATE runs SET status=?, finished_at=?, exit_code=?, output_excerpt=?, stdout=?, stderr=?, duration_s=?, lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL"
+            " WHERE id=? AND status=? AND lease_owner=?",
+            (
+                status.value,
+                now_iso,
+                exit_code,
+                output_excerpt[:4000],
+                stdout[-8000:],
+                stderr[-8000:],
+                duration_s,
+                run_id,
+                RunStatus.RUNNING.value,
+                owner,
+            ),
+        )
+        conn.commit()
+        if cur.rowcount != 1:
+            latest = get_run(conn, run_id)
+            if latest is None:
+                raise KeyError(f"unknown run {run_id}")
+            if latest.status in TERMINAL_RUN_STATUSES:
+                raise TerminalRunError(f"run {run_id} is already terminal ({latest.status.value})")
+            raise InvalidTransitionError(f"run {run_id}: owner {owner!r} lost lease")
+    else:
+        conn.execute(
+            "UPDATE runs SET status=?, finished_at=?, exit_code=?, output_excerpt=?, stdout=?, stderr=?, duration_s=?, lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL WHERE id=?",
+            (
+                status.value,
+                now_iso,
+                exit_code,
+                output_excerpt[:4000],
+                stdout[-8000:],
+                stderr[-8000:],
+                duration_s,
+                run_id,
+            ),
+        )
+        conn.commit()
     task = get_task(conn, run.task_id)
     if task is not None:
         record_event(conn, task.project_id, "run", run_id, f"run.status.{status.value}")
 
 
 def mark_run_awaiting_approval(
-    conn: sqlite3.Connection, run_id: str, reason: str
+    conn: sqlite3.Connection, run_id: str, reason: str, *, owner: str | None = None
 ) -> Run:
-    """Park a run on a human decision.
-
-    Unlike ``finish_run`` this does NOT stamp ``finished_at``: the run is not
-    over, it is waiting, and the owner's answer ends it. The output excerpt
-    says what it is waiting for, so the run row explains itself.
-    """
+    """Park a run on a human decision. If owner provided, verify lease ownership."""
     run = get_run(conn, run_id)
     if run is None:
         raise KeyError(f"unknown run {run_id}")
@@ -3706,19 +3788,30 @@ def mark_run_awaiting_approval(
         raise InvalidTransitionError(
             f"run {run_id}: {run.status.value} -> {RunStatus.AWAITING_APPROVAL.value}"
         )
-    conn.execute(
-        "UPDATE runs SET status = ?, output_excerpt = ? WHERE id = ?",
-        (RunStatus.AWAITING_APPROVAL.value, reason[:4000], run_id),
-    )
-    conn.commit()
-    run.status = RunStatus.AWAITING_APPROVAL
-    run.output_excerpt = reason[:4000]
-    task = get_task(conn, run.task_id)
-    if task is not None:
-        record_event(
-            conn, task.project_id, "run", run_id, "run.status.awaiting_approval"
+    if run.status == RunStatus.RUNNING and run.lease_owner:
+        if owner != run.lease_owner:
+            raise InvalidTransitionError(f"run {run_id}: owner {owner!r} does not hold lease")
+        cur = conn.execute(
+            "UPDATE runs SET status=?, output_excerpt=?, lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL WHERE id=? AND status=? AND lease_owner=?",
+            (RunStatus.AWAITING_APPROVAL.value, reason[:4000], run_id, RunStatus.RUNNING.value, owner),
         )
-    return run
+    else:
+        cur = conn.execute(
+            "UPDATE runs SET status=?, output_excerpt=?, lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL WHERE id=?",
+            (RunStatus.AWAITING_APPROVAL.value, reason[:4000], run_id),
+        )
+    conn.commit()
+    if cur.rowcount != 1:
+        latest = get_run(conn, run_id)
+        if latest is None:
+            raise KeyError(f"unknown run {run_id}")
+        raise InvalidTransitionError(f"run {run_id}: owner lost lease")
+    refreshed = get_run(conn, run_id)
+    assert refreshed is not None
+    task = get_task(conn, refreshed.task_id)
+    if task is not None:
+        record_event(conn, task.project_id, "run", run_id, "run.status.awaiting_approval")
+    return refreshed
 
 
 def request_run_cancel(conn: sqlite3.Connection, run_id: str) -> Run:
@@ -4578,7 +4671,7 @@ def settle_run_after_resume(
     workers cannot both settle it, and the loser simply does nothing.
     """
     cursor = conn.execute(
-        "UPDATE runs SET status = ?, finished_at = ?, output_excerpt = ?"
+        "UPDATE runs SET status = ?, finished_at = ?, output_excerpt = ?, lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL"
         " WHERE id = ? AND status = ?",
         (
             status.value,
@@ -4604,16 +4697,14 @@ def settle_run_after_resume(
     return True
 
 
-def claim_run_for_resume(conn: sqlite3.Connection, run_id: str) -> bool:
-    """Take exclusive ownership of a waiting run, or lose the race.
-
-    The compare-and-swap is the whole point: two approvals landing at the
-    same moment, or the same approval submitted twice, must not carry the
-    actions out twice. Only the writer whose UPDATE changed a row proceeds.
-    """
+def claim_run_for_resume(conn: sqlite3.Connection, run_id: str, *, owner: str | None = None, lease_s: float = RUN_LEASE_S) -> bool:
+    """Take exclusive ownership of a waiting run, or lose the race."""
+    lease_owner = owner or f"resume:{os.getpid()}:{run_id}"
+    now = datetime.now(UTC)
+    lease_expires_at = (now + timedelta(seconds=lease_s)).isoformat()
     cursor = conn.execute(
-        "UPDATE runs SET status = ? WHERE id = ? AND status = ?",
-        (RunStatus.RUNNING.value, run_id, RunStatus.AWAITING_APPROVAL.value),
+        "UPDATE runs SET status=?, lease_owner=?, lease_expires_at=?, heartbeat_at=? WHERE id=? AND status=?",
+        (RunStatus.RUNNING.value, lease_owner, lease_expires_at, now.isoformat(), run_id, RunStatus.AWAITING_APPROVAL.value),
     )
     conn.commit()
     return cursor.rowcount == 1

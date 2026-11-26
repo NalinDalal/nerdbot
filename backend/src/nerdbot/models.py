@@ -268,6 +268,9 @@ class Run(BaseModel):
     cancel_requested: bool = False
     container_id: str = ""
     resource_limits: dict[str, Any] = Field(default_factory=dict)
+    lease_owner: str | None = None
+    lease_expires_at: datetime | None = None
+    heartbeat_at: datetime | None = None
 
 
 class MemoryEntry(BaseModel):
