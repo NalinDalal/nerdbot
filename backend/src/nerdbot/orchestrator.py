@@ -672,7 +672,7 @@ def retry_task(
 
 
 def recover_incomplete_runs(conn: sqlite3.Connection) -> list[str]:
-    """Recover runs left non-terminal by a previous process ending.
+    """Recover runs left non-terminal and reclaim stale task-claim leases.
 
     - ``queued`` runs are left untouched: they never started and stay startable.
     - ``running`` runs can never complete after their process died: they are
@@ -680,6 +680,9 @@ def recover_incomplete_runs(conn: sqlite3.Connection) -> list[str]:
       created, so completed runs are never duplicated.
     - Owning tasks left in ``running`` with no active run return to
       ``pending`` so they can be explicitly rescheduled.
+    - ``ready`` tasks with expired/missing claim lease and no active run are
+      reclaimed to ``pending`` with owner cleared. Active leases are never
+      reclaimed to avoid duplicate execution.
 
     Returns the ids of runs moved to ``stopped``.
     """
@@ -728,6 +731,46 @@ def recover_incomplete_runs(conn: sqlite3.Connection) -> list[str]:
         ]
         if not active:
             store.set_task_status(conn, tid, TaskStatus.PENDING)
+    # Reclaim stale READY claims (worker crashed before execution started).
+    now = datetime.now(UTC)
+    ready_rows = conn.execute(
+        "SELECT id, claim_lease_expires_at FROM tasks WHERE status=? AND owner_teammate_id IS NOT NULL",
+        (TaskStatus.READY.value,),
+    ).fetchall()
+    for row in ready_rows:
+        tid = row["id"]
+        active = [
+            r for r in store.list_runs_for_task(conn, tid)
+            if r.status not in store.TERMINAL_RUN_STATUSES
+        ]
+        if active:
+            continue
+        lease_raw = row["claim_lease_expires_at"]
+        lease_expired = True
+        if lease_raw:
+            try:
+                lease_expired = datetime.fromisoformat(lease_raw) <= now
+            except Exception:
+                lease_expired = True
+        if not lease_expired:
+            continue
+        cur = conn.execute(
+            "UPDATE tasks SET status=?, owner_teammate_id=NULL, claimed_at=NULL, claim_lease_expires_at=NULL"
+            " WHERE id=? AND status=? AND NOT EXISTS (SELECT 1 FROM runs WHERE task_id=? AND status NOT IN (?,?,?,?))",
+            (
+                TaskStatus.PENDING.value,
+                tid,
+                TaskStatus.READY.value,
+                tid,
+                RunStatus.SUCCEEDED.value,
+                RunStatus.FAILED.value,
+                RunStatus.BLOCKED.value,
+                RunStatus.STOPPED.value,
+            ),
+        )
+        if cur.rowcount:
+            store.record_event(conn, "", "task", tid, "task.claim.reclaimed")
+    conn.commit()
     return recovered
 
 

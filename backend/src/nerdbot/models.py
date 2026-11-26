@@ -178,6 +178,11 @@ class Task(BaseModel):
     blocked_reason: str = ""
     # Short display name. Empty means derive on display.
     title: str = ""
+    # Execution claim lease: when a bot claims a pending task it gets a lease.
+    # A stale/expired lease can be reclaimed by recovery; active leases prevent
+    # duplicate execution.
+    claim_lease_expires_at: datetime | None = None
+    claimed_at: datetime | None = None
 
 
 class BoardStatus(StrEnum):

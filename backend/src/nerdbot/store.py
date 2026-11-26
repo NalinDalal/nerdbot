@@ -14,7 +14,7 @@ import re
 import sqlite3
 import uuid
 from collections.abc import Iterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -880,6 +880,14 @@ _PHASE37_COLUMNS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
+_PHASE38_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    # Durable task-claim lease for safe executor claiming/recovery.
+    "tasks": [
+        ("claimed_at", "TEXT"),
+        ("claim_lease_expires_at", "TEXT"),
+    ],
+}
+
 
 _PHASE20_COLUMNS: dict[str, list[tuple[str, str]]] = {
     # Bot persona files (ai-teammates model): a bot's identity, its active
@@ -914,7 +922,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
                   _PHASE21_COLUMNS, _PHASE22_COLUMNS, _PHASE23_COLUMNS, _PHASE24_COLUMNS,
                   _PHASE25_COLUMNS, _PHASE26_COLUMNS, _PHASE27_COLUMNS, _PHASE28_COLUMNS,
                   _PHASE29_COLUMNS, _PHASE30_COLUMNS, _PHASE31_COLUMNS, _PHASE32_COLUMNS,
-                  _PHASE33_COLUMNS, _PHASE34_COLUMNS, _PHASE35_COLUMNS, _PHASE36_COLUMNS, _PHASE37_COLUMNS):
+                  _PHASE33_COLUMNS, _PHASE34_COLUMNS, _PHASE35_COLUMNS, _PHASE36_COLUMNS, _PHASE37_COLUMNS,
+                  _PHASE38_COLUMNS):
         for table, columns in phase.items():
             phases.setdefault(table, []).extend(columns)
     for table, columns in phases.items():
@@ -2413,6 +2422,12 @@ def list_child_tasks(conn: sqlite3.Connection, task_id: str) -> list[Task]:
 
 def _task_from_row(row: sqlite3.Row) -> Task:
     keys = row.keys()
+    claim_lease_expires_at = None
+    claimed_at = None
+    if "claim_lease_expires_at" in keys and row["claim_lease_expires_at"]:
+        claim_lease_expires_at = datetime.fromisoformat(row["claim_lease_expires_at"])
+    if "claimed_at" in keys and row["claimed_at"]:
+        claimed_at = datetime.fromisoformat(row["claimed_at"])
     return Task(
         id=row["id"],
         project_id=row["project_id"],
@@ -2435,6 +2450,8 @@ def _task_from_row(row: sqlite3.Row) -> Task:
         assigned_by=row["assigned_by"] if "assigned_by" in keys and row["assigned_by"] else "",
         blocked_reason=row["blocked_reason"] if "blocked_reason" in keys and row["blocked_reason"] else "",
         title=row["title"] if "title" in keys and row["title"] else "",
+        claim_lease_expires_at=claim_lease_expires_at,
+        claimed_at=claimed_at,
     )
 
 
@@ -2538,9 +2555,13 @@ def set_task_status(
     if status != task.status and status not in TASK_TRANSITIONS[task.status]:
         raise InvalidTransitionError(f"task {task_id}: {task.status.value} -> {status.value}")
     keeps_reason = status in (TaskStatus.BLOCKED, TaskStatus.AWAITING_APPROVAL)
+    lease_fields = ""
+    lease_vals: list[Any] = []
+    if status != TaskStatus.READY:
+        lease_fields = ", claimed_at = NULL, claim_lease_expires_at = NULL"
     conn.execute(
-        "UPDATE tasks SET status = ?, blocked_reason = ? WHERE id = ?",
-        (status.value, reason if keeps_reason else "", task_id),
+        f"UPDATE tasks SET status = ?, blocked_reason = ?{lease_fields} WHERE id = ?",
+        (status.value, reason if keeps_reason else "", *lease_vals, task_id),
     )
     conn.commit()
     if status != task.status:
@@ -2625,30 +2646,48 @@ def assign_task_owner(conn: sqlite3.Connection, task_id: str, teammate_id: str |
     return task
 
 
+CLAIM_LEASE_S = 300.0
+
+
 def claim_task(
-    conn: sqlite3.Connection, task_id: str, teammate_id: str
+    conn: sqlite3.Connection, task_id: str, teammate_id: str, lease_s: float = CLAIM_LEASE_S
 ) -> Task:
+    if lease_s <= 0:
+        raise ValueError("lease_s must be positive")
     task = get_task(conn, task_id)
     if task is None:
         raise KeyError(f"unknown task {task_id}")
-    if task.status != TaskStatus.PENDING:
-        raise ValueError(f"task is {task.status.value}, not pending")
-    if task.owner_teammate_id is not None:
-        raise ValueError("task already has an owner")
     mate = get_teammate(conn, teammate_id)
     if mate is None or not teammate_in_project(conn, mate.id, task.project_id):
         raise ValueError("teammate must belong to the same project")
     if mate.status != TeammateStatus.ACTIVE:
         raise ValueError(f"teammate {teammate_id} is {mate.status.value}, not active")
-    conn.execute(
-        "UPDATE tasks SET owner_teammate_id = ?, status = ? WHERE id = ?",
-        (teammate_id, TaskStatus.READY.value, task_id),
+    now = datetime.now(UTC)
+    lease_expires = (now + timedelta(seconds=lease_s)).isoformat()
+    cur = conn.execute(
+        "UPDATE tasks SET owner_teammate_id=?, status=?, claimed_at=?, claim_lease_expires_at=?"
+        " WHERE id=? AND status=? AND owner_teammate_id IS NULL",
+        (
+            teammate_id,
+            TaskStatus.READY.value,
+            now.isoformat(),
+            lease_expires,
+            task_id,
+            TaskStatus.PENDING.value,
+        ),
     )
     conn.commit()
+    if cur.rowcount != 1:
+        latest = get_task(conn, task_id)
+        if latest is None:
+            raise KeyError(f"unknown task {task_id}")
+        if latest.owner_teammate_id is not None or latest.status != TaskStatus.PENDING:
+            raise ValueError("task already has an owner")
+        raise ValueError(f"task is {latest.status.value}, not pending")
     record_event(conn, task.project_id, "task", task_id, "task.claimed")
-    task.owner_teammate_id = teammate_id
-    task.status = TaskStatus.READY
-    return task
+    claimed = get_task(conn, task_id)
+    assert claimed is not None
+    return claimed
 
 
 def list_all_teammates(conn: sqlite3.Connection) -> list[Teammate]:
