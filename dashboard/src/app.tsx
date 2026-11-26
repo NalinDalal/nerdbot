@@ -24,12 +24,13 @@ import { TeamsView, TeamDetailView } from "./views-teams";
 import { BotDetailView, BotsView } from "./views-bot";
 import { BoardsView, BoardDetailView } from "./views-boards";
 import { WorkView } from "./views-work";
-import { WorkbenchView } from "./views-workbench";
 import {
+  Button,
   EmptyState,
   Icon,
   Kbd,
   Page,
+  PageHeader,
   useTheme,
 } from "./components";
 import type { IconName } from "./components";
@@ -922,13 +923,7 @@ export default function App() {
       content = <WorkView />;
       break;
     case "workspace":
-      content = (
-        <WorkbenchView
-          projectId={
-            route.name === "workspace" ? route.projectId : undefined
-          }
-        />
-      );
+      content = <WorkspaceMovedView />;
       break;
     case "teams":
       content = <TeamsView />;
@@ -1116,6 +1111,22 @@ export function defaultApiBase(): string {
 /** Do not read tokens from /health; owners must supply their token explicitly. */
 export function resolveConnectToken(_health: unknown, typed: string): string {
   return typed;
+}
+
+function WorkspaceMovedView() {
+  return (
+    <Page className="max-w-3xl">
+      <PageHeader
+        eyebrow="Workspace"
+        title="Workspace now lives in Chat"
+        description="Odysseus-style workspaces are chat-scoped. Open a conversation in agent mode, choose a folder from the composer, and the selected folder will be sent with chat requests and enforced server-side."
+      />
+      <div className="mt-4 flex gap-2">
+        <Button variant="primary" onClick={() => navigate("/chat")}>Open Chat</Button>
+        <Button onClick={() => navigate("/settings")}>Settings</Button>
+      </div>
+    </Page>
+  );
 }
 
 function ConnectScreen({ onConnected }: { onConnected: () => void }) {

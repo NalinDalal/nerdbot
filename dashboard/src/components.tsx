@@ -584,8 +584,9 @@ export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () =>
 
 /* --- Modal --- */
 
-export function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
+export function Modal({ title, children, onClose, draggable = false }: { title: ReactNode; children: ReactNode; onClose: () => void; draggable?: boolean }) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{ x: number; y: number; left: number; top: number; dragging: boolean } | null>(null);
 
   useEffect(() => {
     // Move focus to the first sensible control while open; restore it on close.
@@ -626,9 +627,32 @@ export function Modal({ title, children, onClose }: { title: string; children: R
     }
   };
 
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+
+  useEffect(() => {
+    if (!draggable) return;
+    const onMove = (e: MouseEvent) => {
+      const d = dragRef.current;
+      if (!d?.dragging) return;
+      setPos({ left: Math.max(8, d.left + e.clientX - d.x), top: Math.max(8, d.top + e.clientY - d.y) });
+    };
+    const onUp = () => { if (dragRef.current) dragRef.current.dragging = false; };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+  }, [draggable]);
+
+  const startDrag = (e: React.MouseEvent) => {
+    if (!draggable || !panelRef.current) return;
+    if ((e.target as HTMLElement).closest("button,input,textarea,select,a")) return;
+    const r = panelRef.current.getBoundingClientRect();
+    dragRef.current = { x: e.clientX, y: e.clientY, left: r.left, top: r.top, dragging: true };
+    if (!pos) setPos({ left: r.left, top: r.top });
+  };
+
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-end justify-center bg-black/55 p-0 backdrop-blur-[2px] sm:items-center sm:p-4"
+      className={draggable && pos ? "fixed inset-0 z-[60] bg-black/35 backdrop-blur-[1px]" : "fixed inset-0 z-[60] flex items-end justify-center bg-black/55 p-0 backdrop-blur-[2px] sm:items-center sm:p-4"}
       onClick={onClose}
       onKeyDown={handleKeyDown}
     >
@@ -637,10 +661,11 @@ export function Modal({ title, children, onClose }: { title: string; children: R
         className="animate-fade-in max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] p-5 shadow-[var(--shadow-lg)] sm:rounded-[var(--radius-lg)] sm:p-6"
         role="dialog"
         aria-modal="true"
-        aria-label={title}
+        aria-label={typeof title === "string" ? title : "Dialog"}
+        style={draggable && pos ? { position: "fixed", left: pos.left, top: pos.top, margin: 0 } : undefined}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-4 flex items-start justify-between gap-4">
+        <div className={`mb-4 flex items-start justify-between gap-4 ${draggable ? "cursor-move select-none" : ""}`} onMouseDown={startDrag}>
           <strong className="text-step-1 font-semibold tracking-[-0.01em] text-[var(--text)]">{title}</strong>
           <button
             onClick={onClose}

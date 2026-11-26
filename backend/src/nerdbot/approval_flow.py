@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from . import agent_context as agent_context_mod
@@ -123,6 +124,8 @@ def _execute_checkpoint(
             # Force execution: approval already granted; pass approved=True to bypass ask_first.
             gw_args = dict(raw_args)
             gw_args.update({"conn": conn, "data_dir": data_dir, "approved": True, "untrusted": False})
+            if payload.get("workspace_root"):
+                gw_args["workspace_root"] = payload.get("workspace_root")
             result = _ws.do(actor, action, path, **gw_args)
             if not result.ok:
                 msg = f"workspace action refused/failed: {result.error}"
@@ -476,6 +479,15 @@ def resume_standalone_approval(conn: sqlite3.Connection, approval: Approval, dat
         outcome.outcome = "skipped"
         outcome.output = "approval not approved"
         return outcome
+    expires_at = getattr(approval, "expires_at", None)
+    if expires_at is not None:
+        now = datetime.now(UTC)
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        if expires_at <= now:
+            outcome.outcome = "expired"
+            outcome.output = "the request expired unanswered — it was not performed"
+            return outcome
     state, text = _execute_checkpoint(conn, approval, data_dir)
     outcome.outcome = state
     outcome.output = text

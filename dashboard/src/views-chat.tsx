@@ -3,13 +3,21 @@ import { toast } from "sonner";
 import { api, ApiError, getSession } from "./api";
 import { notifyError, navigate } from "./app";
 import { TeamView } from "./team-view";
-import type { ChatMessage, ChatThread, Plan, Provider, ResearchJob, ResearchJobEvent, Teammate } from "./types";
+import type { ChatMessage, ChatThread, Plan, Provider, ResearchJob, ResearchJobEvent, Teammate, WorkspaceBrowseResult } from "./types";
 import { useWorkspaceSummary } from "./views-home";
 import { Markdown } from "./markdown";
 import { insertMention, mentionHandle, splitMentions } from "./mentions";
 import { executionStages } from "./chatParts";
 import { explainRunError } from "./explainRunError";
 import { providerIsUsable, usableProviders } from "./readiness";
+import {
+  basename as wsBasename,
+  clearWorkspace,
+  getWorkspace,
+  initWorkspace,
+  setWorkspace,
+  subscribeWorkspace,
+} from "./workspace";
 import {
   EmptyState,
   ErrorState,
@@ -784,7 +792,7 @@ function ThreadWorkSection({ projectId, threadId, refreshKey }: { projectId: str
 }
 
 
-function ThreadPane({
+export function ThreadPane({
   threadId,
   projectId,
   workspaceName,
@@ -818,16 +826,21 @@ function ThreadPane({
   const [mates, setMates] = useState<Teammate[]>([]);
   const [researchJobIds, setResearchJobIds] = useState<string[]>([]);
   const [workspaceApprovals, setWorkspaceApprovals] = useState<any[]>([]);
-  const [workspaceMeta, setWorkspaceMeta] = useState<{ root?: string; branch?: string; dirty?: boolean } | null>(null);
+  const [chatWorkspace, setChatWorkspace] = useState<string>(() => getWorkspace());
+  const [workspaceModalOpen, setWorkspaceModalOpen] = useState(false);
   const [approvalBusy, setApprovalBusy] = useState<string | null>(null);
   const [workRefresh, setWorkRefresh] = useState(0);
   const bumpWorkRefresh = () => setWorkRefresh((n) => n + 1);
 
   useEffect(() => {
-    let alive = true;
-    api.projectWorkspace(projectId).then((ws: any) => { if (alive) setWorkspaceMeta({ root: ws.root, branch: ws.branch, dirty: ws.dirty }); }).catch(() => {});
-    return () => { alive = false; };
-  }, [projectId]);
+    const unsub = subscribeWorkspace(setChatWorkspace);
+    void initWorkspace().then((res) => {
+      if (res.ok && res.path) setChatWorkspace(res.path);
+      else setChatWorkspace(getWorkspace());
+    });
+    return unsub;
+  }, []);
+
   // Speaker announced by the stream's first event, so the in-flight bubble
   // already carries the teammate's face and name while the reply arrives.
   const [streamSpeaker, setStreamSpeaker] = useState<{
@@ -942,6 +955,11 @@ function ThreadPane({
         fullContent = content + fileText;
         setAttachedFiles([]);
       }
+      const ws = getWorkspace();
+      const onWorkspaceRejected = (path: string) => {
+        clearWorkspace();
+        toast.error(`Workspace ${path || "selected"} is no longer usable; running without confinement`);
+      };
       if (useStream) {
         setStreamStatus("");
         setStreamParts([]);
@@ -951,10 +969,20 @@ function ThreadPane({
           signal: controller.signal,
           onSpeaker: setStreamSpeaker,
           onMemoryUsed: setRecalledThisTurn,
+          workspace: ws || undefined,
+          onWorkspaceRejected,
         });
       } else {
-        const res = await api.sendChat(threadId, fullContent, mode);
-        setRecalledThisTurn(res?.memory_used || []);
+        try {
+          const res = await api.sendChat(threadId, fullContent, mode, ws || undefined);
+          setRecalledThisTurn(res?.memory_used || []);
+        } catch (err) {
+          if (err instanceof ApiError && typeof err.detail === "object" && (err.detail as any)?.code === "workspace_rejected") {
+            onWorkspaceRejected(String((err.detail as any)?.workspace || ws || ""));
+            return;
+          }
+          throw err;
+        }
       }
       setDraft("");
       await view.reload();
@@ -991,6 +1019,11 @@ function ThreadPane({
     try {
       const content =
         view.data.messages.find((m) => m.id === target)?.content ?? "";
+      const ws = getWorkspace();
+      const onWorkspaceRejected = (path: string) => {
+        clearWorkspace();
+        toast.error(`Workspace ${path || "selected"} is no longer usable; running without confinement`);
+      };
       if (useStream) {
         setStreamStatus("");
         setStreamParts([]);
@@ -1000,10 +1033,20 @@ function ThreadPane({
           signal: controller.signal,
           onSpeaker: setStreamSpeaker,
           onMemoryUsed: setRecalledThisTurn,
+          workspace: ws || undefined,
+          onWorkspaceRejected,
         });
       } else {
-        const res = await api.sendChat(threadId, content, mode);
-        setRecalledThisTurn(res?.memory_used || []);
+        try {
+          const res = await api.sendChat(threadId, content, mode, ws || undefined);
+          setRecalledThisTurn(res?.memory_used || []);
+        } catch (err) {
+          if (err instanceof ApiError && typeof err.detail === "object" && (err.detail as any)?.code === "workspace_rejected") {
+            onWorkspaceRejected(String((err.detail as any)?.workspace || ws || ""));
+            return;
+          }
+          throw err;
+        }
       }
       setRetryFrom(null);
       await view.reload();
@@ -1193,6 +1236,7 @@ function ThreadPane({
                   <button className="w-full rounded-md px-2.5 py-2 text-left hover:bg-[var(--surface-2)] disabled:opacity-50" disabled={busy} onClick={() => { setThreadMenuOpen(false); void summarize(); }}>Summarize</button>
                   <button className="w-full rounded-md px-2.5 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => { setThreadMenuOpen(false); setContextPanel("files"); }}>Project files</button>
                   <button className="w-full rounded-md px-2.5 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => { setThreadMenuOpen(false); setContextPanel("bots"); }}>Teammates</button>
+                  {mode !== "chat" ? <button className="w-full rounded-md px-2.5 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => { setThreadMenuOpen(false); setWorkspaceModalOpen(true); }}>Workspace</button> : null}
                   <div className="my-1 border-t border-[var(--border-dim)]" />
                   <button className="w-full rounded-md px-2.5 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => void runThreadAction(async () => { const t = window.prompt("Rename conversation", thread.title || ""); if (t == null) return; await api.renameThread(thread.id, t.trim() || "Untitled"); }, "Renamed")}>Rename</button>
                   <button className="w-full rounded-md px-2.5 py-2 text-left hover:bg-[var(--surface-2)]" onClick={() => void runThreadAction(() => api.pinThread(thread.id, !thread.pinned).then(() => undefined), thread.pinned ? "Unpinned" : "Pinned")}>{thread.pinned ? "Unpin" : "Pin"}</button>
@@ -1501,10 +1545,16 @@ function ThreadPane({
             </div>
             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border-dim)] px-2 pt-2">
               <div className="flex flex-wrap items-center gap-1">
-                <button type="button" onClick={() => navigate(`/workspace?project=${projectId}`)} title={workspaceMeta?.root ? `Workspace: ${workspaceMeta.root}` : "Open workspace"} className="rounded-md px-2 py-1 text-step--2 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]">
-                  <span className="mono">{workspaceMeta?.branch ? workspaceMeta.branch : "workspace"}</span>
-                  {workspaceMeta?.dirty ? <span className="ml-1 text-[var(--warn)]">●</span> : null}
-                </button>
+                {mode !== "chat" ? (chatWorkspace ? (
+                  <span className="inline-flex items-center gap-1 rounded-md bg-[var(--surface-2)] px-2 py-1 text-step--2 text-[var(--text)]" title={`Workspace: ${chatWorkspace}\nFile tools are confined here; shell commands start here but are not sandboxed and can reach outside it.\nClick to open workspace picker. Click X to clear.`}>
+                    <button type="button" className="mono hover:underline" onClick={() => setWorkspaceModalOpen(true)} aria-label="Open workspace picker">{wsBasename(chatWorkspace)}</button>
+                    <button type="button" aria-label="Clear workspace" className="text-[var(--faint)] hover:text-[var(--text)]" onClick={() => { clearWorkspace(); toast.message("Workspace cleared"); }}>×</button>
+                  </span>
+                ) : (
+                  <button type="button" onClick={() => setWorkspaceModalOpen(true)} title="Select workspace" aria-label="Select workspace" className="rounded-md px-2 py-1 text-step--2 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]">
+                    Workspace
+                  </button>
+                )) : null}
                 <button type="button" onClick={() => setContextPanel("bots")} title="Mention a teammate" aria-label="Mention a teammate" className="rounded-md px-2 py-1 text-step--2 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]">Teammates</button>
                 <button type="button" onClick={() => setContextPanel("files")} title="Project files" aria-label="Project files" className="rounded-md px-2 py-1 text-step--2 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]">Files</button>
                 <button type="button" onClick={handleAttachFile} title="Attach local file" aria-label="Attach local file" className="rounded-md px-2 py-1 text-step--2 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]">Attach</button>
@@ -1556,7 +1606,105 @@ function ThreadPane({
           }}
         />
       )}
+      {workspaceModalOpen ? (
+        <WorkspacePickerModal
+          initialPath={chatWorkspace}
+          onClose={() => setWorkspaceModalOpen(false)}
+          onSelect={(path) => {
+            setWorkspace(path);
+            setWorkspaceModalOpen(false);
+            toast.success(`Workspace set: ${wsBasename(path)}`);
+          }}
+        />
+      ) : null}
     </div>
+  );
+}
+
+export function WorkspacePickerModal({
+  initialPath,
+  onClose,
+  onSelect,
+}: {
+  initialPath?: string;
+  onClose: () => void;
+  onSelect: (path: string) => void;
+}) {
+  const [path, setPath] = useState(initialPath || "");
+  const [browsePath, setBrowsePath] = useState(initialPath || "");
+  const [data, setData] = useState<WorkspaceBrowseResult | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = async (p: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.browseWorkspace(p);
+      setData(res);
+      setPath(res.path);
+      setBrowsePath(res.path);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { void load(initialPath || ""); }, [initialPath]);
+
+  return (
+    <Modal
+      draggable
+      title={
+        <span className="inline-flex items-center gap-2">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          Select workspace
+        </span>
+      }
+      onClose={onClose}
+    >
+      <div className="flex flex-col gap-3">
+        <input
+          className={`${FORM_INPUT} w-full font-mono text-step--2`}
+          value={path}
+          onChange={(e) => setPath(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); const v = path.trim(); if (v) void load(v); } }}
+          placeholder="Type or paste a folder path, then press Enter"
+          aria-label="Workspace path"
+          spellCheck={false}
+          autoComplete="off"
+          autoCapitalize="off"
+          autoCorrect="off"
+        />
+        <p className="text-step--2 text-[var(--muted)]">
+          File tools are <strong>confined</strong> to this folder. Shell commands start here but are <strong>not sandboxed</strong> and can reach outside it. A workspace scopes the tools; it is not a security boundary.
+        </p>
+        {loading ? <LoadingState lines={4} /> : error ? <ErrorState error={error} onRetry={() => void load(browsePath || path)} /> : data ? (
+          <>
+            <div className="max-h-72 overflow-auto rounded-xl border border-[var(--border)] bg-[var(--surface)]" aria-label="Workspace folders">
+              {data.parent ? (
+                <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left text-step--1 hover:bg-[var(--surface-2)]" onClick={() => void load(data.parent!)}>
+                  <span className="text-[var(--faint)]">↑</span> <span>..</span>
+                </button>
+              ) : null}
+              {data.dirs.map((d) => (
+                <button key={d.path} type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left text-step--1 hover:bg-[var(--surface-2)]" onClick={() => void load(d.path)}>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-[var(--faint)]" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+                  <span className="truncate">{d.name}</span>
+                </button>
+              ))}
+              {data.dirs.length === 0 && !data.parent ? <div className="px-3 py-2 text-step--2 text-[var(--muted)]">No subfolders</div> : null}
+              {data.truncated ? <div className="px-3 py-2 text-step--2 text-[var(--muted)]">Too many folders to list. Type or paste a path above to jump in.</div> : null}
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button onClick={onClose}>Cancel</Button>
+              <Button variant="primary" disabled={data.selectable === false} title={data.selectable === false ? "This folder cannot be used as a workspace" : undefined} onClick={() => onSelect(data.path)}>Use this folder</Button>
+            </div>
+          </>
+        ) : null}
+      </div>
+    </Modal>
   );
 }
 
@@ -2727,6 +2875,7 @@ function CommandCenter({
     // Derived state: workspace selection managed elsewhere
   }, [workspaces, providers, selectedWorkspaceId]);
 
+  useEffect(() => { void initWorkspace(); }, []);
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [streaming]);

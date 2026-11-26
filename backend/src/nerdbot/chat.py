@@ -1107,6 +1107,7 @@ def chat_complete_with_tools(
     teammate: Any = None,
     data_dir: str | None = None,
     memory_used: bool = False,
+    workspace_root: str | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     """Non-streaming completion with a bounded tool loop.
 
@@ -1122,6 +1123,7 @@ def chat_complete_with_tools(
         max_turns: Max tool turns.
         teammate: Acting teammate; enables permission-gated workspace tools.
         data_dir: Nerdbot data dir for workspace binding.
+        workspace_root: Optional vetted workspace override for this chat turn.
 
     Returns:
         (text, parts) tuple.
@@ -1167,7 +1169,10 @@ def chat_complete_with_tools(
     project = store.get_project(conn, project_id)
     ws_root = None
     try:
-        if project is not None:
+        if workspace_root:
+            vetted = _ws.vet_workspace_candidate(workspace_root)
+            ws_root = str(vetted) if vetted else None
+        elif project is not None:
             ws_root = _ws.resolve_project_root(project, data_dir or ".nerdbot-data")
     except Exception:
         ws_root = None
@@ -1293,6 +1298,7 @@ def chat_stream_with_tools(
     teammate: Any = None,
     data_dir: str | None = None,
     memory_used: bool = False,
+    workspace_root: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Streaming wrapper: runs the tool loop, yielding progress + answer events.
 
@@ -1308,6 +1314,7 @@ def chat_stream_with_tools(
         chunk_size: Chunk size for text events.
         teammate: Acting teammate for permission-gated workspace tools.
         data_dir: Nerdbot data dir for workspace binding.
+        workspace_root: Optional vetted workspace override for this chat turn.
 
     Yields:
         Event dicts.
@@ -1334,7 +1341,13 @@ def chat_stream_with_tools(
         except Exception:
             thread_tainted = False
     import re as _re
-    pasted_untrusted = bool(_re.search(r"<html|<!doctype html|web page text i fetched|<body|<script", content or "", _re.I))
+    last_user = ""
+    for _m in reversed(msgs):
+        if _m.get("role") == "user":
+            _c = _m.get("content")
+            last_user = _c if isinstance(_c, str) else json.dumps(_c, ensure_ascii=False)
+            break
+    pasted_untrusted = bool(_re.search(r"<html|<!doctype html|web page text i fetched|<body|<script|ignore previous instructions", last_user, _re.I))
     saw_untrusted = thread_tainted or bool(memory_used) or pasted_untrusted
     if pasted_untrusted and thread_id is not None:
         with contextlib.suppress(Exception):
@@ -1351,7 +1364,10 @@ def chat_stream_with_tools(
     project = store.get_project(conn, project_id)
     ws_root = None
     try:
-        if project is not None:
+        if workspace_root:
+            vetted = _ws.vet_workspace_candidate(workspace_root)
+            ws_root = str(vetted) if vetted else None
+        elif project is not None:
             ws_root = _ws.resolve_project_root(project, data_dir or ".nerdbot-data")
     except Exception:
         ws_root = None

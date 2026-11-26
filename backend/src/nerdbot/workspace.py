@@ -841,6 +841,28 @@ def vet_workspace_candidate(raw: str | None) -> Path | None:
     return resolved
 
 
+def workspace_allowed_for_project(conn: Any, project: Any, data_dir: str | Path, raw: str | Path | None) -> Path | None:
+    """Vet a workspace candidate and ensure it does not belong to another project."""
+    vetted = vet_workspace_candidate(str(raw) if raw is not None else None)
+    if vetted is None:
+        return None
+    try:
+        from . import store as _store
+        project_id = str(getattr(project, "id", "") or "")
+        for other in _store.list_projects(conn):
+            if str(getattr(other, "id", "")) == project_id:
+                continue
+            try:
+                other_root = configured_project_root(other, data_dir).resolve()
+            except Exception:
+                continue
+            if vetted == other_root or other_root in vetted.parents or vetted in other_root.parents:
+                return None
+    except Exception:
+        return None
+    return vetted
+
+
 def browse_workspace_dirs(raw: str | None) -> dict[str, Any]:
     """List subdirectories for a workspace picker, like Odysseus /api/workspace/browse.
 
@@ -982,6 +1004,11 @@ def _resolve_workspace_root(project: Any, data_dir: str | Path) -> Path:
     return ensure_project_workspace(project, data_dir, initialize_git=False)
 
 
+def resolve_project_root(project: Any, data_dir: str | Path) -> str:
+    """Public wrapper for project workspace root resolution."""
+    return str(_resolve_workspace_root(project, data_dir))
+
+
 def _confine_workspace_path(root: Path, path: str) -> Path:
     """Confine a user/tool-supplied path to the workspace root.
 
@@ -1016,12 +1043,13 @@ def _required_workspace_permission(action: str) -> str | None:
     return None
 
 
-def _check_workspace_permission(actor: WorkspaceActor, action: str) -> tuple[bool, str]:
+def _check_workspace_permission(actor: WorkspaceActor, action: str, *, conn: Any = None) -> tuple[bool, str]:
     """Check whether the actor may perform the action.
 
     Args:
         actor: Acting user or teammate.
         action: Gateway action name.
+        conn: Optional SQLite connection for project-membership validation.
 
     Returns:
         (allowed, reason). Owners are allowed; teammates require permission.
@@ -1033,6 +1061,15 @@ def _check_workspace_permission(actor: WorkspaceActor, action: str) -> tuple[boo
         return False, "teammate actor missing"
     if bool(getattr(mate, "paused", False)):
         return False, "teammate is paused"
+    if actor.project_id and str(getattr(mate, "project_id", "") or "") != str(actor.project_id):
+        return False, "teammate not in project"
+    if conn is not None and actor.project_id:
+        try:
+            from . import store as _store
+            if not _store.teammate_in_project(conn, mate.id, actor.project_id):
+                return False, "teammate not in project"
+        except Exception:
+            return False, "teammate project check failed"
     perm = _required_workspace_permission(action)
     if perm is None:
         return False, f"unknown action {action}"
@@ -1123,25 +1160,22 @@ def _emit_workspace_audit(
     Returns:
         Event/audit id.
     """
-    try:
-        from . import store as _store
-        aid = _store.record_workspace_audit(
-            conn,
-            project_id=actor.project_id,
-            actor_kind=actor.kind,
-            actor_id=actor.id,
-            action=action,
-            path=path,
-            ok=ok,
-            denied=denied,
-            reason=reason,
-            args_summary=args_summary,
-        )
-        with suppress(Exception):
-            _store.record_event(conn, actor.project_id, "workspace", actor.id or "workspace", f"workspace.{action}")
-        return aid
-    except Exception:
-        return ""
+    from . import store as _store
+    aid = _store.record_workspace_audit(
+        conn,
+        project_id=actor.project_id,
+        actor_kind=actor.kind,
+        actor_id=actor.id,
+        action=action,
+        path=path,
+        ok=ok,
+        denied=denied,
+        reason=reason,
+        args_summary=args_summary,
+    )
+    with suppress(Exception):
+        _store.record_event(conn, actor.project_id, "workspace", actor.id or "workspace", f"workspace.{action}")
+    return aid
 
 
 def _execute_workspace_action(root: Path, action: str, relpath: str, args: dict[str, Any]) -> WorkspaceResult:
@@ -1294,7 +1328,11 @@ def do(actor: WorkspaceActor, action: str, path: str = "", **args: Any) -> Works
     untrusted = bool(args.get("untrusted", False))
     approved = bool(args.get("approved", False))
     action = str(action or "").strip()
-    relpath = str(path or "").strip().lstrip("/")
+    raw_path = str(path or "").strip()
+    if raw_path and Path(raw_path).is_absolute():
+        audit_id = _emit_workspace_audit(conn, actor=actor, action=action, path=raw_path[:500], ok=False, denied=True, reason="path escapes workspace", args_summary=str({k:v for k,v in args.items() if k not in {'conn','project'}})[:500]) if conn is not None else ""
+        return WorkspaceResult(ok=False, action=action, path=raw_path[:500], error="path escapes workspace", denied=True, audit_id=audit_id)
+    relpath = raw_path.lstrip("/")
 
     if action not in WORKSPACE_ACTIONS:
         return WorkspaceResult(ok=False, action=action, path=relpath, error=f"unknown action {action}", denied=True)
@@ -1306,21 +1344,42 @@ def do(actor: WorkspaceActor, action: str, path: str = "", **args: Any) -> Works
         if project is None:
             return WorkspaceResult(ok=False, action=action, path=relpath, error="project not found", denied=True)
 
-        # Optional override for task checkouts: still confined to the data dir
-        # and audited through this same gateway.
-        root_override = args.get("workspace_root")
+        # Resolve workspace: explicit override (task checkout/chat-selected),
+        # active bound workspace, then project configured root.
+        root_override = args.get("workspace_root") or get_active_workspace()
         if root_override is not None:
             root = Path(root_override).resolve()
             data_root = Path(data_dir).resolve()
-            if not root.is_dir() or (root != data_root and data_root not in root.parents):
-                raise ValueError("workspace_root is outside the data directory")
+            in_data = (root == data_root or data_root in root.parents)
+            if not root.is_dir():
+                raise ValueError("workspace_root is not a directory")
+            # Task checkouts live inside data dir; chat-selected workspaces must
+            # pass server vetting. Allow data-dir roots as before.
+            if not in_data and vet_workspace_candidate(str(root)) is None:
+                raise ValueError("workspace_root is not allowed")
+            if not in_data and conn is not None:
+                try:
+                    from . import store as _store
+                    for other in _store.list_projects(conn):
+                        if str(getattr(other, "id", "")) == str(getattr(project, "id", "")):
+                            continue
+                        try:
+                            other_root = configured_project_root(other, data_dir).resolve()
+                        except Exception:
+                            continue
+                        if root == other_root or other_root in root.parents or root in other_root.parents:
+                            raise ValueError("workspace belongs to another project")
+                except ValueError:
+                    raise
+                except Exception:
+                    raise ValueError("workspace project isolation check failed")
         else:
             root = _resolve_workspace_root(project, data_dir)
         # confine (for path-based actions; some git actions don't need relpath)
         if action not in {"git_status", "git_log", "git_diff", "git_commit", "git_rollback", "checkout_create", "checkout_delete"} and relpath:
             _confine_workspace_path(root, relpath)
 
-        allowed, reason = _check_workspace_permission(actor, action)
+        allowed, reason = _check_workspace_permission(actor, action, conn=conn)
         if not allowed:
             audit_id = _emit_workspace_audit(conn, actor=actor, action=action, path=relpath, ok=False, denied=True, reason=reason, args_summary=str({k:v for k,v in args.items() if k not in {'conn','project'}})[:500]) if conn is not None else ""
             return WorkspaceResult(ok=False, action=action, path=relpath, error=reason, denied=True, audit_id=audit_id)
@@ -1331,7 +1390,16 @@ def do(actor: WorkspaceActor, action: str, path: str = "", **args: Any) -> Works
                 try:
                     from . import store as _store
                     from .gates import action_digest
-                    payload = {"actor_kind": actor.kind, "actor_id": actor.id, "project_id": actor.project_id, "action": action, "path": relpath, "args": {k: v for k, v in args.items() if k not in {"conn", "project", "data_dir"}}}
+                    effective_root = str(root)
+                    payload = {
+                        "actor_kind": actor.kind,
+                        "actor_id": actor.id,
+                        "project_id": actor.project_id,
+                        "action": action,
+                        "path": relpath,
+                        "workspace_root": effective_root,
+                        "args": {k: v for k, v in args.items() if k not in {"conn", "project", "data_dir"}},
+                    }
                     apr = _store.request_approval(
                         conn,
                         action=f"workspace.{action}",
@@ -1382,12 +1450,23 @@ def do(actor: WorkspaceActor, action: str, path: str = "", **args: Any) -> Works
             result.data["snapshot"] = snap
         audit_args = {k: v for k, v in args.items() if k not in {"conn", "project"}}
         if snap:
-            audit_args["snapshot"] = snap
+            audit_args = {"snapshot": snap, **audit_args}
         try:
-            summary = json.dumps(audit_args)[:500]
+            summary = json.dumps(audit_args, separators=(",", ":"), sort_keys=True)
+            if len(summary) > 500:
+                # keep snapshot parseable if present
+                if snap:
+                    small = json.dumps({"snapshot": snap}, separators=(",", ":"), sort_keys=True)
+                    summary = small[:500]
+                else:
+                    summary = summary[:500]
         except Exception:
             summary = str(audit_args)[:500]
-        result.audit_id = _emit_workspace_audit(conn, actor=actor, action=action, path=relpath, ok=result.ok, denied=False, reason="ok" if result.ok else result.error, args_summary=summary) if conn is not None else ""
+        if conn is not None:
+            try:
+                result.audit_id = _emit_workspace_audit(conn, actor=actor, action=action, path=relpath, ok=result.ok, denied=False, reason="ok" if result.ok else result.error, args_summary=summary)
+            except Exception as exc:
+                return WorkspaceResult(ok=False, action=action, path=relpath, error=f"audit persistence failed: {exc}", denied=False, data=result.data)
         # Autonomy reporting: act_and_report posts summary to thread/task; act_silently logs only.
         if result.ok and actor.kind == "teammate" and conn is not None:
             level = getattr(actor.teammate, "autonomy_level", "ask_first")
@@ -1402,5 +1481,15 @@ def do(actor: WorkspaceActor, action: str, path: str = "", **args: Any) -> Works
                     pass
         return result
     except Exception as exc:
-        audit_id = _emit_workspace_audit(conn, actor=actor, action=action, path=relpath, ok=False, denied=False, reason=str(exc), args_summary=str({k:v for k,v in args.items() if k not in {'conn','project'}})[:500]) if conn is not None else ""
-        return WorkspaceResult(ok=False, action=action, path=relpath, error=str(exc), denied=False, audit_id=audit_id)
+        msg = str(exc)
+        denied = isinstance(exc, (ValueError, PermissionError)) and any(
+            s in msg.lower() for s in ("escapes workspace", "outside the data directory", "outside workspace", "cannot access repository metadata", "not in project", "teammate not in project")
+        )
+        if conn is not None:
+            try:
+                audit_id = _emit_workspace_audit(conn, actor=actor, action=action, path=relpath, ok=False, denied=denied, reason=msg, args_summary=str({k:v for k,v in args.items() if k not in {'conn','project'}})[:500])
+            except Exception as audit_exc:
+                return WorkspaceResult(ok=False, action=action, path=relpath, error=f"audit persistence failed: {audit_exc}", denied=False)
+        else:
+            audit_id = ""
+        return WorkspaceResult(ok=False, action=action, path=relpath, error=msg, denied=denied, audit_id=audit_id)

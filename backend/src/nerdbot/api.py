@@ -5482,6 +5482,17 @@ def create_app() -> FastAPI:
         content = str(body.get("content", ""))
         if not content.strip():
             raise HTTPException(status_code=400, detail="content is required")
+        requested_workspace = str(body.get("workspace") or "").strip()
+        workspace_root = None
+        if requested_workspace:
+            project = store.get_project(conn, _chat_thread_project(conn, thread_id))
+            vetted = workspace_mgr.workspace_allowed_for_project(conn, project, _data_dir(), requested_workspace)
+            if vetted is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"code": "workspace_rejected", "workspace": requested_workspace},
+                )
+            workspace_root = str(vetted)
         store.append_message(conn, thread_id, "user", content)
         thread, provider, messages, provenance, speaker = _prepare_chat(
             conn, thread_id, content
@@ -5497,7 +5508,7 @@ def create_app() -> FastAPI:
             text, parts = chat_mod.chat_complete_with_tools(
                 provider, messages, conn=conn, project_id=thread.project_id,
                 thread_id=thread.id, mode=mode, teammate=speaker, data_dir=_data_dir(),
-                memory_used=bool(provenance),
+                memory_used=bool(provenance), workspace_root=workspace_root,
             )
         except Exception as exc:
             raise _chat_error_to_http(exc) from exc
@@ -5520,6 +5531,7 @@ def create_app() -> FastAPI:
             # The reply says so in its own text; this says so in the response,
             # so the interface can label it instead of passing it off as work.
             "mock": bool(provider and provider.kind == ProviderKind.MOCK),
+            "workspace": workspace_root,
         }
 
     @app.post("/threads/{thread_id}/chat/stream")
@@ -5533,6 +5545,18 @@ def create_app() -> FastAPI:
         content = str(body.get("content", ""))
         if not content.strip():
             raise HTTPException(status_code=400, detail="content is required")
+        requested_workspace = str(body.get("workspace") or "").strip()
+        workspace_root = None
+        if requested_workspace:
+            project = store.get_project(conn, _chat_thread_project(conn, thread_id))
+            vetted = workspace_mgr.workspace_allowed_for_project(conn, project, _data_dir(), requested_workspace)
+            if vetted is None:
+                def reject() -> Any:
+                    import json as _json
+                    yield f"data: {_json.dumps({'kind': 'workspace_rejected', 'path': requested_workspace, 'workspace': requested_workspace})}\n\n"
+                    yield "data: [DONE]\n\n"
+                return StreamingResponse(reject(), media_type="text/event-stream")
+            workspace_root = str(vetted)
         store.append_message(conn, thread_id, "user", content)
         thread, provider, messages, provenance, speaker = _prepare_chat(
             conn, thread_id, content
@@ -5564,6 +5588,7 @@ def create_app() -> FastAPI:
                     provider, messages, conn=conn, project_id=thread.project_id,
                     thread_id=thread.id, mode=str(body.get("mode", "chat") or "chat"),
                     teammate=speaker, data_dir=_data_dir(), memory_used=bool(provenance),
+                    workspace_root=workspace_root,
                 ):
                     yield f"data: {_json.dumps(event)}\n\n"
                     if isinstance(event, dict):

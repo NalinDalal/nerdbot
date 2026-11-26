@@ -789,14 +789,15 @@ export const api = {
     ),
   appendMessage: (threadId: string, role: string, content: string) =>
     post<ChatMessage>(`/threads/${threadId}/messages`, { role, content }),
-  sendChat: (threadId: string, content: string, mode?: string) =>
+  sendChat: (threadId: string, content: string, mode?: string, workspace?: string) =>
     post<{
       message: ChatMessage;
       provider_id: string | null;
       memory_used: MemoryProvenance[];
       /** True when the reply came from the mock provider: canned text, no work done. */
       mock?: boolean;
-    }>(`/threads/${threadId}/chat`, { content, mode }),
+      workspace?: string | null;
+    }>(`/threads/${threadId}/chat`, { content, mode, ...(workspace ? { workspace } : {}) }),
   summarizeThread: (threadId: string) => post<ChatThread>(`/threads/${threadId}/summarize`),
   approvePlan: (threadId: string, planId: string, body?: any) =>
     post<any>(`/threads/${threadId}/plans/${planId}/approve`, body || {}),
@@ -829,6 +830,8 @@ export const api = {
       /** Which teammate the backend says is answering this reply. */
       onSpeaker?: (speaker: { teammate_id: string; name: string }) => void;
       onMemoryUsed?: (items: MemoryProvenance[]) => void;
+      workspace?: string;
+      onWorkspaceRejected?: (path: string) => void;
     },
   ): Promise<string> =>
     streamChat(threadId, content, onChunk, onStatus, onParts, mode, opts),
@@ -1022,6 +1025,8 @@ async function streamChat(
     signal?: AbortSignal;
     onSpeaker?: (speaker: { teammate_id: string; name: string }) => void;
     onMemoryUsed?: (items: MemoryProvenance[]) => void;
+    workspace?: string;
+    onWorkspaceRejected?: (path: string) => void;
   },
 ): Promise<string> {
   const current = getSession();
@@ -1034,7 +1039,7 @@ async function streamChat(
         Authorization: `Bearer ${current.token}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ content, mode }),
+      body: JSON.stringify({ content, mode, ...(opts?.workspace ? { workspace: opts.workspace } : {}) }),
       signal: opts?.signal,
     });
   } catch (err) {
@@ -1101,6 +1106,8 @@ async function streamChat(
           name?: unknown;
           memory_used?: unknown;
           count?: unknown;
+          path?: unknown;
+          workspace?: unknown;
         };
         try {
           data = JSON.parse(payload) as typeof data;
@@ -1110,7 +1117,10 @@ async function streamChat(
         if (typeof data.error === "string" && data.error) {
           throw new ApiError(res.status, data.error);
         }
-        if (
+        if (data.kind === "workspace_rejected") {
+          const p = typeof data.path === "string" ? data.path : typeof data.workspace === "string" ? data.workspace : "";
+          opts?.onWorkspaceRejected?.(p);
+        } else if (
           data.kind === "speaker" &&
           typeof data.teammate_id === "string" &&
           typeof data.name === "string"
