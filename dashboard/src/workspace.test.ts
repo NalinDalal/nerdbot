@@ -22,7 +22,8 @@ class MemoryStorage {
 describe("workspace chat binding state", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    (globalThis as any).localStorage = new MemoryStorage();
+    const storage = new MemoryStorage();
+    Object.defineProperty(globalThis, "localStorage", { value: storage, configurable: true, writable: true });
     clearWorkspace();
   });
 
