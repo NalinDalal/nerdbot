@@ -114,3 +114,12 @@
 - Missing external credentials/browser infra: implement safe interfaces, feature flags, and explicit stub reporting.
 - No destructive git reset; no secret exposure.
 - If blocked, document blocker and continue independent work.
+
+## Permanent development workflow (2026-04-10)
+
+- **`main` is the sole development branch.** Do not create feature/temporary implementation branches.
+- Before every implementation session: `git pull --ff-only`.
+- Commit logical checkpoints directly to `main` with meaningful messages.
+- Run relevant tests before committing; do not claim completion without verification.
+- Push verified changes to `origin/main`; never force-push.
+- Never reset or discard user changes.
