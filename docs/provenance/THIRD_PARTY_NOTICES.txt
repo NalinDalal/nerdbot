@@ -43,9 +43,53 @@ If any Octop file is copied verbatim, retain this MIT notice alongside the copie
 Source: `~/odysseus` (commit `c3819e3cbf56c4f899eacc66b21115a77d9c570d`)
 License: GNU AGPL v3 — see `~/odysseus/LICENSE`
 
-**No implementation code from Odysseus has been copied, imported, or translated.** All Odysseus-inspired behavior (typed tool failures, untrusted-context framing, SSRF-guarded fetch, sealed approvals, fail-closed memory, compaction-at-85%) was re-implemented clean-room in TypeScript from behavioral description. No strings, constants, or data structures from `~/odysseus` appear in this repository.
+**No implementation code from Odysseus has been copied, imported, or translated.** All Odysseus-inspired behavior (typed tool failures, untrusted-context framing, SSRF-guarded fetch, sealed approvals, fail-closed memory, context compaction) was re-implemented clean-room in Python 3.12 from behavioral description. No strings, constants, or data structures from `~/odysseus` appear in this repository — marker strings and identifiers deliberately differ.
 
-See `docs/provenance/PROVENANCE.md` for the clean-room statement.
+See `docs/provenance/PROVENANCE.txt` for the clean-room statement and the per-pattern verification status.
+
+## Xiryn (MIT License)
+
+Source: `~/nerdbot-refs/xiryn` (commit `c56fd59`, origin
+`https://github.com/SouravBeraAkaSpeed/xiryn.git`)
+License: MIT — see `~/nerdbot-refs/xiryn/LICENSE`
+
+Copyright (c) 2026 SouravBeraAkaSpeed (Xiryn contributors)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Reused or adapted from Xiryn (add here as files land, with the notice kept
+alongside any copied file):
+- Isolated per-agent Docker computer environments with network isolation,
+  human takeover and hand-back (re-implemented; see
+  `backend/src/nerdbot/workstations.py`).
+- Telegram long-polling remote control and pairing (re-implemented; see
+  `backend/src/nerdbot/telegram_link.py`).
+- Speech input/output routing (re-implemented; see
+  `backend/src/nerdbot/speech.py`).
+
+## Excluded source: OpenBot
+
+`~/OpenBot` is the data directory of an installed third-party Electron
+application (`app.openbot.desktop`), not a source repository. No code, data,
+configuration or other material from it is incorporated into Nerdbot, and it is
+excluded from the adoption inventory. The identifiers `onOpenBot` / `openBot`
+appearing in the dashboard are unrelated React prop and function names.
 
 ## AI Teammates (reference-only — no LICENSE present)
 

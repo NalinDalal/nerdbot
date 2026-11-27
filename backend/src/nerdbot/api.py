@@ -40,7 +40,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -62,6 +62,7 @@ from . import knowledge as knowledge_mod
 from . import library as library_mod
 from . import metrics as metrics_mod
 from . import notify as notify_mod
+from . import mcp_client as mcp_client_mod
 from . import permissions as permissions_mod
 from . import persona as persona_mod
 from . import providers as providers_impl
@@ -6930,6 +6931,69 @@ def create_app() -> FastAPI:
         store.delete_event(conn, event_id)
         return {"deleted": True, "id": event_id}
 
+    # -- Workstation routes ---------------------------------------------------
+    @app.post("/workstations/{agent_id}", status_code=201)
+    def create_workstation(
+        agent_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+        size_kind: str = "m",
+    ) -> dict[str, Any]:
+        from . import workstations as ws_mod
+        result = ws_mod.create_workstation(conn, agent_id=agent_id, size_kind=size_kind, principal=principal)
+        return result
+
+    @app.post("/workstations/{agent_id}/stop")
+    def stop_workstation(
+        agent_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        from . import workstations as ws_mod
+        result = ws_mod.stop_workstation(conn, agent_id, principal=principal)
+        return result
+
+    @app.post("/workstations/{agent_id}/reset")
+    def reset_workstation(
+        agent_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        from . import workstations as ws_mod
+        result = ws_mod.reset_workstation(conn, agent_id, principal=principal)
+        return result
+
+    @app.post("/workstations/{agent_id}/delete")
+    def delete_workstation(
+        agent_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        from . import workstations as ws_mod
+        result = ws_mod.delete_workstation(conn, agent_id, principal=principal)
+        return result
+
+    @app.get("/workstations/{agent_id}")
+    def get_workstation(
+        agent_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+        principal: str = Depends(principal_from_header),
+    ) -> dict[str, Any]:
+        from . import workstations as ws_mod
+        result = ws_mod.workstation_meta(conn, agent_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="workstation not found")
+        return result
+
+    # ----------------------------------------------------------------------
+    # MCP routes
+    # ----------------------------------------------------------------------
+    router = APIRouter(prefix="/mcp", tags=["mcp"])
+
+    from . import routes_mcp
+    app.include_router(routes_mcp.router)
+
+    # ----------------------------------------------------------------------
 
     return app
 

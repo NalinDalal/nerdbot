@@ -1127,3 +1127,145 @@ async function streamChat(
   }
   return full;
 }
+
+
+export interface WorkstationStatus {
+  agentId: string;
+  status: 'running' | 'stopped' | 'error' | 'recovering';
+  cpuPercent: number;
+  memoryPercent: number;
+  diskPercent: number;
+  uptime: number;
+  lastActivity: string;
+  error?: string;
+  recoveringFrom?: string;
+}
+
+export interface WorkstationBrowserInfo {
+  vncUrl: string;
+  noVNCUrl: string;
+  isSecure: boolean;
+  authenticated: boolean;
+}
+
+export interface WorkstationTakeoverState {
+  takenOver: boolean;
+  takenOverBy: 'human' | 'agent' | null;
+  takenOverAt: string | null;
+  resumed: boolean;
+  resumedAt: string | null;
+}
+
+export interface WorkstationExecutionEvidence {
+  screenshot: string;  // base64 encoded
+  title: string;
+  url: string;
+  contentPreview: string;
+  executedAt: string;
+  agentId: string;
+}
+
+export interface WorkstationExecutionResult {
+  success: boolean;
+  evidence: WorkstationExecutionEvidence;
+  error?: string;
+}
+
+
+// Workstation API functions
+
+export async function fetchWorkstationStatus(agentId: string): Promise<WorkstationStatus> {
+  const resp = await fetch("/workstations/" + agentId, {
+    method: "GET",
+    headers: {
+      "Authorization": "Bearer " + session!.token,
+    },
+  });
+  if (!resp.ok) throw new Error("Failed to fetch workstation status");
+  return resp.json();
+}
+
+export async function fetchWorkstationBrowserInfo(agentId: string): Promise<WorkstationBrowserInfo> {
+  const resp = await fetch("/workstations/" + agentId + "/browser/info", {
+    method: "GET",
+    headers: {
+      "Authorization": "Bearer " + session!.token,
+    },
+  });
+  if (!resp.ok) throw new Error("Failed to fetch browser info");
+  return resp.json();
+}
+
+export async function fetchWorkstationTakeoverState(agentId: string): Promise<WorkstationTakeoverState> {
+  const resp = await fetch("/workstations/" + agentId + "/takeover", {
+    method: "GET",
+    headers: {
+      "Authorization": "Bearer " + session!.token,
+    },
+  });
+  if (!resp.ok) throw new Error("Failed to fetch takeover state");
+  return resp.json();
+}
+
+export async function startWorkstationBrowser(agentId: string): Promise<void> {
+  const resp = await fetch("/workstations/" + agentId + "/browser/start", {
+    method: "POST",
+    headers: {
+      "Authorization": "Bearer " + session!.token,
+    },
+  });
+  if (!resp.ok) throw new Error("Failed to start browser");
+}
+
+export async function stopWorkstationBrowser(agentId: string): Promise<void> {
+  const resp = await fetch("/workstations/" + agentId + "/browser/stop", {
+    method: "POST",
+    headers: {
+      "Authorization": "Bearer " + session!.token,
+    },
+  });
+  if (!resp.ok) throw new Error("Failed to stop browser");
+}
+
+export async function requestTakeover(agentId: string): Promise<void> {
+  const resp = await fetch("/workstations/" + agentId + "/browser/takeover", {
+    method: "POST",
+    headers: {
+      "Authorization": "Bearer " + session!.token,
+    },
+  });
+  if (!resp.ok) throw new Error("Failed to request takeover");
+}
+
+export async function handbackTakeover(agentId: string): Promise<void> {
+  const resp = await fetch("/workstations/" + agentId + "/browser/handback", {
+    method: "POST",
+    headers: {
+      "Authorization": "Bearer " + session!.token,
+    },
+  });
+  if (!resp.ok) throw new Error("Failed to hand back takeover");
+}
+
+export async function captureWorkstationScreenshot(agentId: string): Promise<string> {
+  const resp = await fetch("/workstations/" + agentId + "/browser/screenshot", {
+    method: "POST",
+    headers: {
+      "Authorization": "Bearer " + session!.token,
+    },
+  });
+  if (!resp.ok) throw new Error("Failed to capture screenshot");
+  const data = await resp.json();
+  return data.evidence.screenshot;
+}
+
+export async function fetchWorkstationExecutionHistory(agentId: string): Promise<WorkstationExecutionEvidence[]> {
+  const resp = await fetch("/workstations/" + agentId + "/history", {
+    method: "GET",
+    headers: {
+      "Authorization": "Bearer " + session!.token,
+    },
+  });
+  if (!resp.ok) throw new Error("Failed to fetch execution history");
+  return resp.json();
+}

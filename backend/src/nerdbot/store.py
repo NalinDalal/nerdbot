@@ -441,6 +441,40 @@ CREATE TABLE IF NOT EXISTS calendar_events (
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_calendar_events_range ON calendar_events(project_id, starts_at);
+CREATE TABLE IF NOT EXISTS vault_items (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'generic',
+  scope_level TEXT NOT NULL DEFAULT 'global', scope_id TEXT NOT NULL DEFAULT '',
+  ciphertext TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}',
+  version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  updated_by TEXT NOT NULL DEFAULT '', revoked_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_vault_items_live
+  ON vault_items(name, scope_level, scope_id) WHERE revoked_at IS NULL;
+CREATE TABLE IF NOT EXISTS vault_grants (
+  id TEXT PRIMARY KEY, item_id TEXT NOT NULL REFERENCES vault_items(id),
+  grantee_kind TEXT NOT NULL DEFAULT 'teammate', grantee_id TEXT NOT NULL,
+  permission TEXT NOT NULL DEFAULT 'use', created_at TEXT NOT NULL,
+  UNIQUE(item_id, grantee_kind, grantee_id)
+);
+CREATE TABLE IF NOT EXISTS vault_access_log (
+  id TEXT PRIMARY KEY, item_id TEXT NOT NULL, principal TEXT NOT NULL,
+  action TEXT NOT NULL, decision TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
+  totp_verified INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_vault_access_log_item ON vault_access_log(item_id, created_at);
+CREATE TABLE IF NOT EXISTS totp_enrollment (
+  id TEXT PRIMARY KEY, principal TEXT NOT NULL UNIQUE, secret TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 0, confirmed_at TEXT, created_at TEXT NOT NULL,
+  last_used_step INTEGER NOT NULL DEFAULT -1
+);
+CREATE TABLE IF NOT EXISTS totp_recovery_codes (
+  id TEXT PRIMARY KEY, principal TEXT NOT NULL, code_hash TEXT NOT NULL,
+  used_at TEXT, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS auth_failures (
+  id TEXT PRIMARY KEY, subject TEXT NOT NULL UNIQUE, attempts INTEGER NOT NULL DEFAULT 0,
+  first_at TEXT NOT NULL, last_at TEXT NOT NULL, locked_until TEXT
+);
 """
 
 
@@ -912,6 +946,12 @@ _PHASE39_COLUMNS: dict[str, list[tuple[str, str]]] = {
 
 _PHASE40_COLUMNS: dict[str, list[tuple[str, str]]] = {}
 
+#: Vault reveals can be gated either by an explicit confirmation (default) or
+#: by a full owner approval, per item.
+_PHASE41_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "vault_items": [("reveal_policy", "TEXT NOT NULL DEFAULT 'confirm'")],
+}
+
 
 _PHASE20_COLUMNS: dict[str, list[tuple[str, str]]] = {
     # Bot persona files (ai-teammates model): a bot's identity, its active
@@ -947,7 +987,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
                   _PHASE25_COLUMNS, _PHASE26_COLUMNS, _PHASE27_COLUMNS, _PHASE28_COLUMNS,
                   _PHASE29_COLUMNS, _PHASE30_COLUMNS, _PHASE31_COLUMNS, _PHASE32_COLUMNS,
                   _PHASE33_COLUMNS, _PHASE34_COLUMNS, _PHASE35_COLUMNS, _PHASE36_COLUMNS, _PHASE37_COLUMNS,
-                  _PHASE38_COLUMNS, _PHASE39_COLUMNS, _PHASE40_COLUMNS):
+                  _PHASE38_COLUMNS, _PHASE39_COLUMNS, _PHASE40_COLUMNS, _PHASE41_COLUMNS):
         for table, columns in phase.items():
             phases.setdefault(table, []).extend(columns)
     for table, columns in phases.items():

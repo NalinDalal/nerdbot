@@ -856,3 +856,46 @@ export interface OrgOverview {
   activity: OrgActivity[];
   notifications: OrgNotification[];
 }
+
+
+export interface WorkstationStatus {
+  agentId: string;
+  status: 'running' | 'stopped' | 'error' | 'recovering';
+  cpuPercent: number;
+  memoryPercent: number;
+  diskPercent: number;
+  uptime: number;
+  lastActivity: string;
+  error?: string;
+  recoveringFrom?: string;
+}
+
+export interface WorkstationBrowserInfo {
+  vncUrl: string;
+  noVNCUrl: string;
+  isSecure: boolean;
+  authenticated: boolean;
+}
+
+export interface WorkstationTakeoverState {
+  takenOver: boolean;
+  takenOverBy: 'human' | 'agent' | null;
+  takenOverAt: string | null;
+  resumed: boolean;
+  resumedAt: string | null;
+}
+
+export interface WorkstationExecutionEvidence {
+  screenshot: string;  // base64 encoded
+  title: string;
+  url: string;
+  contentPreview: string;
+  executedAt: string;
+  agentId: string;
+}
+
+export interface WorkstationExecutionResult {
+  success: boolean;
+  evidence: WorkstationExecutionEvidence;
+  error?: string;
+}

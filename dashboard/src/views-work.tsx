@@ -6,6 +6,7 @@
  *  Also keeps the task inbox for day-to-day work.
  */
 import { useEffect, useMemo, useState } from "react";
+import { useParams } from "react-router-dom";
 import { api } from "./api";
 import { navigate, notifyError } from "./app";
 import type { ApprovalInboxItem, JobItem, Project, ProjectCounts, ResearchJob, Task, Teammate } from "./types";
@@ -577,4 +578,163 @@ function NewTaskModal({ projects, bots, onClose, onCreated }: { projects: Projec
       </div>
     </Modal>
   );
+}
+
+
+import { useEffect, useState } from "react";
+import { useParams } from "react-router-dom";
+import { fetchWorkstationStatus, fetchWorkstationBrowserInfo, fetchWorkstationTakeoverState, startWorkstationBrowser, stopWorkstationBrowser, requestTakeover, handbackTakeover, captureWorkstationScreenshot, fetchWorkstationExecutionHistory } from "./api";
+import { useToast } from "@/components/ui/sonner";
+import { useWorkspaceSummary } from "./useWorkspaceSummary";
+import { DataTable } from "./DataTable";
+import { Button, EmptyState, StatusBadge } from "./components";
+
+export function WorkstationBrowserView() {
+  const { agentId } = useParams<{ agentId: string }>();
+  const { data: workspace } = useWorkspaceSummary();
+  const [status, setStatus] = useState<WorkstationStatus | null>(null);
+  const [browserInfo, setBrowserInfo] = useState<WorkstationBrowserInfo | null>(null);
+  const [takeoverState, setTakeoverState] = useState<WorkstationTakeoverState | null>(null);
+  const [executionEvidence, setExecutionEvidence] = useState<WorkstationExecutionEvidence[]>([]);
+  const [isRunning, setIsRunning] = useState(false);
+  const [isTakingOver, setIsTakingOver] = useState(false);
+  const [isHandingBack, setIsHandingBack] = useState(false);
+  useEffect(() => {
+    if (!agentId) return;
+    fetchWorkstationStatus(agentId).then(s => setStatus(s)).catch(err => console.error(err));
+    fetchWorkstationBrowserInfo(agentId).then(bi => setBrowserInfo(bi)).catch(err => console.error(err));
+    fetchWorkstationTakeoverState(agentId).then(ts => setTakeoverState(ts)).catch(err => console.error(err));
+    fetchWorkstationExecutionHistory(agentId).then(ev => setExecutionEvidence(ev)).catch(err => console.error(err));
+  }, [agentId]);
+  
+  const startBrowser = async () => {
+    setIsRunning(true);
+    try {
+      await startWorkstationBrowser(agentId!);
+      // Poll status until running
+      const poll = setInterval(() => {
+        fetchWorkstationStatus(agentId!).then(s => {
+          if (s.status === "running") {
+            setStatus(s);
+            setIsRunning(false);
+            clearInterval(poll);
+          }
+        });
+      }, 2000);
+      setTimeout(() => clearInterval(poll), 15000);
+    } catch (e) {
+      setIsRunning(false);
+      console.error(e);
+    }
+  };
+  
+  const stopBrowser = async () => {
+    try {
+      await stopWorkstationBrowser(agentId!);
+      setStatus(prev => prev ? { ...prev, status: "stopped" } : null);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+  
+  const handleTakeover = async () => {
+    setIsTakingOver(true);
+    try {
+      await requestTakeover(agentId!);
+      // Poll takeover state
+      const poll = setInterval(() => {
+        fetchWorkstationTakeoverState(agentId!).then(ts => {
+          setTakeoverState(ts);
+          if (!ts.takenOver) {
+            setIsTakingOver(false);
+            clearInterval(poll);
+          }
+        });
+      }, 1000);
+      setTimeout(() => clearInterval(poll), 30000);
+    } catch (e) {
+      setIsTakingOver(false);
+      console.error(e);
+    }
+  };
+  
+  const handleHandback = async () => {
+    setIsHandingBack(true);
+    try {
+      await handbackTakeover(agentId!);
+      setTimeout(() => {
+        setIsHandingBack(false);
+      }, 3000);
+    } catch (e) {
+      setIsHandingBack(false);
+      console.error(e);
+    }
+  };
+  
+  const captureScreenshot = async () => {
+    try {
+      const screenshotBase64 = await captureWorkstationScreenshot(agentId!);
+      // TODO: handle screenshot display
+      console.log("Screenshot captured: " + screenshotBase64.length, "bytes");
+    } catch (e) {
+      console.error(e);
+    }
+  };
+  
+  return (
+    <div className="p-6 space-y-4">
+      <h2 className="text-xl font-bold">Workstation: {agentId}</h2>
+      
+      {status && (
+        <div className="space-y-4">
+          <p>Status: <strong>{status.status}</strong></p>
+          <p>CPU: {status.cpuPercent}%</p>
+          <p>Memory: {status.memoryPercent}%</p>
+          <p>Disk: {status.diskPercent}%</p>
+          <p>Uptime: {status.uptime}s</p>
+          <p>Last activity: {status.lastActivity}</p>
+          {status.error && <p className="text-red-500">Error: {status.error}</p>}
+          {status.recoveringFrom && <p>Recovering from: {status.recoveringFrom}</p>}
+        </div>
+      )}
+      
+      {browserInfo && (
+        <div>
+          <p>VNC: <a href={browserInfo.vncUrl} target="_blank" rel="noopener">Connect VNC</a></p>
+          <p>noVNC: <a href={browserInfo.noVNCUrl} target="_blank" rel="noopener">Open noVNC</a></p>
+        </div>
+      )}
+      
+      {takeoverState && (
+        <div>
+          <p>Taken over: {takeoverState.takenOver ? "Yes" : "No"}</p>
+          <p>Taken over by: {takeoverState.takenOverBy || "none"}</p>
+          <p>Resumed: {takeoverState.resumed ? "Yes" : "No"}</p>
+        </div>
+      )}
+      
+      {executionEvidence.length > 0 && (
+        <div>
+          <h3>Execution Evidence ({executionEvidence.length})</h3>
+          <DataTable
+            columns={[
+              { header: "Title", cell: (e: any) => e.title },
+              { header: "URL", cell: (e: any) => e.url },
+              { header: "Executed", cell: (e: any) => e.executedAt },
+              { header: "Preview", cell: (e: any) => e.contentPreview.substring(0, 100) },
+            ]}
+            data={executionEvidence}
+          />
+        </div>
+      )}
+      
+      <div className="flex gap-2">
+        <button onClick={startBrowser} className="btn-primary" disabled={isRunning}>Start</button>
+        <button onClick={stopBrowser} className="btn-secondary" disabled={!isRunning}>Stop</button>
+        {isTakingOver && <button disabled>Taking over...</button>}
+        {isHandingBack && <button disabled>Handing back...</button>}
+        <button onClick={captureScreenshot} className="btn-outline">Capture Screenshot</button>
+      </div>
+    </div>
+  )
 }

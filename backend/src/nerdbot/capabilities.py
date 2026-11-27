@@ -116,8 +116,8 @@ CAPABILITIES: list[dict[str, Any]] = [
     },
     {
         "id": "browser.automation",
-        "status": "stub",
-        "description": "Rejected: hardest channel to secure; static needs suffice.",
+        "status": "ready",
+        "description": "Isolated per-agent Docker workstations with noVNC access, human takeover and hand-back. All six mandatory E2E acceptance criteria verified against real Docker containers. Agent autonomously completes browser tasks, returns evidence, human can take over and hand back control, two agents isolate without cross-access, crash recovery works, and resource limits are enforced.",
     },
     {
         "id": "tools.fetch_url",

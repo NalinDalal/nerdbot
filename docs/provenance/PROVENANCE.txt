@@ -1,43 +1,93 @@
 # Provenance — Adopted Ideas and Code Sources
 
-This file records every idea, pattern, or code fragment adopted from reference repositories, per the license requirements. No reference repository has been modified. Work occurs only in `~/nerdbot`.
+This file records every idea, pattern, or code fragment adopted from reference
+repositories, per the license requirements. No reference repository has been
+modified. Work occurs only in `~/nerdbot`.
+
+**Last verified against the codebase: 2026-11-26** (each adoption row was
+re-checked by searching the implementation; see "Verification status").
 
 ## Reference repositories (pinned)
 
-| Repository | Path | Commit SHA | License | Use policy |
-|---|---|---|---|---|
-| Octop | `~/octop` | `ecec9f7017b42a5cbdd9fcfae7851effc387374c` | MIT | Reuse with attribution |
-| Odysseus | `~/odysseus` | `c3819e3cbf56c4f899eacc66b21115a77d9c570d` | AGPL-3.0-or-later | Concepts only; clean-room re-implementation; no code copy |
-| AI Teammates | `~/ai-teammates` | `6bea24c7a043dea100bed930f8bbc6da1e14e43a` | None present | Reference-only; do not import code |
-| NerdBot Audit | `~/nerdbot-audit` | N/A (not a git repo) | N/A | Read-only reports |
+| Repository | Path | Commit SHA | License | Local status | Use policy |
+|---|---|---|---|---|---|
+| Octop | `~/octop` | `ecec9f7017b42a5cbdd9fcfae7851effc387374c` | MIT | **directory no longer exists** — SHA unverifiable locally; attribution retained | Reuse with attribution |
+| Odysseus | `~/odysseus` | `c3819e3cbf56c4f899eacc66b21115a77d9c570d` | AGPL-3.0-or-later | present | Concepts only; clean-room re-implementation; no code copy |
+| Xiryn | `~/nerdbot-refs/xiryn` | `c56fd59` (origin `github.com/SouravBeraAkaSpeed/xiryn`) | MIT | present | Reference; reuse with attribution and preserved MIT notice |
+| AI Teammates | `~/ai-teammates` | `6bea24c7a043dea100bed930f8bbc6da1e14e43a` | none present (default copyright) | **directory no longer exists** — SHA unverifiable locally; attribution retained | Reference only; do not import code |
+| NerdBot Audit | `~/nerdbot-audit` | N/A (not a git repo) | N/A | **directory no longer exists** | Read-only reports |
 
-## Adoption log (to be filled as code is written)
+**Excluded by decision:** `~/OpenBot` is not a source repository. It is the
+data directory of an installed Electron application (`app.openbot.desktop`),
+created by a short-lived experiment on 2026-10-22/23. It is excluded from the
+architecture and from this adoption inventory. No material from it is present
+in Nerdbot; the `onOpenBot` / `openBot` identifiers in
+`dashboard/src/views-chat.tsx` and `dashboard/src/views-teams.tsx` are
+coincidental React prop/function names.
 
-| # | Idea / pattern | Source | File / location | License | Action (copy / adapt / build) | Attribution required? | nerdbot location |
+## Adoption log (verified 2026-11-26)
+
+Verification status: **verified** = the pattern exists at the cited path;
+**adapted** = present but in a different form than originally logged;
+**not implemented** = logged previously but absent from the codebase at audit;
+**rejected** = deliberately declined (decision recorded in `capabilities.py`).
+
+| # | Idea / pattern | Source | License | Action | Attribution required? | Nerdbot location (actual) | Verification status |
 |---|---|---|---|---|---|---|---|
-| 1 | Persisted handoff chain in message metadata | Octop `infra/agents/teams/handoff_guard.py` | `teams/handoff_guard.py:23-34,80-122` | MIT | Adapt | If copied verbatim; none if rewritten | `backend/orchestrator/` |
-| 2 | Tool guardrail rule semantics (`rm -rf`, fork bombs, `curl\|sh`, metadata IPs) | Octop `infra/agents/security/tool_guard_rules.py` + YAML rules | MIT | Adapt as TS list | If copied verbatim; none if re-expressed | `backend/runtime/` |
-| 3 | Cron tool-description grammar (NL scheduling via tool descriptions) | Octop `infra/cron/tools.py:26-49` | MIT | Adapt | None if rewritten | `backend/orchestrator/` |
-| 4 | Citation-marker trick (`<!--…-citations:…-->`) | Octop `infra/knowledge/citations.py:10-62` | MIT | Adapt | None | `backend/workspace/` |
-| 5 | `thread_messages` display projection separate from checkpoint | Octop `infra/history/{recorder,projection}.py` | MIT | Adapt | None | `backend/persistence/` |
-| 6 | Login lockout 5/900s | Octop `config.py:130-131` | MIT | Adapt | None | `backend/auth/` |
-| 7 | MCP config fingerprint caching + redaction | Octop `infra/connectors/mcp_tool_cache.py`, `crypto.py` | MIT | Adapt | None | `backend/integrations/` |
-| 8 | Typed tool-failure union (`{ok} | {blocked,kind} | {error}`) | Odysseus `src/tool_execution.py` | AGPL | Adapt clean-room | None (no copied material) | `backend/runtime/` |
-| 9 | Untrusted-context framing (`<<<UNTRUSTED_SOURCE_DATA>>>`) | Odysseus `src/prompt_security.py:30-34` | AGPL | Adapt clean-room | None (no copied material) | `backend/runtime/` |
-| 10 | SSRF-guarded fetch (DNS pinning, redirect validation, size budgets) | Odysseus `src/outbound_fetch.py`, `src/url_security.py` | AGPL | Adapt clean-room | None (no copied material) | `backend/integrations/` |
-| 11 | Sealed approvals (owner/session/run/digest binding, TTL) | Odysseus `src/tool_approvals.py:38,97,315-350` | AGPL | Adapt clean-room | None (no copied material) | `backend/orchestrator/` |
-| 12 | Fail-closed memory mutation | Odysseus `src/memory.py` | AGPL | Adapt clean-room | None (no copied material) | `backend/memory/` |
-| 13 | Compaction at 85% of window | Odysseus `src/context_compactor.py:95,474` | AGPL | Adapt clean-room | None (no copied material) | `backend/memory/` |
-| 14 | Originator-anchored group handoff | AI Teammates `trigger/chat.ts:69-93` | No LICENSE | Reference only | Re-implement natively | N/A | `backend/orchestrator/` |
-| 15 | Per-bot sandbox with `MEMORY.md` | AI Teammates `lib/sandbox-tools.ts` | No LICENSE | Reference only | Re-implement natively | N/A | `workspace_manager/` |
-| 16 | Trigger.dev `chat.agent` durable runs | AI Teammates `trigger/chat.ts` | No LICENSE | Integrate (dependency) | N/A | Standard package notices | `backend/runtime/` |
-| 17 | scrypt + `timingSafeEqual` auth | AI Teammates `lib/auth.ts` | No LICENSE | Reference only | Re-implement natively | N/A | `backend/auth/` |
+| 1 | Persisted handoff chain | Octop `infra/agents/teams/handoff_guard.py` | MIT | Adapt | If copied verbatim; none if rewritten | `backend/src/nerdbot/models.py` (`Event.kind` = message/handoff/notice/delegation), `delegation.py`, `orchestrator.py` | verified |
+| 2 | Tool guardrail rule semantics (`rm -rf`, fork bombs, `curl\|sh`, metadata IPs) | Octop `infra/agents/security/tool_guard_rules.py` | MIT | Adapt | If copied verbatim; none if re-expressed | `backend/src/nerdbot/runtime.py` (`BLOCKED_PATTERNS`, `check_command`) | verified |
+| 3 | Cron tool-description grammar (NL scheduling via tool descriptions) | Octop `infra/cron/tools.py:26-49` | MIT | Adopt | None if rewritten | — | **not implemented** — NL-to-cron was rejected (`capabilities.py` `scheduler.nl-to-cron` = rejected); `routines.py` implements a plain 5-field cron matcher |
+| 4 | Citation markers / cited retrieval | Octop `infra/knowledge/citations.py:10-62` | MIT | Adapt | None | `backend/src/nerdbot/knowledge.py` (`retrieve` returns chunk citations with provenance and confidence; `cite` persists them) | adapted — provenance-carrying citations, not the HTML-comment marker trick |
+| 5 | `thread_messages` display projection separate from the checkpoint | Octop `infra/history/{recorder,projection}.py` | MIT | Adapt | None | `backend/src/nerdbot/store.py` (`list_messages_for_teammate`) | adapted — no separate projection table; message reads go through dedicated list functions |
+| 6 | Login lockout 5 tries / 900 s | Octop `config.py:130-131` | MIT | Adopt | None | `backend/src/nerdbot/auth.py` | **not implemented at audit** — implemented in the 2026-11-26 consolidation work (failure lockout on bearer principal) |
+| 7 | MCP config fingerprint caching + redaction | Octop `infra/connectors/mcp_tool_cache.py`, `crypto.py` | MIT | Adopt | None | `backend/src/nerdbot/mcp_client.py` | **not implemented at audit** (no MCP client existed) — implemented in the 2026-11-26 consolidation work |
+| 8 | Typed tool-failure union (`{ok} \| {blocked,kind} \| {error}`) | Odysseus `src/tool_execution.py` | AGPL | Adapt clean-room | None (no copied material) | `backend/src/nerdbot/runtime.py` (`BlockedError`, `ExecutionError`, `RunCancelled`) | adapted — an exception taxonomy plus run status, not a JSON union |
+| 9 | Untrusted-context framing | Odysseus `src/prompt_security.py:30-34` | AGPL | Adapt clean-room | None (no copied material) | `backend/src/nerdbot/runtime.py` (`<<<UNTRUSTED_RUN_OUTPUT>>>` … `<<<END_UNTRUSTED_RUN_OUTPUT>>>`), `chat.py`, `agent_context.py`, `persona.py` | verified — marker text differs from the source, as required by clean-room |
+| 10 | SSRF-guarded fetch (DNS pinning, redirect validation, size budgets) | Odysseus `src/outbound_fetch.py`, `src/url_security.py` | AGPL | Adapt clean-room | None (no copied material) | `backend/src/nerdbot/fetch.py` (public-IP resolution, all-pass DNS check, redirect and byte caps) | verified |
+| 11 | Sealed approvals (owner/session/run/digest binding, TTL, one-use) | Odysseus `src/tool_approvals.py:38,97,315-350` | AGPL | Adapt clean-room | None (no copied material) | `backend/src/nerdbot/approval_flow.py` (digest binding via `store.tool_digest`, expiry, one-use consumption) | verified |
+| 12 | Fail-closed memory mutation | Odysseus `src/memory.py` | AGPL | Adapt clean-room | None (no copied material) | `backend/src/nerdbot/agent_context.py` (`fail-closed on memory`), `knowledge.py` | verified |
+| 13 | Compaction at 85 % of the context window | Odysseus `src/context_compactor.py:95,474` | AGPL | Adapt clean-room | None (no copied material) | `backend/src/nerdbot/chat.py` (`summarize_thread`), `persona.py` (`compact_memory`) | **not implemented at audit as specified** — thread summarization and memory compaction exist instead of a window-percentage trigger |
+| 14 | Originator-anchored group handoff | AI Teammates `trigger/chat.ts:69-93` | none present | Reference only | N/A — re-implemented natively | `backend/src/nerdbot/delegation.py` (bounded-depth delegations with explicit accept/decline) | adapted |
+| 15 | Per-bot sandbox with `MEMORY.md` | AI Teammates `lib/sandbox-tools.ts` | none present | Reference only | N/A — re-implemented natively | `backend/src/nerdbot/workspace.py` (per-project workspaces) + `memories` table | adapted — DB-backed scoped memory, not a `MEMORY.md` file |
+| 16 | Trigger.dev `chat.agent` durable runs | AI Teammates `trigger/chat.ts` | none present | Not adopted | N/A | — | **rejected** — durable execution is implemented natively (SQLite run leases, heartbeats, recovery in `orchestrator.py`); no Trigger.dev dependency |
+| 17 | scrypt + constant-time auth comparison | AI Teammates `lib/auth.ts` | none present | Reference only | N/A — re-implemented natively | `backend/src/nerdbot/auth.py` | **not implemented at audit** — Nerdbot authenticates with a single bearer principal (`NERDBOT_TOKEN`), not password login; TOTP and failure lockout were added in the 2026-11-26 consolidation work |
 
 ## Clean-room statement for Odysseus-derived code
 
-All code in `~/nerdbot` that is inspired by Odysseus (AGPL-3.0-or-later) has been re-implemented from behavioral description only. No source files, strings, constants, or data structures from `~/odysseus` have been copied, translated, or derived by mechanical transformation. Where a detail mattered, the cited file was read to *understand the behavior*, then fresh TypeScript was written. This stance is documented here and in `THIRD_PARTY_NOTICES`.
+All code in `~/nerdbot` that is inspired by Odysseus (AGPL-3.0-or-later) has
+been re-implemented from behavioral description only. No source files, strings,
+constants, or data structures from `~/odysseus` have been copied, translated, or
+derived by mechanical transformation. Where a detail mattered, the cited file
+was read to *understand the behavior*, then fresh **Python** was written (the
+backend is Python 3.12; an earlier draft of this file said TypeScript, which no
+longer reflects the implementation). Marker strings differ deliberately — for
+example Nerdbot uses `<<<UNTRUSTED_RUN_OUTPUT>>>`, not the source's marker.
+This stance is documented here and in `THIRD_PARTY_NOTICES`.
+
+## Xiryn (MIT) — reference and reuse policy
+
+Source: `~/nerdbot-refs/xiryn` (MIT). Xiryn is used as the functional
+reference for capability work: isolated per-agent computer environments,
+human takeover/hand-back, Telegram control, and speech input/output. Because
+Xiryn is MIT, components may be reused where technically appropriate; any
+verbatim or substantially copied file must carry the Xiryn MIT notice in
+`THIRD_PARTY_NOTICES` and in the file itself. Concepts re-implemented
+independently do not trigger the notice requirement, but are still logged here.
+
+## Corrections applied 2026-11-26
+
+1. Added Xiryn as a pinned reference (MIT) with an explicit reuse policy.
+2. Recorded `~/OpenBot` as excluded (not a source repository).
+3. Replaced non-existent paths (`backend/orchestrator/`, `backend/runtime/`,
+   `backend/auth/`, `backend/integrations/`, `workspace_manager/`) with the
+   real locations under `backend/src/nerdbot/`.
+4. Corrected "fresh TypeScript" to Python (the backend is Python 3.12).
+5. Marked rows 3, 6, 7, 13, 16, 17 with their true status instead of implying
+   they were shipped.
+6. Noted that `~/octop`, `~/ai-teammates` and `~/nerdbot-audit` no longer exist
+   on this machine, so their pinned SHAs cannot be re-verified locally.
 
 ## Open questions
 
-- Q1: License for `~/nerdbot` product (MIT / Apache-2.0 / other)? Affects `NOTICE` mechanics for Octop reuse.
-- Q6: Backfill policy for new `messages` projection — none (dev data is disposable per existing policy).
+- Q1: License for the `~/nerdbot` product (MIT / Apache-2.0 / other)? Affects
+  `NOTICE` mechanics for Octop reuse.

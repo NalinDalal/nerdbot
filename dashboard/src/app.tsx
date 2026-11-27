@@ -311,6 +311,7 @@ function Sidebar({
     { label: "Workspace", icon: "command", routes: ["workspace"], href: "/workspace" },
     { label: "Gallery", icon: "folder", routes: ["gallery"], href: "/gallery" },
     { label: "Capabilities", icon: "cpu", routes: ["capabilities"], href: "/capabilities" },
+    { label: "Workstation", icon: "browser", routes: ["workstation"], href: "/workstation" },
   ];
 
   return (
@@ -905,6 +906,8 @@ export default function App() {
    * conversational surface. All other routes render full-page views. */
   let content: ReactNode;
   switch (route.name) {
+    case "workstation":
+      return <WorkstationBrowserView />;
     case "overview":
       content = <HomeOverviewView />;
       break;
